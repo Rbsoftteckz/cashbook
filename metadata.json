@@ -1,0 +1,6 @@
+{
+  "name": "CashBook",
+  "description": "A smart offline-first digital ledger to track business income, expense, and credit books (Udhar) with Gemini AI assistance.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
