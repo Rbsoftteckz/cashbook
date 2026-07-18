@@ -44,7 +44,7 @@ private val LightColorScheme = lightColorScheme(
 
 @Composable
 fun MyApplicationTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    darkTheme: Boolean = false, // Force Light Mode for clean light background as requested
     dynamicColor: Boolean = false, // Enforce our high-contrast minimalist colors
     content: @Composable () -> Unit,
 ) {
