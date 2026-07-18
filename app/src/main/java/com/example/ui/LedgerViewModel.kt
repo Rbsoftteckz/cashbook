@@ -266,7 +266,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             remarks = draft.remarks
         )
         _aiDraftTransaction.value = null
-        _chatHistory.value = _chatHistory.value + ChatMessage("assistant", "✅ Transaction saved: ${draft.type} ₹${draft.amount} [${draft.category}] for ${draft.remarks} via ${draft.paymentMethod}")
+        _chatHistory.value = _chatHistory.value + ChatMessage("assistant", "✅ Transaction saved: ${draft.type} Rs.${draft.amount} [${draft.category}] for ${draft.remarks} via ${draft.paymentMethod}")
     }
 
     fun sendChatMessage(message: String) {
@@ -305,7 +305,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
         val txHistory = activeBookTransactions.value.take(20).joinToString("\n") { tx ->
             val dateStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(tx.timestamp))
-            "- $dateStr: ${tx.type} ₹${tx.amount} (Category: ${tx.category}, Method: ${tx.paymentMethod}, Remarks: ${tx.remarks})"
+            "- $dateStr: ${tx.type} Rs.${tx.amount} (Category: ${tx.category}, Method: ${tx.paymentMethod}, Remarks: ${tx.remarks})"
         }
 
         return """
@@ -313,16 +313,16 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             
             Here is the current user's ledger summary:
             - Active Book: "${_activeBook.value?.name ?: "Default Book"}"
-            - Total Money In: ₹$totalIn
-            - Total Money Out: ₹$totalOut
-            - Net Cash Balance: ₹$balance
+            - Total Money In: Rs.$totalIn
+            - Total Money Out: Rs.$totalOut
+            - Net Cash Balance: Rs.$balance
             
             Recent Transactions (up to 20):
             $txHistory
             
             User's question/input: "$userQuestion"
             
-            Please provide a helpful, concise, and professional financial response. If they asked for advice, analyze their expenses and point out areas they can optimize. Keep it friendly and clear. Use Rupee symbol (₹) for values.
+            Please provide a helpful, concise, and professional financial response. If they asked for advice, analyze their expenses and point out areas they can optimize. Keep it friendly and clear. Use Rs. for values.
         """.trimIndent()
     }
 

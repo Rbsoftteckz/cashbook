@@ -292,7 +292,7 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        "₹${String.format("%,.2f", netBalance)}",
+                        "Rs. ${String.format("%,.2f", netBalance)}",
                         style = MaterialTheme.typography.headlineLarge.copy(fontWeight = FontWeight.Black),
                         color = if (netBalance >= 0) GreenIn else RedOut,
                         modifier = Modifier.padding(vertical = 4.dp)
@@ -318,7 +318,7 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                                 Text("TOTAL IN", style = MaterialTheme.typography.bodySmall)
                             }
                             Text(
-                                "₹${String.format("%,.2f", totalIn)}",
+                                "Rs. ${String.format("%,.2f", totalIn)}",
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                                 color = GreenIn
                             )
@@ -335,7 +335,7 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                                 Text("TOTAL OUT", style = MaterialTheme.typography.bodySmall)
                             }
                             Text(
-                                "₹${String.format("%,.2f", totalOut)}",
+                                "Rs. ${String.format("%,.2f", totalOut)}",
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                                 color = RedOut
                             )
@@ -472,7 +472,7 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                 ) {
                     Icon(Icons.Default.TrendingUp, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("₹ CASH IN", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text("Rs. CASH IN", fontWeight = FontWeight.Bold, fontSize = 16.sp)
                 }
 
                 Button(
@@ -486,7 +486,7 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                 ) {
                     Icon(Icons.Default.TrendingDown, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("₹ CASH OUT", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text("Rs. CASH OUT", fontWeight = FontWeight.Bold, fontSize = 16.sp)
                 }
             }
         }
@@ -599,7 +599,7 @@ fun TransactionItemCard(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = if (transaction.type == "IN") "+ ₹${transaction.amount}" else "- ₹${transaction.amount}",
+                            text = if (transaction.type == "IN") "+ Rs. ${transaction.amount}" else "- Rs. ${transaction.amount}",
                             fontWeight = FontWeight.Black,
                             style = MaterialTheme.typography.titleMedium,
                             color = if (transaction.type == "IN") GreenIn else RedOut
@@ -723,7 +723,7 @@ fun AddEditTransactionDialog(
                 OutlinedTextField(
                     value = amount,
                     onValueChange = { amount = it },
-                    label = { Text("Amount (₹)") },
+                    label = { Text("Amount (Rs.)") },
                     placeholder = { Text("Enter amount") },
                     modifier = Modifier
                         .fillMaxWidth()
@@ -884,7 +884,7 @@ fun UdharScreen(viewModel: LedgerViewModel) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text("You Will Get (Book Debt)", fontSize = 12.sp, color = GreenIn)
                         Text(
-                            "₹${String.format("%,.0f", totalGet)}",
+                            "Rs. ${String.format("%,.0f", totalGet)}",
                             fontWeight = FontWeight.Bold,
                             fontSize = 20.sp,
                             color = GreenIn
@@ -899,7 +899,7 @@ fun UdharScreen(viewModel: LedgerViewModel) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text("You Will Give (Payable)", fontSize = 12.sp, color = RedOut)
                         Text(
-                            "₹${String.format("%,.0f", totalGive)}",
+                            "Rs. ${String.format("%,.0f", totalGive)}",
                             fontWeight = FontWeight.Bold,
                             fontSize = 20.sp,
                             color = RedOut
@@ -1020,7 +1020,7 @@ fun UdharScreen(viewModel: LedgerViewModel) {
                                             color = if (netPartyBalance > 0.0) GreenIn else RedOut
                                         )
                                         Text(
-                                            text = "₹${String.format("%,.0f", Math.abs(netPartyBalance))}",
+                                            text = "Rs. ${String.format("%,.0f", Math.abs(netPartyBalance))}",
                                             fontWeight = FontWeight.Black,
                                             style = MaterialTheme.typography.titleMedium,
                                             color = if (netPartyBalance > 0.0) GreenIn else RedOut
@@ -1140,8 +1140,8 @@ fun UdharScreen(viewModel: LedgerViewModel) {
                     Column {
                         Text("Net Ledger Balance", style = MaterialTheme.typography.bodySmall)
                         Text(
-                            text = if (netPartyBalance > 0.0) "You will get ₹${String.format("%,.0f", netPartyBalance)}"
-                                   else if (netPartyBalance < 0.0) "You will give ₹${String.format("%,.0f", -netPartyBalance)}"
+                            text = if (netPartyBalance > 0.0) "You will get Rs. ${String.format("%,.0f", netPartyBalance)}"
+                                   else if (netPartyBalance < 0.0) "You will give Rs. ${String.format("%,.0f", -netPartyBalance)}"
                                    else "Settle Account",
                             fontWeight = FontWeight.Bold,
                             fontSize = 20.sp,
@@ -1153,7 +1153,7 @@ fun UdharScreen(viewModel: LedgerViewModel) {
                     if (netPartyBalance > 0.0 && party.phone.isNotBlank()) {
                         Button(
                             onClick = {
-                                val message = "Hi ${party.name}, a payment of ₹${netPartyBalance} is outstanding on your ledger. Please settle at your convenience. Thank you!"
+                                val message = "Hi ${party.name}, a payment of Rs. ${netPartyBalance} is outstanding on your ledger. Please settle at your convenience. Thank you!"
                                 val sendIntent: Intent = Intent().apply {
                                     action = Intent.ACTION_SEND
                                     putExtra(Intent.EXTRA_TEXT, message)
@@ -1235,7 +1235,7 @@ fun UdharScreen(viewModel: LedgerViewModel) {
 
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(
-                                        text = "₹${pTx.amount}",
+                                        text = "Rs. ${pTx.amount}",
                                         fontWeight = FontWeight.Black,
                                         fontSize = 16.sp,
                                         color = if (pTx.type == "GAVE") GreenIn else RedOut
@@ -1268,7 +1268,7 @@ fun UdharScreen(viewModel: LedgerViewModel) {
                     colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Text("₹ YOU GAVE", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text("Rs. YOU GAVE", fontWeight = FontWeight.Bold, fontSize = 16.sp)
                 }
 
                 Button(
@@ -1280,7 +1280,7 @@ fun UdharScreen(viewModel: LedgerViewModel) {
                     colors = ButtonDefaults.buttonColors(containerColor = RedOut),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Text("₹ YOU GOT", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text("Rs. YOU GOT", fontWeight = FontWeight.Bold, fontSize = 16.sp)
                 }
             }
         }
@@ -1299,7 +1299,7 @@ fun UdharScreen(viewModel: LedgerViewModel) {
                         OutlinedTextField(
                             value = amount,
                             onValueChange = { amount = it },
-                            label = { Text("Amount (₹)") },
+                            label = { Text("Amount (Rs.)") },
                             placeholder = { Text("Enter amount") },
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1396,7 +1396,7 @@ fun ReportsScreen(viewModel: LedgerViewModel) {
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text("💵 Cash Balance")
-                        Text("₹${String.format("%,.0f", modeCash)}", fontWeight = FontWeight.Bold, color = if (modeCash >= 0) GreenIn else RedOut)
+                        Text("Rs. ${String.format("%,.0f", modeCash)}", fontWeight = FontWeight.Bold, color = if (modeCash >= 0) GreenIn else RedOut)
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     Row(
@@ -1404,7 +1404,7 @@ fun ReportsScreen(viewModel: LedgerViewModel) {
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text("⚡ Online (UPI) Balance")
-                        Text("₹${String.format("%,.0f", modeOnline)}", fontWeight = FontWeight.Bold, color = if (modeOnline >= 0) GreenIn else RedOut)
+                        Text("Rs. ${String.format("%,.0f", modeOnline)}", fontWeight = FontWeight.Bold, color = if (modeOnline >= 0) GreenIn else RedOut)
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     Row(
@@ -1412,7 +1412,7 @@ fun ReportsScreen(viewModel: LedgerViewModel) {
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text("🏦 Bank Statement")
-                        Text("₹${String.format("%,.0f", modeBank)}", fontWeight = FontWeight.Bold, color = if (modeBank >= 0) GreenIn else RedOut)
+                        Text("Rs. ${String.format("%,.0f", modeBank)}", fontWeight = FontWeight.Bold, color = if (modeBank >= 0) GreenIn else RedOut)
                     }
                 }
             }
@@ -1450,7 +1450,7 @@ fun ReportsScreen(viewModel: LedgerViewModel) {
                                         horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
                                         Text(category, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-                                        Text("₹${String.format("%,.0f", total)}", style = MaterialTheme.typography.bodyMedium, color = RedOut)
+                                        Text("Rs. ${String.format("%,.0f", total)}", style = MaterialTheme.typography.bodyMedium, color = RedOut)
                                     }
                                     Spacer(modifier = Modifier.height(4.dp))
                                     Box(
@@ -1622,7 +1622,7 @@ fun AIAssistantScreen(viewModel: LedgerViewModel) {
                     ) {
                         Column {
                             Text("Type: ${draft.type}", fontWeight = FontWeight.Bold, color = if (draft.type == "IN") GreenIn else RedOut)
-                            Text("Amount: ₹${draft.amount}", fontWeight = FontWeight.Bold)
+                            Text("Amount: Rs. ${draft.amount}", fontWeight = FontWeight.Bold)
                             Text("Category: ${draft.category}")
                             Text("Mode: ${draft.paymentMethod}")
                             Text("Remarks: ${draft.remarks}", maxLines = 1, overflow = TextOverflow.Ellipsis)
