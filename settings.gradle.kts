@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "CashBook"
+rootProject.name = "CashBook Pro"
 
 include(":app")

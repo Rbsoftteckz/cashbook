@@ -14,7 +14,7 @@ android {
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
-    applicationId = "com.aistudio.cashbook.pkyrqt"
+    applicationId = "com.aistudio.cashbookpro.uxbdyz"
     minSdk = 24
     targetSdk = 36
     versionCode = 2
