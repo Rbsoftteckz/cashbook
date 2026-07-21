@@ -568,6 +568,82 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         }
         return sb.toString()
     }
+
+    // --- PASSCODE / LOCK STATES ---
+    private val appPrefs = getApplication<Application>().getSharedPreferences("app_lock_prefs", android.content.Context.MODE_PRIVATE)
+
+    private val _isAppLockEnabled = MutableStateFlow(appPrefs.getBoolean("is_lock_enabled", false))
+    val isAppLockEnabled: StateFlow<Boolean> = _isAppLockEnabled.asStateFlow()
+
+    private val _appPasscode = MutableStateFlow(appPrefs.getString("app_passcode", "") ?: "")
+    val appPasscode: StateFlow<String> = _appPasscode.asStateFlow()
+
+    private val _securityQuestion = MutableStateFlow(appPrefs.getString("security_question", "What was your first business name?") ?: "What was your first business name?")
+    val securityQuestion: StateFlow<String> = _securityQuestion.asStateFlow()
+
+    private val _securityAnswer = MutableStateFlow(appPrefs.getString("security_answer", "") ?: "")
+    val securityAnswer: StateFlow<String> = _securityAnswer.asStateFlow()
+
+    // Initially, if app lock is enabled, we start in locked state (false). Otherwise, we start unlocked (true).
+    private val _isAppUnlocked = MutableStateFlow(!appPrefs.getBoolean("is_lock_enabled", false))
+    val isAppUnlocked: StateFlow<Boolean> = _isAppUnlocked.asStateFlow()
+
+    fun unlockApp(enteredPin: String): Boolean {
+        if (enteredPin == _appPasscode.value) {
+            _isAppUnlocked.value = true
+            return true
+        }
+        return false
+    }
+
+    fun lockApp() {
+        if (_isAppLockEnabled.value) {
+            _isAppUnlocked.value = false
+        }
+    }
+
+    fun resetPasscodeViaSecurityAnswer(answer: String, newPin: String): Boolean {
+        if (answer.trim().equals(_securityAnswer.value.trim(), ignoreCase = true)) {
+            appPrefs.edit().apply {
+                putString("app_passcode", newPin)
+                apply()
+            }
+            _appPasscode.value = newPin
+            _isAppUnlocked.value = true
+            return true
+        }
+        return false
+    }
+
+    fun enableAppLock(pin: String, question: String, answer: String) {
+        appPrefs.edit().apply {
+            putBoolean("is_lock_enabled", true)
+            putString("app_passcode", pin)
+            putString("security_question", question)
+            putString("security_answer", answer)
+            apply()
+        }
+        _isAppLockEnabled.value = true
+        _appPasscode.value = pin
+        _securityQuestion.value = question
+        _securityAnswer.value = answer
+        _isAppUnlocked.value = true // unlocked immediately when set up
+    }
+
+    fun disableAppLock() {
+        appPrefs.edit().apply {
+            putBoolean("is_lock_enabled", false)
+            putString("app_passcode", "")
+            putString("security_question", "")
+            putString("security_answer", "")
+            apply()
+        }
+        _isAppLockEnabled.value = false
+        _appPasscode.value = ""
+        _securityQuestion.value = ""
+        _securityAnswer.value = ""
+        _isAppUnlocked.value = true
+    }
 }
 
 data class ChatMessage(

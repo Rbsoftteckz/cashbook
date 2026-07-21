@@ -144,6 +144,10 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
     val simulatedRole by viewModel.simulatedRole.collectAsStateWithLifecycle()
     val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
 
+    val isAppLockEnabled by viewModel.isAppLockEnabled.collectAsStateWithLifecycle()
+    val isAppUnlocked by viewModel.isAppUnlocked.collectAsStateWithLifecycle()
+    var showSecuritySettingsDialog by remember { mutableStateOf(false) }
+
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -155,13 +159,16 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
     var showAddBusinessDialog by remember { mutableStateOf(false) }
     var newBusinessName by remember { mutableStateOf("") }
 
-    ModalNavigationDrawer(
+    if (isAppLockEnabled && !isAppUnlocked) {
+        AppSecureLockScreen(viewModel = viewModel, onUnlockSuccess = {})
+    } else {
+        ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
             ModalDrawerSheet(
                 modifier = Modifier.width(320.dp),
-                drawerContainerColor = Color(0xFF0F172A), // Slate-900 look
-                drawerContentColor = Color.White
+                drawerContainerColor = Color(0xFFF8FAFC), // Premium Light Slate-50 color
+                drawerContentColor = Color(0xFF0F172A)    // Dark Slate-900 text color
             ) {
                 // Header Profile Area
                 Box(
@@ -170,8 +177,8 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         .background(
                             Brush.verticalGradient(
                                 listOf(
-                                    Color(0xFF1E293B), // Slate-800
-                                    Color(0xFF0F172A)  // Slate-900
+                                    Color(0xFFE2E8F0), // Light Slate-200
+                                    Color(0xFFF1F5F9)  // Light Slate-100
                                 )
                             )
                         )
@@ -195,7 +202,7 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         Text(
                             text = activeBusiness?.name ?: "Cashbook Pro Business",
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            color = Color.White
+                            color = Color(0xFF0F172A)
                         )
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
@@ -208,7 +215,7 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                             Text(
                                 text = syncStatus,
                                 style = MaterialTheme.typography.bodySmall,
-                                color = Color.White.copy(alpha = 0.6f),
+                                color = Color(0xFF475569), // Slate-600
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.fillMaxWidth()
@@ -217,7 +224,7 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                     }
                 }
 
-                Divider(color = Color.White.copy(alpha = 0.12f))
+                Divider(color = Color(0xFFE2E8F0))
 
                 // Scrollable Drawer Items
                 Column(
@@ -252,7 +259,7 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         "Core Ledgers",
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White.copy(alpha = 0.5f)
+                        color = Color(0xFF64748B) // Slate-500
                     )
 
                     NavigationDrawerItem(
@@ -260,12 +267,12 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         label = { Text("Cashbook Ledger") },
                         selected = currentScreen == Screen.DASHBOARD,
                         colors = NavigationDrawerItemDefaults.colors(
-                            selectedContainerColor = GreenIn.copy(alpha = 0.2f),
+                            selectedContainerColor = GreenIn.copy(alpha = 0.15f),
                             unselectedContainerColor = Color.Transparent,
                             selectedIconColor = GreenIn,
-                            unselectedIconColor = Color.White.copy(alpha = 0.6f),
-                            selectedTextColor = Color.White,
-                            unselectedTextColor = Color.White.copy(alpha = 0.6f)
+                            unselectedIconColor = Color(0xFF475569),
+                            selectedTextColor = GreenIn,
+                            unselectedTextColor = Color(0xFF1E293B)
                         ),
                         onClick = {
                             viewModel.setScreen(Screen.DASHBOARD)
@@ -278,12 +285,12 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         label = { Text("Reports & Analytics") },
                         selected = currentScreen == Screen.REPORTS,
                         colors = NavigationDrawerItemDefaults.colors(
-                            selectedContainerColor = GreenIn.copy(alpha = 0.2f),
+                            selectedContainerColor = GreenIn.copy(alpha = 0.15f),
                             unselectedContainerColor = Color.Transparent,
                             selectedIconColor = GreenIn,
-                            unselectedIconColor = Color.White.copy(alpha = 0.6f),
-                            selectedTextColor = Color.White,
-                            unselectedTextColor = Color.White.copy(alpha = 0.6f)
+                            unselectedIconColor = Color(0xFF475569),
+                            selectedTextColor = GreenIn,
+                            unselectedTextColor = Color(0xFF1E293B)
                         ),
                         onClick = {
                             viewModel.setScreen(Screen.REPORTS)
@@ -296,12 +303,12 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         label = { Text("LedgerMate AI Copilot") },
                         selected = currentScreen == Screen.AI_ASSISTANT,
                         colors = NavigationDrawerItemDefaults.colors(
-                            selectedContainerColor = GreenIn.copy(alpha = 0.2f),
+                            selectedContainerColor = GreenIn.copy(alpha = 0.15f),
                             unselectedContainerColor = Color.Transparent,
                             selectedIconColor = GreenIn,
-                            unselectedIconColor = Color.White.copy(alpha = 0.6f),
-                            selectedTextColor = Color.White,
-                            unselectedTextColor = Color.White.copy(alpha = 0.6f)
+                            unselectedIconColor = Color(0xFF475569),
+                            selectedTextColor = GreenIn,
+                            unselectedTextColor = Color(0xFF1E293B)
                         ),
                         onClick = {
                             viewModel.setScreen(Screen.AI_ASSISTANT)
@@ -314,7 +321,7 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         "Enterprise",
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White.copy(alpha = 0.5f)
+                        color = Color(0xFF64748B) // Slate-500
                     )
 
                     NavigationDrawerItem(
@@ -322,12 +329,12 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         label = { Text("Staff & Team Management") },
                         selected = currentScreen == Screen.TEAM_MANAGEMENT,
                         colors = NavigationDrawerItemDefaults.colors(
-                            selectedContainerColor = GreenIn.copy(alpha = 0.2f),
+                            selectedContainerColor = GreenIn.copy(alpha = 0.15f),
                             unselectedContainerColor = Color.Transparent,
                             selectedIconColor = GreenIn,
-                            unselectedIconColor = Color.White.copy(alpha = 0.6f),
-                            selectedTextColor = Color.White,
-                            unselectedTextColor = Color.White.copy(alpha = 0.6f)
+                            unselectedIconColor = Color(0xFF475569),
+                            selectedTextColor = GreenIn,
+                            unselectedTextColor = Color(0xFF1E293B)
                         ),
                         onClick = {
                             viewModel.setScreen(Screen.TEAM_MANAGEMENT)
@@ -340,12 +347,12 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         label = { Text("Google Drive Cloud Sync") },
                         selected = currentScreen == Screen.SYNC_CENTER,
                         colors = NavigationDrawerItemDefaults.colors(
-                            selectedContainerColor = GreenIn.copy(alpha = 0.2f),
+                            selectedContainerColor = GreenIn.copy(alpha = 0.15f),
                             unselectedContainerColor = Color.Transparent,
                             selectedIconColor = GreenIn,
-                            unselectedIconColor = Color.White.copy(alpha = 0.6f),
-                            selectedTextColor = Color.White,
-                            unselectedTextColor = Color.White.copy(alpha = 0.6f)
+                            unselectedIconColor = Color(0xFF475569),
+                            selectedTextColor = GreenIn,
+                            unselectedTextColor = Color(0xFF1E293B)
                         ),
                         onClick = {
                             viewModel.setScreen(Screen.SYNC_CENTER)
@@ -358,12 +365,12 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         label = { Text("What's New") },
                         selected = currentScreen == Screen.WHATS_NEW,
                         colors = NavigationDrawerItemDefaults.colors(
-                            selectedContainerColor = GreenIn.copy(alpha = 0.2f),
+                            selectedContainerColor = GreenIn.copy(alpha = 0.15f),
                             unselectedContainerColor = Color.Transparent,
                             selectedIconColor = GreenIn,
-                            unselectedIconColor = Color.White.copy(alpha = 0.6f),
-                            selectedTextColor = Color.White,
-                            unselectedTextColor = Color.White.copy(alpha = 0.6f)
+                            unselectedIconColor = Color(0xFF475569),
+                            selectedTextColor = GreenIn,
+                            unselectedTextColor = Color(0xFF1E293B)
                         ),
                         onClick = {
                             viewModel.setScreen(Screen.WHATS_NEW)
@@ -376,12 +383,12 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         label = { Text("Help & FAQs") },
                         selected = currentScreen == Screen.HELP_DOCS,
                         colors = NavigationDrawerItemDefaults.colors(
-                            selectedContainerColor = GreenIn.copy(alpha = 0.2f),
+                            selectedContainerColor = GreenIn.copy(alpha = 0.15f),
                             unselectedContainerColor = Color.Transparent,
                             selectedIconColor = GreenIn,
-                            unselectedIconColor = Color.White.copy(alpha = 0.6f),
-                            selectedTextColor = Color.White,
-                            unselectedTextColor = Color.White.copy(alpha = 0.6f)
+                            unselectedIconColor = Color(0xFF475569),
+                            selectedTextColor = GreenIn,
+                            unselectedTextColor = Color(0xFF1E293B)
                         ),
                         onClick = {
                             viewModel.setScreen(Screen.HELP_DOCS)
@@ -394,12 +401,12 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         label = { Text("Contact Support") },
                         selected = currentScreen == Screen.CONTACT_US,
                         colors = NavigationDrawerItemDefaults.colors(
-                            selectedContainerColor = GreenIn.copy(alpha = 0.2f),
+                            selectedContainerColor = GreenIn.copy(alpha = 0.15f),
                             unselectedContainerColor = Color.Transparent,
                             selectedIconColor = GreenIn,
-                            unselectedIconColor = Color.White.copy(alpha = 0.6f),
-                            selectedTextColor = Color.White,
-                            unselectedTextColor = Color.White.copy(alpha = 0.6f)
+                            unselectedIconColor = Color(0xFF475569),
+                            selectedTextColor = GreenIn,
+                            unselectedTextColor = Color(0xFF1E293B)
                         ),
                         onClick = {
                             viewModel.setScreen(Screen.CONTACT_US)
@@ -407,8 +414,26 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         }
                     )
 
+                    NavigationDrawerItem(
+                        icon = { Icon(Icons.Default.Lock, contentDescription = null) },
+                        label = { Text("App PIN Lock / Password") },
+                        selected = showSecuritySettingsDialog,
+                        colors = NavigationDrawerItemDefaults.colors(
+                            selectedContainerColor = GreenIn.copy(alpha = 0.15f),
+                            unselectedContainerColor = Color.Transparent,
+                            selectedIconColor = GreenIn,
+                            unselectedIconColor = Color(0xFF475569),
+                            selectedTextColor = GreenIn,
+                            unselectedTextColor = Color(0xFF1E293B)
+                        ),
+                        onClick = {
+                            showSecuritySettingsDialog = true
+                            scope.launch { drawerState.close() }
+                        }
+                    )
+
                     Spacer(modifier = Modifier.height(12.dp))
-                    Divider(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
+                    Divider(color = Color(0xFFE2E8F0))
                     Spacer(modifier = Modifier.height(8.dp))
 
                     // Multi-Business Switcher Section inside Drawer
@@ -719,9 +744,18 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         }
                     )
                 }
+
+                // Security PIN Lock Settings Dialog
+                if (showSecuritySettingsDialog) {
+                    AppLockSettingsDialog(
+                        viewModel = viewModel,
+                        onDismiss = { showSecuritySettingsDialog = false }
+                    )
+                }
             }
         }
     }
+}
 }
 
 // --- SCREEN 1: DASHBOARD ---
@@ -4453,7 +4487,7 @@ fun ContactUsScreen(viewModel: LedgerViewModel) {
                         shape = RoundedCornerShape(8.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("Call: 03337998373", fontWeight = FontWeight.Bold)
+                        Text("Call: +92 333 7998373", fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -4472,7 +4506,48 @@ fun ContactUsScreen(viewModel: LedgerViewModel) {
                                 .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.1f), CircleShape),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(Icons.Default.Feedback, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
+                            Icon(Icons.Default.Email, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
+                        }
+                        Column {
+                            Text("Email Support", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                            Text("Send your inquiries directly to our inbox", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                    Button(
+                        onClick = {
+                            val intent = android.content.Intent(android.content.Intent.ACTION_SENDTO).apply {
+                                data = android.net.Uri.parse("mailto:Rbmengal@live.com")
+                                putExtra(android.content.Intent.EXTRA_SUBJECT, "Cashbook Pro Customer Inquiry")
+                            }
+                            try {
+                                context.startActivity(intent)
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "No email app found!", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Email: Rbmengal@live.com", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .background(MaterialTheme.colorScheme.tertiary.copy(alpha = 0.1f), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.Feedback, contentDescription = null, tint = MaterialTheme.colorScheme.tertiary)
                         }
                         Column {
                             Text("Feedback & Feature Ideas", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
@@ -4503,3 +4578,495 @@ fun ContactUsScreen(viewModel: LedgerViewModel) {
         }
     }
 }
+
+@Composable
+fun AppSecureLockScreen(
+    viewModel: LedgerViewModel,
+    onUnlockSuccess: () -> Unit
+) {
+    val context = LocalContext.current
+    val securityQuestion by viewModel.securityQuestion.collectAsStateWithLifecycle()
+    
+    var enteredPin by remember { mutableStateOf("") }
+    var showForgotDialog by remember { mutableStateOf(false) }
+    var securityAnswerInput by remember { mutableStateOf("") }
+    var newPinInput by remember { mutableStateOf("") }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFFF8FAFC)), // Premium Light Slate-50 background
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(24.dp)
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(20.dp)
+        ) {
+            // Icon
+            Box(
+                modifier = Modifier
+                    .size(80.dp)
+                    .background(Color(0xFFE2E8F0), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Lock,
+                    contentDescription = "App Locked",
+                    tint = Color(0xFF0F172A),
+                    modifier = Modifier.size(40.dp)
+                )
+            }
+            
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = "CASHBOOK PRO",
+                    style = MaterialTheme.typography.titleLarge.copy(
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 2.sp
+                    ),
+                    color = Color(0xFF0F172A)
+                )
+                Text(
+                    text = "App is secured with PIN lock",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color(0xFF475569)
+                )
+            }
+            
+            // PIN Display (4 Circles)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(vertical = 12.dp)
+            ) {
+                for (i in 0 until 4) {
+                    val isFilled = i < enteredPin.length
+                    Box(
+                        modifier = Modifier
+                            .size(20.dp)
+                            .border(2.dp, Color(0xFF0F172A), CircleShape)
+                            .background(
+                                if (isFilled) Color(0xFF0F172A) else Color.Transparent,
+                                CircleShape
+                            )
+                    )
+                }
+            }
+            
+            if (errorMessage != null) {
+                Text(
+                    text = errorMessage!!,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            
+            // Keypad
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.width(280.dp)
+            ) {
+                val keys = listOf(
+                    listOf("1", "2", "3"),
+                    listOf("4", "5", "6"),
+                    listOf("7", "8", "9"),
+                    listOf("C", "0", "OK")
+                )
+                
+                for (row in keys) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        for (key in row) {
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .aspectRatio(1.5f)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(
+                                        when (key) {
+                                            "OK" -> GreenIn
+                                            "C" -> Color(0xFFE2E8F0)
+                                            else -> Color.White
+                                        }
+                                    )
+                                    .border(
+                                        width = 1.dp,
+                                        color = if (key == "OK" || key == "C") Color.Transparent else Color(0xFFCBD5E1),
+                                        shape = RoundedCornerShape(12.dp)
+                                    )
+                                    .clickable {
+                                        errorMessage = null
+                                        when (key) {
+                                            "C" -> {
+                                                if (enteredPin.isNotEmpty()) {
+                                                    enteredPin = enteredPin.dropLast(1)
+                                                }
+                                            }
+                                            "OK" -> {
+                                                if (viewModel.unlockApp(enteredPin)) {
+                                                    onUnlockSuccess()
+                                                } else {
+                                                    errorMessage = "Incorrect PIN. Please try again."
+                                                    enteredPin = ""
+                                                }
+                                            }
+                                            else -> {
+                                                if (enteredPin.length < 4) {
+                                                    enteredPin += key
+                                                    if (enteredPin.length == 4) {
+                                                        // Auto check
+                                                        if (viewModel.unlockApp(enteredPin)) {
+                                                            onUnlockSuccess()
+                                                        } else {
+                                                            errorMessage = "Incorrect PIN. Please try again."
+                                                            enteredPin = ""
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = key,
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (key == "OK") Color.White else Color(0xFF0F172A)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            
+            TextButton(
+                onClick = { showForgotDialog = true },
+                modifier = Modifier.padding(top = 8.dp)
+            ) {
+                Text(
+                    text = "Forgot PIN/Password?",
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+    
+    // Forgot Password Dialog
+    if (showForgotDialog) {
+        AlertDialog(
+            onDismissRequest = { showForgotDialog = false },
+            title = {
+                Text(
+                    "Reset PIN / Forgot Password",
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleMedium
+                )
+            },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "To recover or reset your PIN, please answer your security question or contact customer support directly.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF475569)
+                    )
+                    
+                    // Security Question Section
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFF1F5F9))
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                text = "Security Question:",
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFF1E293B)
+                            )
+                            Text(
+                                text = securityQuestion,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color(0xFF0F172A)
+                            )
+                            
+                            OutlinedTextField(
+                                value = securityAnswerInput,
+                                onValueChange = { securityAnswerInput = it },
+                                placeholder = { Text("Your answer") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                shape = RoundedCornerShape(8.dp)
+                            )
+                            
+                            OutlinedTextField(
+                                value = newPinInput,
+                                onValueChange = { 
+                                    if (it.length <= 4 && it.all { char -> char.isDigit() }) {
+                                        newPinInput = it
+                                    }
+                                },
+                                placeholder = { Text("New 4-digit PIN") },
+                                label = { Text("Set New PIN") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                shape = RoundedCornerShape(8.dp)
+                            )
+                            
+                            Button(
+                                onClick = {
+                                    if (securityAnswerInput.isBlank() || newPinInput.length < 4) {
+                                        Toast.makeText(context, "Please answer and set a valid 4-digit PIN", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        val success = viewModel.resetPasscodeViaSecurityAnswer(securityAnswerInput, newPinInput)
+                                        if (success) {
+                                            Toast.makeText(context, "PIN successfully reset & unlocked!", Toast.LENGTH_LONG).show()
+                                            showForgotDialog = false
+                                        } else {
+                                            Toast.makeText(context, "Incorrect security answer!", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text("Verify & Reset PIN")
+                            }
+                        }
+                    }
+                    
+                    // Support Contact Section
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFE2E8F0))
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                text = "Customer Support Assistance:",
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFF1E293B)
+                            )
+                            
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                // Call/WhatsApp Support Button
+                                Button(
+                                    onClick = {
+                                        val intent = Intent(Intent.ACTION_VIEW).apply {
+                                            data = android.net.Uri.parse("https://wa.me/923337998373?text=Hello%20Support%20I%20forgot%20my%20Cashbook%20Pro%20passcode")
+                                        }
+                                        context.startActivity(intent)
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Icon(Icons.Default.Phone, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("WhatsApp", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                                
+                                // Email Support Button
+                                Button(
+                                    onClick = {
+                                        val intent = Intent(Intent.ACTION_SENDTO).apply {
+                                            data = android.net.Uri.parse("mailto:Rbmengal@live.com")
+                                            putExtra(Intent.EXTRA_SUBJECT, "Forgot Passcode - Cashbook Pro")
+                                            putExtra(Intent.EXTRA_TEXT, "Hello, I forgot my Cashbook Pro passcode. Please help me recover it.")
+                                        }
+                                        try {
+                                            context.startActivity(intent)
+                                        } catch (e: Exception) {
+                                            Toast.makeText(context, "No email client found!", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Icon(Icons.Default.Email, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Email Support", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showForgotDialog = false }) {
+                    Text("Close")
+                }
+            }
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AppLockSettingsDialog(
+    viewModel: LedgerViewModel,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val isAppLockEnabled by viewModel.isAppLockEnabled.collectAsStateWithLifecycle()
+    
+    var pinVal by remember { mutableStateOf("") }
+    var securityAnswerVal by remember { mutableStateOf("") }
+    var selectedQuestion by remember { mutableStateOf("What was your first business name?") }
+    
+    val questions = listOf(
+        "What was your first business name?",
+        "What is your mother's maiden name?",
+        "What was the name of your first school?",
+        "What is your favorite city?"
+    )
+    
+    var showDropdown by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "App PIN Lock Settings",
+                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.titleMedium
+            )
+        },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = "Secure your financial ledgers and cashbooks by enabling a 4-digit PIN lock at startup.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF475569)
+                )
+
+                if (isAppLockEnabled) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFECFDF5)) // Very light mint green
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Icon(Icons.Default.Verified, contentDescription = null, tint = GreenIn)
+                                Text("PIN Lock is ACTIVE", fontWeight = FontWeight.Bold, color = Color(0xFF065F46))
+                            }
+                            
+                            Button(
+                                onClick = {
+                                    viewModel.disableAppLock()
+                                    Toast.makeText(context, "PIN Lock is now deactivated.", Toast.LENGTH_SHORT).show()
+                                    onDismiss()
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text("Deactivate PIN Lock", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                } else {
+                    OutlinedTextField(
+                        value = pinVal,
+                        onValueChange = { 
+                            if (it.length <= 4 && it.all { char -> char.isDigit() }) {
+                                pinVal = it
+                            }
+                        },
+                        label = { Text("Enter 4-Digit PIN") },
+                        placeholder = { Text("e.g. 1234") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        shape = RoundedCornerShape(8.dp)
+                    )
+
+                    // Security Question Dropdown
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = selectedQuestion,
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("Security Question") },
+                            modifier = Modifier.fillMaxWidth(),
+                            trailingIcon = {
+                                IconButton(onClick = { showDropdown = !showDropdown }) {
+                                    Icon(Icons.Default.ArrowDropDown, contentDescription = "Select question")
+                                }
+                            },
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                        DropdownMenu(
+                            expanded = showDropdown,
+                            onDismissRequest = { showDropdown = false },
+                            modifier = Modifier.fillMaxWidth(0.9f)
+                        ) {
+                            questions.forEach { q ->
+                                DropdownMenuItem(
+                                    text = { Text(q) },
+                                    onClick = {
+                                        selectedQuestion = q
+                                        showDropdown = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = securityAnswerVal,
+                        onValueChange = { securityAnswerVal = it },
+                        label = { Text("Security Answer") },
+                        placeholder = { Text("Provide recovery answer") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        shape = RoundedCornerShape(8.dp)
+                    )
+
+                    Button(
+                        onClick = {
+                            if (pinVal.length < 4 || securityAnswerVal.isBlank()) {
+                                Toast.makeText(context, "Please enter a 4-digit PIN and provide security answer", Toast.LENGTH_SHORT).show()
+                            } else {
+                                viewModel.enableAppLock(pinVal, selectedQuestion, securityAnswerVal)
+                                Toast.makeText(context, "PIN lock successfully activated!", Toast.LENGTH_LONG).show()
+                                onDismiss()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("Enable Secure PIN Lock", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
+}
+
