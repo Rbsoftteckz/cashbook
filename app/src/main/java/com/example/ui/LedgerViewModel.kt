@@ -15,7 +15,12 @@ enum class Screen {
     DASHBOARD,
     UDHAR,
     REPORTS,
-    AI_ASSISTANT
+    AI_ASSISTANT,
+    TEAM_MANAGEMENT,
+    SYNC_CENTER,
+    WHATS_NEW,
+    HELP_DOCS,
+    CONTACT_US
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -23,17 +28,47 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     private val database = LedgerDatabase.getDatabase(application)
     private val repository = LedgerRepository(database.ledgerDao())
     private val geminiService = GeminiService()
+    val syncManager = GoogleDriveSyncManager(application)
 
     // Navigation and screen state
     private val _currentScreen = MutableStateFlow(Screen.DASHBOARD)
     val currentScreen: StateFlow<Screen> = _currentScreen.asStateFlow()
 
-    // Book state
-    val books: StateFlow<List<Book>> = repository.allBooks.stateIn(
+    // Sync state
+    private val _syncStatus = MutableStateFlow("Offline Mode - Ready to Sync")
+    val syncStatus: StateFlow<String> = _syncStatus.asStateFlow()
+
+    private val _isSyncing = MutableStateFlow(false)
+    val isSyncing: StateFlow<Boolean> = _isSyncing.asStateFlow()
+
+    // Simulated Active Role (for granular testing of team permissions)
+    private val _simulatedRole = MutableStateFlow("Boss") // "Boss", "Admin", "Partner", "Data Entry"
+    val simulatedRole: StateFlow<String> = _simulatedRole.asStateFlow()
+
+    // Multi-Business states
+    val businesses: StateFlow<List<Business>> = repository.allBusinesses.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = emptyList()
     )
+
+    private val _activeBusiness = MutableStateFlow<Business?>(null)
+    val activeBusiness: StateFlow<Business?> = _activeBusiness.asStateFlow()
+
+    // Books automatically retrieved for the active business
+    val books: StateFlow<List<Book>> = _activeBusiness
+        .flatMapLatest { biz ->
+            if (biz != null) {
+                repository.getBooksForBusiness(biz.id)
+            } else {
+                flowOf(emptyList())
+            }
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
 
     private val _activeBook = MutableStateFlow<Book?>(null)
     val activeBook: StateFlow<Book?> = _activeBook.asStateFlow()
@@ -47,6 +82,38 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _selectedPaymentMethod = MutableStateFlow("All")
     val selectedPaymentMethod: StateFlow<String> = _selectedPaymentMethod.asStateFlow()
+
+    // Multi-Select Batch Operations State
+    private val _selectedTransactionIds = MutableStateFlow<Set<Int>>(emptySet())
+    val selectedTransactionIds: StateFlow<Set<Int>> = _selectedTransactionIds.asStateFlow()
+
+    // Exposure of total transaction and team streams
+    val allTransactions: StateFlow<List<Transaction>> = repository.allTransactions.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    val allTeamMembers: StateFlow<List<TeamMember>> = repository.allTeamMembers.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    // Team members for the active business
+    val activeBusinessTeamMembers: StateFlow<List<TeamMember>> = _activeBusiness
+        .flatMapLatest { biz ->
+            if (biz != null) {
+                repository.getTeamMembersForBusiness(biz.id)
+            } else {
+                flowOf(emptyList())
+            }
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
 
     // Automatically retrieve transactions for the active book
     val activeBookTransactions: StateFlow<List<Transaction>> = _activeBook
@@ -125,25 +192,108 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     val aiError: StateFlow<String?> = _aiError.asStateFlow()
 
     private val _chatHistory = MutableStateFlow<List<ChatMessage>>(listOf(
-        ChatMessage("assistant", "Hello! I'm your digital ledger assistant. Tell me something like: 'Got 1500 for web design work online' or 'Paid 300 cash for gas' and I will structure it for you! You can also ask me about your expenses.")
+        ChatMessage("assistant", "Hello! I'm your Cashbook Pro assistant. Tell me something like: 'Got 1500 for retail sales' or 'Paid 300 cash for courier charges' and I will record it instantly! You can also consult me about financial statement summaries.")
     ))
     val chatHistory: StateFlow<List<ChatMessage>> = _chatHistory.asStateFlow()
 
     init {
-        // Initialize with default book if empty
+        // Initialize default business and default book if empty
+        viewModelScope.launch {
+            businesses.collect { list ->
+                if (list.isEmpty() && _activeBusiness.value == null) {
+                    val defaultBizId = repository.insertBusiness(Business(name = "Main Retail Shop"))
+                    val defaultBiz = Business(id = defaultBizId.toInt(), name = "Main Retail Shop")
+                    _activeBusiness.value = defaultBiz
+                    val defaultBookId = repository.insertBook(Book(businessId = defaultBiz.id, name = "Daily Cashbook"))
+                    _activeBook.value = Book(id = defaultBookId.toInt(), businessId = defaultBiz.id, name = "Daily Cashbook")
+                } else if (list.isNotEmpty() && _activeBusiness.value == null) {
+                    _activeBusiness.value = list.first()
+                }
+            }
+        }
+
         viewModelScope.launch {
             books.collect { list ->
-                if (list.isEmpty() && _activeBook.value == null) {
-                    val defaultBookId = repository.insertBook(Book(name = "General Book"))
-                    _activeBook.value = Book(id = defaultBookId.toInt(), name = "General Book")
+                if (list.isEmpty() && _activeBusiness.value != null && _activeBook.value == null) {
+                    val bizId = _activeBusiness.value!!.id
+                    val defaultBookId = repository.insertBook(Book(businessId = bizId, name = "Daily Cashbook"))
+                    _activeBook.value = Book(id = defaultBookId.toInt(), businessId = bizId, name = "Daily Cashbook")
                 } else if (list.isNotEmpty() && _activeBook.value == null) {
                     _activeBook.value = list.first()
                 }
             }
         }
+
+        // Automatic Google Drive Sync on app launch
+        triggerCloudSync()
     }
 
-    // --- Action Methods ---
+    // --- Core Cloud Sync Mechanism ---
+
+    fun triggerCloudSync() {
+        if (!syncManager.isUserSignedIn()) {
+            _syncStatus.value = "Sign in to synchronize automatically"
+            return
+        }
+        if (_isSyncing.value) return
+
+        _isSyncing.value = true
+        _syncStatus.value = "Cloud Syncing..."
+
+        viewModelScope.launch {
+            try {
+                // Compile fresh snapshot from state values
+                val localJson = syncManager.serializeDatabase(
+                    businesses = businesses.value,
+                    books = repository.allBooks.first(),
+                    transactions = allTransactions.value,
+                    parties = parties.value,
+                    partyTransactions = allPartyTransactions.value,
+                    teamMembers = allTeamMembers.value
+                )
+
+                val message = syncManager.syncWithCloud(localJson, database.ledgerDao())
+                _syncStatus.value = message
+            } catch (e: Exception) {
+                _syncStatus.value = "Sync Interrupted: ${e.message}"
+            } finally {
+                _isSyncing.value = false
+            }
+        }
+    }
+
+    // --- Multi-Business and Multi-Book Actions ---
+
+    fun setSimulatedRole(role: String) {
+        _simulatedRole.value = role
+    }
+
+    fun selectBusiness(business: Business) {
+        _activeBusiness.value = business
+        _activeBook.value = null // Let books.collect auto-select the first book
+    }
+
+    fun createBusiness(name: String) {
+        viewModelScope.launch {
+            val id = repository.insertBusiness(Business(name = name))
+            val newBiz = Business(id = id.toInt(), name = name)
+            _activeBusiness.value = newBiz
+            val defaultBookId = repository.insertBook(Book(businessId = newBiz.id, name = "Daily Cashbook"))
+            _activeBook.value = Book(id = defaultBookId.toInt(), businessId = newBiz.id, name = "Daily Cashbook")
+            triggerCloudSync()
+        }
+    }
+
+    fun deleteBusiness(business: Business) {
+        viewModelScope.launch {
+            repository.deleteBusiness(business)
+            if (_activeBusiness.value?.id == business.id) {
+                _activeBusiness.value = businesses.value.firstOrNull { it.id != business.id }
+                _activeBook.value = null
+            }
+            triggerCloudSync()
+        }
+    }
 
     fun setScreen(screen: Screen) {
         _currentScreen.value = screen
@@ -154,10 +304,12 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun createBook(name: String) {
+        val bizId = _activeBusiness.value?.id ?: 1
         viewModelScope.launch {
-            val id = repository.insertBook(Book(name = name))
-            val newBook = Book(id = id.toInt(), name = name)
+            val id = repository.insertBook(Book(businessId = bizId, name = name))
+            val newBook = Book(id = id.toInt(), businessId = bizId, name = name)
             _activeBook.value = newBook
+            triggerCloudSync()
         }
     }
 
@@ -167,8 +319,11 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             if (_activeBook.value?.id == book.id) {
                 _activeBook.value = books.value.firstOrNull { it.id != book.id }
             }
+            triggerCloudSync()
         }
     }
+
+    // --- Transactions Actions ---
 
     fun addTransaction(amount: Double, type: String, category: String, paymentMethod: String, remarks: String) {
         val bookId = _activeBook.value?.id ?: return
@@ -183,22 +338,67 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                     remarks = remarks
                 )
             )
+            triggerCloudSync()
         }
     }
 
     fun deleteTransaction(transaction: Transaction) {
         viewModelScope.launch {
             repository.deleteTransaction(transaction)
+            triggerCloudSync()
         }
     }
 
     fun updateTransaction(transaction: Transaction) {
         viewModelScope.launch {
             repository.updateTransaction(transaction)
+            triggerCloudSync()
         }
     }
 
-    // Filters
+    // --- Multi-Select Batch Operations ---
+
+    fun toggleTransactionSelection(id: Int) {
+        val current = _selectedTransactionIds.value
+        _selectedTransactionIds.value = if (current.contains(id)) {
+            current - id
+        } else {
+            current + id
+        }
+    }
+
+    fun clearTransactionSelection() {
+        _selectedTransactionIds.value = emptySet()
+    }
+
+    fun batchDeleteSelectedTransactions() {
+        viewModelScope.launch {
+            val idsToDelete = _selectedTransactionIds.value
+            val txsToDelete = activeBookTransactions.value.filter { idsToDelete.contains(it.id) }
+            txsToDelete.forEach { tx ->
+                repository.deleteTransaction(tx)
+            }
+            clearTransactionSelection()
+            triggerCloudSync()
+        }
+    }
+
+    fun batchGetSelectedCSV(): String {
+        val idsToExport = _selectedTransactionIds.value
+        val txsToExport = activeBookTransactions.value.filter { idsToExport.contains(it.id) }
+        val sb = StringBuilder()
+        sb.append("Date,Type,Amount,Category,Payment Method,Remarks\n")
+        val df = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+        for (tx in txsToExport) {
+            val dateStr = df.format(Date(tx.timestamp))
+            val escapedRemarks = tx.remarks.replace("\"", "\"\"")
+            sb.append("$dateStr,${tx.type},${tx.amount},${tx.category},${tx.paymentMethod},\"$escapedRemarks\"\n")
+        }
+        return sb.toString()
+    }
+
+    // --- Search & Filtering ---
+
     fun setSearchQuery(query: String) {
         _searchQuery.value = query
     }
@@ -211,10 +411,12 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         _selectedPaymentMethod.value = method
     }
 
-    // Party / Udhar Actions
+    // --- Customer / Supplier credit ledger (Party Book) ---
+
     fun addParty(name: String, phone: String) {
         viewModelScope.launch {
             repository.insertParty(Party(name = name, phone = phone))
+            triggerCloudSync()
         }
     }
 
@@ -224,6 +426,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             if (_activeParty.value?.id == party.id) {
                 _activeParty.value = null
             }
+            triggerCloudSync()
         }
     }
 
@@ -241,16 +444,43 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                     remarks = remarks
                 )
             )
+            triggerCloudSync()
         }
     }
 
     fun deletePartyTransaction(partyTransaction: PartyTransaction) {
         viewModelScope.launch {
             repository.deletePartyTransaction(partyTransaction)
+            triggerCloudSync()
         }
     }
 
-    // AI smart actions
+    // --- Digital Team Management Actions ---
+
+    fun addTeamMember(name: String, email: String, phone: String, role: String) {
+        val bizId = _activeBusiness.value?.id ?: 1
+        viewModelScope.launch {
+            repository.insertTeamMember(
+                TeamMember(
+                    businessId = bizId,
+                    name = name,
+                    email = email,
+                    phone = phone,
+                    role = role
+                )
+            )
+            triggerCloudSync()
+        }
+    }
+
+    fun deleteTeamMember(teamMember: TeamMember) {
+        viewModelScope.launch {
+            repository.deleteTeamMember(teamMember)
+            triggerCloudSync()
+        }
+    }
+
+    // --- Smart AI parsing ---
 
     fun clearDraftTransaction() {
         _aiDraftTransaction.value = null
@@ -266,7 +496,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             remarks = draft.remarks
         )
         _aiDraftTransaction.value = null
-        _chatHistory.value = _chatHistory.value + ChatMessage("assistant", "✅ Transaction saved: ${draft.type} Rs.${draft.amount} [${draft.category}] for ${draft.remarks} via ${draft.paymentMethod}")
+        _chatHistory.value = _chatHistory.value + ChatMessage("assistant", "✅ Entry logged: ${draft.type} Rs.${draft.amount} [${draft.category}] for ${draft.remarks} via ${draft.paymentMethod}")
     }
 
     fun sendChatMessage(message: String) {
@@ -282,9 +512,8 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                 if (parsed != null && parsed.amount > 0.0) {
                     _aiDraftTransaction.value = parsed
                     _aiLoading.value = false
-                    _chatHistory.value = _chatHistory.value + ChatMessage("assistant", "I parsed your entry! Would you like to confirm and save this ledger entry?")
+                    _chatHistory.value = _chatHistory.value + ChatMessage("assistant", "I formulated your record! Click 'Save to Ledger' below to approve.")
                 } else {
-                    // It's a general question or search, compile a summary of books to feed context to Gemini
                     val contextPrompt = buildAIContextPrompt(message)
                     val reply = geminiService.askFinancialAssistant(contextPrompt)
                     _aiLoading.value = false
@@ -293,7 +522,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             } catch (e: Exception) {
                 _aiLoading.value = false
                 _aiError.value = e.message
-                _chatHistory.value = _chatHistory.value + ChatMessage("assistant", "Oops, I encountered an error while analyzing that: ${e.message}")
+                _chatHistory.value = _chatHistory.value + ChatMessage("assistant", "Sorry, I had trouble parsing that input: ${e.message}")
             }
         }
     }
@@ -326,7 +555,8 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         """.trimIndent()
     }
 
-    // Report / Export utilities
+    // --- Report Utilities ---
+
     fun getCSVData(): String {
         val sb = StringBuilder()
         sb.append("Date,Type,Amount,Category,Payment Method,Remarks\n")

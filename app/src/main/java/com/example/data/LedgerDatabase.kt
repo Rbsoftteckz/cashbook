@@ -6,9 +6,17 @@ import kotlinx.coroutines.flow.Flow
 
 // --- Entities ---
 
+@Entity(tableName = "businesses")
+data class Business(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val name: String,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
 @Entity(tableName = "books")
 data class Book(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val businessId: Int = 1, // Links books to specific business
     val name: String,
     val createdAt: Long = System.currentTimeMillis()
 )
@@ -60,18 +68,42 @@ data class PartyTransaction(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val partyId: Int,
     val amount: Double,
-    val type: String, // "GAVE" (you gave, they owe you) or "GOT" (you got, you owe them)
+    val type: String, // "GAVE" or "GOT"
     val remarks: String,
     val timestamp: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "team_members")
+data class TeamMember(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val businessId: Int = 1,
+    val name: String,
+    val email: String,
+    val phone: String,
+    val role: String, // "Boss", "Admin", "Partner", "Data Entry"
+    val createdAt: Long = System.currentTimeMillis()
 )
 
 // --- DAO ---
 
 @Dao
 interface LedgerDao {
+    // Businesses
+    @Query("SELECT * FROM businesses ORDER BY createdAt DESC")
+    fun getAllBusinesses(): Flow<List<Business>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertBusiness(business: Business): Long
+
+    @Delete
+    suspend fun deleteBusiness(business: Business)
+
     // Books
     @Query("SELECT * FROM books ORDER BY createdAt DESC")
     fun getAllBooks(): Flow<List<Book>>
+
+    @Query("SELECT * FROM books WHERE businessId = :businessId ORDER BY createdAt DESC")
+    fun getBooksForBusiness(businessId: Int): Flow<List<Book>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertBook(book: Book): Long
@@ -117,13 +149,26 @@ interface LedgerDao {
 
     @Delete
     suspend fun deletePartyTransaction(partyTransaction: PartyTransaction)
+
+    // Team Members
+    @Query("SELECT * FROM team_members WHERE businessId = :businessId ORDER BY createdAt DESC")
+    fun getTeamMembersForBusiness(businessId: Int): Flow<List<TeamMember>>
+
+    @Query("SELECT * FROM team_members ORDER BY createdAt DESC")
+    fun getAllTeamMembers(): Flow<List<TeamMember>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertTeamMember(teamMember: TeamMember): Long
+
+    @Delete
+    suspend fun deleteTeamMember(teamMember: TeamMember)
 }
 
 // --- Database ---
 
 @Database(
-    entities = [Book::class, Transaction::class, Party::class, PartyTransaction::class],
-    version = 1,
+    entities = [Business::class, Book::class, Transaction::class, Party::class, PartyTransaction::class, TeamMember::class],
+    version = 2,
     exportSchema = false
 )
 abstract class LedgerDatabase : RoomDatabase() {
@@ -152,10 +197,16 @@ abstract class LedgerDatabase : RoomDatabase() {
 // --- Repository ---
 
 class LedgerRepository(private val ledgerDao: LedgerDao) {
+    val allBusinesses: Flow<List<Business>> = ledgerDao.getAllBusinesses()
     val allBooks: Flow<List<Book>> = ledgerDao.getAllBooks()
     val allParties: Flow<List<Party>> = ledgerDao.getAllParties()
     val allTransactions: Flow<List<Transaction>> = ledgerDao.getAllTransactions()
     val allPartyTransactions: Flow<List<PartyTransaction>> = ledgerDao.getAllPartyTransactions()
+    val allTeamMembers: Flow<List<TeamMember>> = ledgerDao.getAllTeamMembers()
+
+    fun getBooksForBusiness(businessId: Int): Flow<List<Book>> {
+        return ledgerDao.getBooksForBusiness(businessId)
+    }
 
     fun getTransactionsForBook(bookId: Int): Flow<List<Transaction>> {
         return ledgerDao.getTransactionsForBook(bookId)
@@ -163,6 +214,18 @@ class LedgerRepository(private val ledgerDao: LedgerDao) {
 
     fun getPartyTransactions(partyId: Int): Flow<List<PartyTransaction>> {
         return ledgerDao.getPartyTransactions(partyId)
+    }
+
+    fun getTeamMembersForBusiness(businessId: Int): Flow<List<TeamMember>> {
+        return ledgerDao.getTeamMembersForBusiness(businessId)
+    }
+
+    suspend fun insertBusiness(business: Business): Long {
+        return ledgerDao.insertBusiness(business)
+    }
+
+    suspend fun deleteBusiness(business: Business) {
+        ledgerDao.deleteBusiness(business)
     }
 
     suspend fun insertBook(book: Book): Long {
@@ -199,5 +262,13 @@ class LedgerRepository(private val ledgerDao: LedgerDao) {
 
     suspend fun deletePartyTransaction(partyTransaction: PartyTransaction) {
         ledgerDao.deletePartyTransaction(partyTransaction)
+    }
+
+    suspend fun insertTeamMember(teamMember: TeamMember): Long {
+        return ledgerDao.insertTeamMember(teamMember)
+    }
+
+    suspend fun deleteTeamMember(teamMember: TeamMember) {
+        ledgerDao.deleteTeamMember(teamMember)
     }
 }
