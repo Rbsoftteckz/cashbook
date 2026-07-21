@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.res.painterResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.*
 import com.example.ui.theme.GreenIn
@@ -161,6 +162,8 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
 
     if (isAppLockEnabled && !isAppUnlocked) {
         AppSecureLockScreen(viewModel = viewModel, onUnlockSuccess = {})
+    } else if (businesses.isEmpty()) {
+        OnboardingSetupScreen(viewModel = viewModel)
     } else {
         ModalNavigationDrawer(
         drawerState = drawerState,
@@ -294,24 +297,6 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         ),
                         onClick = {
                             viewModel.setScreen(Screen.REPORTS)
-                            scope.launch { drawerState.close() }
-                        }
-                    )
-
-                    NavigationDrawerItem(
-                        icon = { Icon(Icons.Default.SmartToy, contentDescription = null) },
-                        label = { Text("LedgerMate AI Copilot") },
-                        selected = currentScreen == Screen.AI_ASSISTANT,
-                        colors = NavigationDrawerItemDefaults.colors(
-                            selectedContainerColor = GreenIn.copy(alpha = 0.15f),
-                            unselectedContainerColor = Color.Transparent,
-                            selectedIconColor = GreenIn,
-                            unselectedIconColor = Color(0xFF475569),
-                            selectedTextColor = GreenIn,
-                            unselectedTextColor = Color(0xFF1E293B)
-                        ),
-                        onClick = {
-                            viewModel.setScreen(Screen.AI_ASSISTANT)
                             scope.launch { drawerState.close() }
                         }
                     )
@@ -577,13 +562,6 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         icon = { Icon(Icons.Default.Analytics, contentDescription = null) },
                         label = { Text("Reports") },
                         modifier = Modifier.testTag("nav_reports")
-                    )
-                    NavigationBarItem(
-                        selected = currentScreen == Screen.AI_ASSISTANT,
-                        onClick = { viewModel.setScreen(Screen.AI_ASSISTANT) },
-                        icon = { Icon(Icons.Default.SmartToy, contentDescription = null) },
-                        label = { Text("LedgerMate AI") },
-                        modifier = Modifier.testTag("nav_ai")
                     )
                 }
             }
@@ -5109,5 +5087,139 @@ fun AppLockSettingsDialog(
             }
         }
     )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
+    var businessName by remember { mutableStateOf("") }
+    var bookName by remember { mutableStateOf("") }
+    val context = LocalContext.current
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFFF8FAFC)), // Slate 50 background
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(24.dp)
+                .verticalScroll(rememberScrollState())
+                .widthIn(max = 450.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(24.dp)
+        ) {
+            // Logo Image
+            Image(
+                painter = painterResource(id = com.example.R.drawable.ic_cashbook_logo),
+                contentDescription = "CashBook Logo",
+                modifier = Modifier
+                    .size(110.dp)
+                    .clip(RoundedCornerShape(24.dp))
+                    .border(1.dp, Color(0xFFE2E8F0), RoundedCornerShape(24.dp))
+            )
+
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = "Welcome to CashBook",
+                    style = MaterialTheme.typography.headlineMedium.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF0F172A) // Slate 900
+                    ),
+                    textAlign = TextAlign.Center
+                )
+                Text(
+                    text = "Set up your business and first book to get started with a fresh ledger.",
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        color = Color(0xFF64748B) // Slate 500
+                    ),
+                    textAlign = TextAlign.Center
+                )
+            }
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Text(
+                        text = "Business Profile",
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFF1E293B)
+                        )
+                    )
+
+                    OutlinedTextField(
+                        value = businessName,
+                        onValueChange = { businessName = it },
+                        label = { Text("Business / Shop Name") },
+                        placeholder = { Text("e.g. Fiza Enterprises") },
+                        leadingIcon = { Icon(Icons.Default.Business, contentDescription = null, tint = GreenIn) },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("onboarding_business_input"),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = GreenIn,
+                            focusedLabelColor = GreenIn
+                        )
+                    )
+
+                    OutlinedTextField(
+                        value = bookName,
+                        onValueChange = { bookName = it },
+                        label = { Text("Books Name") },
+                        placeholder = { Text("e.g. Daily Cashbook") },
+                        leadingIcon = { Icon(Icons.Default.Book, contentDescription = null, tint = GreenIn) },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("onboarding_book_input"),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = GreenIn,
+                            focusedLabelColor = GreenIn
+                        )
+                    )
+                }
+            }
+
+            Button(
+                onClick = {
+                    val biz = businessName.trim()
+                    val bk = bookName.trim()
+                    if (biz.isNotEmpty() && bk.isNotEmpty()) {
+                        viewModel.createBusinessAndBook(biz, bk)
+                    } else {
+                        Toast.makeText(context, "Please enter both Business Name and Books Name.", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp)
+                    .testTag("onboarding_start_button"),
+                colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text(
+                    text = "Start CashBook",
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                )
+            }
+        }
+    }
 }
 

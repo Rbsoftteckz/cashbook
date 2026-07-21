@@ -202,28 +202,19 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     val chatHistory: StateFlow<List<ChatMessage>> = _chatHistory.asStateFlow()
 
     init {
-        // Initialize default business and default book if empty
+        // Only auto-select first business if list is not empty
         viewModelScope.launch {
             businesses.collect { list ->
-                if (list.isEmpty() && _activeBusiness.value == null) {
-                    val defaultBizId = repository.insertBusiness(Business(name = "Main Retail Shop"))
-                    val defaultBiz = Business(id = defaultBizId.toInt(), name = "Main Retail Shop")
-                    _activeBusiness.value = defaultBiz
-                    val defaultBookId = repository.insertBook(Book(businessId = defaultBiz.id, name = "Daily Cashbook"))
-                    _activeBook.value = Book(id = defaultBookId.toInt(), businessId = defaultBiz.id, name = "Daily Cashbook")
-                } else if (list.isNotEmpty() && _activeBusiness.value == null) {
+                if (list.isNotEmpty() && _activeBusiness.value == null) {
                     _activeBusiness.value = list.first()
                 }
             }
         }
 
+        // Only auto-select first book if list is not empty
         viewModelScope.launch {
             books.collect { list ->
-                if (list.isEmpty() && _activeBusiness.value != null && _activeBook.value == null) {
-                    val bizId = _activeBusiness.value!!.id
-                    val defaultBookId = repository.insertBook(Book(businessId = bizId, name = "Daily Cashbook"))
-                    _activeBook.value = Book(id = defaultBookId.toInt(), businessId = bizId, name = "Daily Cashbook")
-                } else if (list.isNotEmpty() && _activeBook.value == null) {
+                if (list.isNotEmpty() && _activeBook.value == null) {
                     _activeBook.value = list.first()
                 }
             }
@@ -304,6 +295,17 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             _activeBusiness.value = newBiz
             val defaultBookId = repository.insertBook(Book(businessId = newBiz.id, name = "Daily Cashbook"))
             _activeBook.value = Book(id = defaultBookId.toInt(), businessId = newBiz.id, name = "Daily Cashbook")
+            triggerCloudSync()
+        }
+    }
+
+    fun createBusinessAndBook(businessName: String, bookName: String) {
+        viewModelScope.launch {
+            val id = repository.insertBusiness(Business(name = businessName))
+            val newBiz = Business(id = id.toInt(), name = businessName)
+            _activeBusiness.value = newBiz
+            val bookId = repository.insertBook(Book(businessId = newBiz.id, name = bookName))
+            _activeBook.value = Book(id = bookId.toInt(), businessId = newBiz.id, name = bookName)
             triggerCloudSync()
         }
     }
