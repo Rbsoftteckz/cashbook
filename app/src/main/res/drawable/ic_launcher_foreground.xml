@@ -1,8 +1,38 @@
 <?xml version="1.0" encoding="utf-8"?>
-<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item
-        android:width="66dp"
-        android:height="66dp"
-        android:drawable="@drawable/ic_cashbook_logo"
-        android:gravity="center" />
-</layer-list>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Dark green ledger book cover -->
+    <path
+        android:fillColor="#10B981"
+        android:pathData="M34,24h40c3.3,0 6,2.7 6,6v48c0,3.3 -2.7,6 -6,6H34c-2.2,0 -4,-1.8 -4,-4V28C30,25.8 31.8,24 34,24z" />
+
+    <!-- Ledger spine binder -->
+    <path
+        android:fillColor="#047857"
+        android:pathData="M34,24h8v60h-8c-2.2,0 -4,-1.8 -4,-4V28C30,25.8 31.8,24 34,24z" />
+
+    <!-- Spiral binding rings -->
+    <path
+        android:fillColor="#F8FAFC"
+        android:pathData="M24,32h8v4h-8zM24,44h8v4h-8zM24,56h8v4h-8zM24,68h8v4h-8z" />
+
+    <!-- Horizontal ledger lines -->
+    <path
+        android:fillColor="#F8FAFC"
+        android:pathData="M48,38h22v3h-22zM48,48h22v3h-22zM48,58h22v3h-22z" />
+
+    <!-- Circular transaction badge -->
+    <path
+        android:fillColor="#34D399"
+        android:pathData="M66,60c6.6,0 12,5.4 12,12s-5.4,12 -12,12s-12,-5.4 -12,-12S59.4,60 66,60z" />
+
+    <!-- White plus sign inside the transaction badge -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M65,66h2v4h4v2h-4v4h-2v-4h-4v-2h4z" />
+</vector>
+
