@@ -1,6 +1,11 @@
 package com.example.ui
 
 import android.app.Application
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -226,6 +231,25 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
         // Automatic Google Drive Sync on app launch
         triggerCloudSync()
+
+        // Observe network state to trigger auto-sync when back online
+        try {
+            val connectivityManager = application.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            if (connectivityManager != null) {
+                val networkRequest = NetworkRequest.Builder()
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .build()
+                connectivityManager.registerNetworkCallback(networkRequest, object : ConnectivityManager.NetworkCallback() {
+                    override fun onAvailable(network: Network) {
+                        super.onAvailable(network)
+                        Log.d("LedgerViewModel", "Network available - triggering auto-sync")
+                        triggerCloudSync()
+                    }
+                })
+            }
+        } catch (e: Exception) {
+            Log.e("LedgerViewModel", "Failed to register network callback", e)
+        }
     }
 
     // --- Core Cloud Sync Mechanism ---

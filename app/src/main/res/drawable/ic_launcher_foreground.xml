@@ -3,6 +3,6 @@
     <item
         android:width="66dp"
         android:height="66dp"
-        android:drawable="@drawable/cashbook_icon_fg_1784393935275"
+        android:drawable="@drawable/ic_cashbook_logo"
         android:gravity="center" />
 </layer-list>

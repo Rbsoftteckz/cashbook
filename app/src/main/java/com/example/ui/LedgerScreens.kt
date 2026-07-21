@@ -3317,6 +3317,7 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
     var lastAddedCollaboratorName by remember { mutableStateOf("") }
     var lastAddedCollaboratorRole by remember { mutableStateOf("") }
     var lastAddedCollaboratorPhone by remember { mutableStateOf("") }
+    var lastAddedCollaboratorEmail by remember { mutableStateOf("") }
 
     val roles = listOf("Boss", "Admin", "Partner", "Data Entry")
     val context = LocalContext.current
@@ -3529,6 +3530,7 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                             lastAddedCollaboratorName = staffName
                             lastAddedCollaboratorRole = staffRole
                             lastAddedCollaboratorPhone = staffPhone
+                            lastAddedCollaboratorEmail = staffEmail
                             staffName = ""
                             staffEmail = ""
                             staffPhone = ""
@@ -3552,18 +3554,29 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
     if (showInvitationSuccessDialog) {
         val bizName = activeBusiness?.name ?: "our Business"
         val inviteLink = "https://ai.studio/build/ledger-mate?bizId=${activeBusiness?.id ?: 1}&role=$lastAddedCollaboratorRole"
+        val appName = "CashBook"
+        val appVersion = "v1.1"
+        val apkFileName = "CashBook_${appVersion}_Debug.apk"
+        val downloadUrl = "https://ais-pre-da4saffzzctvdmze42ct3v-707128247986.asia-east1.run.app/apk"
+        
         val inviteText = """
-            🌟 Invitation to join ${bizName} on LedgerMate!
+            🌟 Invitation to join ${bizName} on ${appName} (${appVersion})!
             
             Hi $lastAddedCollaboratorName,
-            You've been invited to join "${bizName}" as a *$lastAddedCollaboratorRole* on the Digital Ledger App.
+            You've been invited to join "${bizName}" as a *$lastAddedCollaboratorRole* on the ${appName} app.
             
-            Please use this link or invite code to connect your profile:
+            📥 Download App (Debug APK):
+            App Name: ${appName}
+            Version: ${appVersion}
+            File Name: ${apkFileName}
+            Download Link: ${downloadUrl}
+            
+            🔑 To connect your profile, use this link or invite code:
             Invite Link: $inviteLink
             Invite Code: ${activeBusiness?.id ?: 1}-$lastAddedCollaboratorRole
             
             Happy Ledger Accounting!
-            LedgerMate Team
+            ${appName} Team
         """.trimIndent()
 
         AlertDialog(
@@ -3582,7 +3595,7 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
-                        text = "Invitation link for $lastAddedCollaboratorName is ready to send.",
+                        text = "Invitation details for $lastAddedCollaboratorName (properly configured for ${appName} ${appVersion}).",
                         style = MaterialTheme.typography.bodyMedium
                     )
 
@@ -3618,20 +3631,48 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                 }
             },
             confirmButton = {
-                Button(
-                    onClick = {
-                        val shareIntent = android.content.Intent().apply {
-                            action = android.content.Intent.ACTION_SEND
-                            putExtra(android.content.Intent.EXTRA_TEXT, inviteText)
-                            type = "text/plain"
-                        }
-                        context.startActivity(android.content.Intent.createChooser(shareIntent, "Share Invitation"))
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Share Invitation")
+                    if (lastAddedCollaboratorEmail.isNotBlank()) {
+                        Button(
+                            onClick = {
+                                val emailIntent = android.content.Intent(android.content.Intent.ACTION_SENDTO).apply {
+                                    data = android.net.Uri.parse("mailto:")
+                                    putExtra(android.content.Intent.EXTRA_EMAIL, arrayOf(lastAddedCollaboratorEmail))
+                                    putExtra(android.content.Intent.EXTRA_SUBJECT, "Invitation to join ${bizName} on ${appName} (${appVersion})")
+                                    putExtra(android.content.Intent.EXTRA_TEXT, inviteText)
+                                }
+                                try {
+                                    context.startActivity(android.content.Intent.createChooser(emailIntent, "Send Email Invitation"))
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "No email client found", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                        ) {
+                            Icon(Icons.Default.Email, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Email Invite")
+                        }
+                    }
+
+                    Button(
+                        onClick = {
+                            val shareIntent = android.content.Intent().apply {
+                                action = android.content.Intent.ACTION_SEND
+                                putExtra(android.content.Intent.EXTRA_TEXT, inviteText)
+                                type = "text/plain"
+                            }
+                            context.startActivity(android.content.Intent.createChooser(shareIntent, "Share Invitation"))
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                    ) {
+                        Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Share")
+                    }
                 }
             },
             dismissButton = {
