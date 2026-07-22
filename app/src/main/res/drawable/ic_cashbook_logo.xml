@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="128dp"
+    android:height="128dp"
+    android:viewportWidth="128"
+    android:viewportHeight="128">
+
+    <!-- Dark green ledger book cover -->
+    <path
+        android:fillColor="#10B981"
+        android:pathData="M40,28h48c3.8,0 7,3.2 7,7v58c0,3.8 -3.2,7 -7,7H40c-2.5,0 -4.5,-2 -4.5,-4.5v-63c0,-2.5 2,-4.5 4.5,-4.5z" />
+
+    <!-- Ledger spine binder -->
+    <path
+        android:fillColor="#047857"
+        android:pathData="M40,28h10v72H40c-2.5,0 -4.5,-2 -4.5,-4.5v-63C35.5,30 37.5,28 40,28z" />
+
+    <!-- Spiral binding rings -->
+    <path
+        android:fillColor="#F8FAFC"
+        android:pathData="M28,37h12v4H28zM28,51h12v4H28zM28,65h12v4H28zM28,79h12v4H28z" />
+
+    <!-- Horizontal ledger lines -->
+    <path
+        android:fillColor="#F8FAFC"
+        android:pathData="M56,44h26v3H56zM56,56h26v3H56zM56,68h26v3H56z" />
+
+    <!-- Circular transaction badge -->
+    <path
+        android:fillColor="#34D399"
+        android:pathData="M78,70c7.7,0 14,6.3 14,14s-6.3,14 -14,14s-14,-6.3 -14,-14S70.3,70 78,70z" />
+
+    <!-- White plus sign inside the transaction badge -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M77,77h2v5h5v2h-5v5h-2v-5h-5v-2h5z" />
+</vector>
