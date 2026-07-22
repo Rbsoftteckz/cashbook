@@ -95,6 +95,9 @@ interface LedgerDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertBusiness(business: Business): Long
 
+    @Update
+    suspend fun updateBusiness(business: Business)
+
     @Delete
     suspend fun deleteBusiness(business: Business)
 
@@ -107,6 +110,9 @@ interface LedgerDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertBook(book: Book): Long
+
+    @Update
+    suspend fun updateBook(book: Book)
 
     @Delete
     suspend fun deleteBook(book: Book)
@@ -224,12 +230,20 @@ class LedgerRepository(private val ledgerDao: LedgerDao) {
         return ledgerDao.insertBusiness(business)
     }
 
+    suspend fun updateBusiness(business: Business) {
+        ledgerDao.updateBusiness(business)
+    }
+
     suspend fun deleteBusiness(business: Business) {
         ledgerDao.deleteBusiness(business)
     }
 
     suspend fun insertBook(book: Book): Long {
         return ledgerDao.insertBook(book)
+    }
+
+    suspend fun updateBook(book: Book) {
+        ledgerDao.updateBook(book)
     }
 
     suspend fun deleteBook(book: Book) {

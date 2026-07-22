@@ -620,6 +620,13 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         modifier = Modifier.testTag("nav_reports")
                     )
                     NavigationBarItem(
+                        selected = currentScreen == Screen.MANAGE_WORKSPACE,
+                        onClick = { viewModel.setScreen(Screen.MANAGE_WORKSPACE) },
+                        icon = { Icon(Icons.Default.BusinessCenter, contentDescription = null) },
+                        label = { Text("Manage") },
+                        modifier = Modifier.testTag("nav_manage")
+                    )
+                    NavigationBarItem(
                         selected = currentScreen == Screen.SYNC_CENTER,
                         onClick = { viewModel.setScreen(Screen.SYNC_CENTER) },
                         icon = { Icon(Icons.Default.CloudSync, contentDescription = null) },
@@ -660,6 +667,7 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         Screen.HELP_DOCS -> HelpDocsScreen(viewModel)
                         Screen.CONTACT_US -> ContactUsScreen(viewModel)
                         Screen.SETTINGS -> SettingsScreen(viewModel)
+                        Screen.MANAGE_WORKSPACE -> ManageWorkspaceScreen(viewModel)
                     }
                 }
 
@@ -5327,9 +5335,17 @@ fun AppLockSettingsDialog(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
+    var step by remember { mutableStateOf(1) }
     var businessName by remember { mutableStateOf("") }
     var bookName by remember { mutableStateOf("") }
     val context = LocalContext.current
+    val syncManager = viewModel.syncManager
+
+    val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
+    val isSyncing by viewModel.isSyncing.collectAsStateWithLifecycle()
+    val isUserSignedIn = syncManager.isUserSignedIn()
+
+    var showOAuthDialogInWelcome by remember { mutableStateOf(false) }
 
     Box(
         modifier = Modifier
@@ -5356,103 +5372,304 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                     .border(1.dp, Color(0xFFE2E8F0), RoundedCornerShape(24.dp))
             )
 
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Text(
-                    text = "Welcome to CashBook",
-                    style = MaterialTheme.typography.headlineMedium.copy(
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF0F172A) // Slate 900
-                    ),
-                    textAlign = TextAlign.Center
-                )
-                Text(
-                    text = "Set up your business and first book to get started with a fresh ledger.",
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        color = Color(0xFF64748B) // Slate 500
-                    ),
-                    textAlign = TextAlign.Center
-                )
-            }
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                shape = RoundedCornerShape(16.dp)
-            ) {
+            if (step == 1) {
+                // Step 1: Welcome Screen & Auth Flow
                 Column(
-                    modifier = Modifier.padding(20.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Text(
-                        text = "Business Profile",
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.SemiBold,
-                            color = Color(0xFF1E293B)
-                        )
+                        text = "Welcome to CashBook",
+                        style = MaterialTheme.typography.headlineMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF0F172A) // Slate 900
+                        ),
+                        textAlign = TextAlign.Center
                     )
-
-                    OutlinedTextField(
-                        value = businessName,
-                        onValueChange = { businessName = it },
-                        label = { Text("Business / Shop Name") },
-                        placeholder = { Text("e.g. Fiza Enterprises") },
-                        leadingIcon = { Icon(Icons.Default.Business, contentDescription = null, tint = GreenIn) },
-                        singleLine = true,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("onboarding_business_input"),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = GreenIn,
-                            focusedLabelColor = GreenIn
-                        )
-                    )
-
-                    OutlinedTextField(
-                        value = bookName,
-                        onValueChange = { bookName = it },
-                        label = { Text("Books Name") },
-                        placeholder = { Text("e.g. Daily Cashbook") },
-                        leadingIcon = { Icon(Icons.Default.Book, contentDescription = null, tint = GreenIn) },
-                        singleLine = true,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("onboarding_book_input"),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = GreenIn,
-                            focusedLabelColor = GreenIn
-                        )
+                    Text(
+                        text = "Set up your cloud backup or continue completely offline.",
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            color = Color(0xFF64748B) // Slate 500
+                        ),
+                        textAlign = TextAlign.Center
                     )
                 }
-            }
 
-            Button(
-                onClick = {
-                    val biz = businessName.trim()
-                    val bk = bookName.trim()
-                    if (biz.isNotEmpty() && bk.isNotEmpty()) {
-                        viewModel.createBusinessAndBook(biz, bk)
-                    } else {
-                        Toast.makeText(context, "Please enter both Business Name and Books Name.", Toast.LENGTH_SHORT).show()
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "Connect with Google",
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFF1E293B)
+                            )
+                        )
+
+                        Text(
+                            text = "Sign in to keep your ledger synced automatically with your Google Drive. Otherwise, stay offline.",
+                            style = MaterialTheme.typography.bodySmall.copy(color = Color(0xFF64748B)),
+                            textAlign = TextAlign.Center
+                        )
+
+                        if (!isUserSignedIn) {
+                            Button(
+                                onClick = { showOAuthDialogInWelcome = true },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp)
+                                    .testTag("google_login_welcome_button"),
+                                colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Icon(Icons.Default.Login, contentDescription = null, tint = Color.White)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Sign In with Google", color = Color.White)
+                            }
+                        } else {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFF1F5F9))
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = GreenIn)
+                                    Column {
+                                        Text("Connected Account", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                                        Text(syncManager.getEmail(), style = MaterialTheme.typography.bodySmall, color = Color(0xFF64748B))
+                                    }
+                                }
+                            }
+                        }
+
+                        Divider(color = Color(0xFFE2E8F0))
+
+                        OutlinedButton(
+                            onClick = { step = 2 },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .testTag("continue_welcome_button"),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text(
+                                text = if (isUserSignedIn) "Continue to Setup" else "Continue Offline",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                        }
                     }
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(50.dp)
-                    .testTag("onboarding_start_button"),
-                colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Text(
-                    text = "Start CashBook",
-                    style = MaterialTheme.typography.titleMedium.copy(
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
+                }
+            } else {
+                // Step 2: Set up Business Profile
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = "New Business Setup",
+                        style = MaterialTheme.typography.headlineMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF0F172A) // Slate 900
+                        ),
+                        textAlign = TextAlign.Center
                     )
-                )
+                    Text(
+                        text = "Give your first business and books a name to initiate your ledger.",
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            color = Color(0xFF64748B) // Slate 500
+                        ),
+                        textAlign = TextAlign.Center
+                    )
+                }
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        Text(
+                            text = "Business Profile",
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFF1E293B)
+                            )
+                        )
+
+                        OutlinedTextField(
+                            value = businessName,
+                            onValueChange = { businessName = it },
+                            label = { Text("Business / Shop Name") },
+                            placeholder = { Text("e.g. Fiza Enterprises") },
+                            leadingIcon = { Icon(Icons.Default.Business, contentDescription = null, tint = GreenIn) },
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("onboarding_business_input"),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = GreenIn,
+                                focusedLabelColor = GreenIn
+                            )
+                        )
+
+                        OutlinedTextField(
+                            value = bookName,
+                            onValueChange = { bookName = it },
+                            label = { Text("Books Name") },
+                            placeholder = { Text("e.g. Daily Cashbook") },
+                            leadingIcon = { Icon(Icons.Default.Book, contentDescription = null, tint = GreenIn) },
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("onboarding_book_input"),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = GreenIn,
+                                focusedLabelColor = GreenIn
+                            )
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { step = 1 },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(50.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("Back")
+                    }
+
+                    Button(
+                        onClick = {
+                            val biz = businessName.trim()
+                            val bk = bookName.trim()
+                            if (biz.isNotEmpty() && bk.isNotEmpty()) {
+                                viewModel.createBusinessAndBook(biz, bk)
+                            } else {
+                                Toast.makeText(context, "Please enter both Business Name and Books Name.", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        modifier = Modifier
+                            .weight(2f)
+                            .height(50.dp)
+                            .testTag("onboarding_start_button"),
+                        colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            text = "Start CashBook",
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // WebView Login Dialog
+    if (showOAuthDialogInWelcome) {
+        Dialog(onDismissRequest = { showOAuthDialogInWelcome = false }) {
+            Card(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(vertical = 24.dp, horizontal = 12.dp),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Sign In with Google", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                        IconButton(onClick = { showOAuthDialogInWelcome = false }) {
+                            Icon(Icons.Default.Close, contentDescription = "Close WebView")
+                        }
+                    }
+
+                    AndroidView(
+                        factory = { ctx ->
+                            WebView(ctx).apply {
+                                settings.javaScriptEnabled = true
+                                settings.domStorageEnabled = true
+                                val defaultUa = android.webkit.WebSettings.getDefaultUserAgent(ctx)
+                                val sanitizedUa = if (defaultUa.isNullOrBlank()) {
+                                    "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+                                } else {
+                                    defaultUa.replace("; wv", "").replace("Version/4.0 ", "").replace("Version/4.0", "")
+                                }
+                                settings.userAgentString = sanitizedUa
+                                
+                                webViewClient = object : WebViewClient() {
+                                    override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+                                        return handleRedirect(url)
+                                    }
+
+                                    override fun shouldOverrideUrlLoading(view: WebView?, request: android.webkit.WebResourceRequest?): Boolean {
+                                        return handleRedirect(request?.url?.toString())
+                                    }
+
+                                    override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                                        super.onPageStarted(view, url, favicon)
+                                        handleRedirect(url)
+                                    }
+
+                                    private fun handleRedirect(url: String?): Boolean {
+                                        val currentRedirectUri = syncManager.getRedirectUri()
+                                        if (url != null && url.startsWith(currentRedirectUri)) {
+                                            val token = extractAccessToken(url)
+                                            if (token != null) {
+                                                syncManager.saveAccessToken(token)
+                                                viewModel.triggerCloudSync()
+                                                showOAuthDialogInWelcome = false
+                                                Toast.makeText(context, "Google Authorization successful! Sync active.", Toast.LENGTH_LONG).show()
+                                                return true
+                                            }
+                                        }
+                                        return false
+                                    }
+                                }
+
+                                val finalClientId = syncManager.getClientId()
+                                val finalRedirectUri = syncManager.getRedirectUri()
+                                val authUrl = "https://accounts.google.com/o/oauth2/v2/auth?" +
+                                        "client_id=$finalClientId&" +
+                                        "redirect_uri=$finalRedirectUri&" +
+                                        "response_type=token&" +
+                                        "scope=https://www.googleapis.com/auth/drive.appdata%20email%20profile"
+                                loadUrl(authUrl)
+                            }
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                    )
+                }
             }
         }
     }
@@ -5874,6 +6091,563 @@ fun SettingsScreen(viewModel: LedgerViewModel) {
             },
             dismissButton = {
                 TextButton(onClick = { businessToDelete = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ManageWorkspaceScreen(viewModel: LedgerViewModel) {
+    val businesses by viewModel.businesses.collectAsStateWithLifecycle()
+    val books by viewModel.books.collectAsStateWithLifecycle()
+    val activeBusiness by viewModel.activeBusiness.collectAsStateWithLifecycle()
+    val activeBook by viewModel.activeBook.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+
+    var showAddBusinessDialog by remember { mutableStateOf(false) }
+    var newBusinessName by remember { mutableStateOf("") }
+
+    var showAddBookDialog by remember { mutableStateOf(false) }
+    var newBookName by remember { mutableStateOf("") }
+
+    var businessToRename by remember { mutableStateOf<com.example.data.Business?>(null) }
+    var renameBusinessName by remember { mutableStateOf("") }
+
+    var bookToRename by remember { mutableStateOf<com.example.data.Book?>(null) }
+    var renameBookName by remember { mutableStateOf("") }
+
+    var businessToDelete by remember { mutableStateOf<com.example.data.Business?>(null) }
+    var bookToDelete by remember { mutableStateOf<com.example.data.Book?>(null) }
+    var deleteConfirmationInput by remember { mutableStateOf("") }
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // Welcome/Header
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.BusinessCenter,
+                        contentDescription = "Manage Workspaces",
+                        tint = GreenIn,
+                        modifier = Modifier.size(36.dp)
+                    )
+                    Column {
+                        Text(
+                            "Workspace Manager",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Text(
+                            "Create, select, rename, or delete your businesses and cashbooks.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                        )
+                    }
+                }
+            }
+        }
+
+        // Section 1: Businesses
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "My Businesses / Shops",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                TextButton(
+                    onClick = { showAddBusinessDialog = true },
+                    colors = ButtonDefaults.textButtonColors(contentColor = GreenIn)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Add Business", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold))
+                }
+            }
+        }
+
+        if (businesses.isEmpty()) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                ) {
+                    Box(modifier = Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                        Text("No businesses available. Create one to get started!", style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+        } else {
+            items(businesses) { biz ->
+                val isActive = activeBusiness?.id == biz.id
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(
+                            width = if (isActive) 1.5.dp else 1.dp,
+                            color = if (isActive) GreenIn else Color(0xFFE2E8F0),
+                            shape = RoundedCornerShape(12.dp)
+                        ),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (isActive) Color.White else Color(0xFFF8FAFC)
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Business,
+                                    contentDescription = null,
+                                    tint = if (isActive) GreenIn else Color(0xFF64748B)
+                                )
+                                Text(
+                                    text = biz.name,
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = if (isActive) GreenIn else Color(0xFF0F172A)
+                                )
+                            }
+                            if (isActive) {
+                                AssistChip(
+                                    onClick = {},
+                                    label = { Text("Active Ledger", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                                    leadingIcon = { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(12.dp)) },
+                                    colors = AssistChipDefaults.assistChipColors(
+                                        labelColor = GreenIn,
+                                        leadingIconContentColor = GreenIn
+                                    )
+                                )
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (!isActive) {
+                                Button(
+                                    onClick = { viewModel.selectBusiness(biz) },
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Text("Switch to", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold))
+                                }
+                            }
+
+                            IconButton(
+                                onClick = {
+                                    businessToRename = biz
+                                    renameBusinessName = biz.name
+                                }
+                            ) {
+                                Icon(Icons.Default.Edit, contentDescription = "Rename Business", tint = Color(0xFF475569))
+                            }
+
+                            IconButton(
+                                onClick = {
+                                    businessToDelete = biz
+                                    deleteConfirmationInput = ""
+                                }
+                            ) {
+                                Icon(Icons.Default.Delete, contentDescription = "Delete Business", tint = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Section 2: Books of Active Business
+        item {
+            Divider(color = Color(0xFFE2E8F0), modifier = Modifier.padding(vertical = 8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "Cashbooks",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "For: ${activeBusiness?.name ?: "No Active Business"}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF64748B)
+                    )
+                }
+                TextButton(
+                    onClick = { showAddBookDialog = true },
+                    enabled = activeBusiness != null,
+                    colors = ButtonDefaults.textButtonColors(contentColor = GreenIn)
+                ) {
+                    Icon(Icons.Default.AddCard, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Add Book", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold))
+                }
+            }
+        }
+
+        if (books.isEmpty()) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                ) {
+                    Box(modifier = Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                        Text("No cashbooks available. Create one to get started!", style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+        } else {
+            items(books) { bk ->
+                val isActive = activeBook?.id == bk.id
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(
+                            width = if (isActive) 1.5.dp else 1.dp,
+                            color = if (isActive) GreenIn else Color(0xFFE2E8F0),
+                            shape = RoundedCornerShape(12.dp)
+                        ),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (isActive) Color.White else Color(0xFFF8FAFC)
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Book,
+                                    contentDescription = null,
+                                    tint = if (isActive) GreenIn else Color(0xFF64748B)
+                                )
+                                Text(
+                                    text = bk.name,
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = if (isActive) GreenIn else Color(0xFF0F172A)
+                                )
+                            }
+                            if (isActive) {
+                                AssistChip(
+                                    onClick = {},
+                                    label = { Text("Selected Book", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                                    leadingIcon = { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(12.dp)) },
+                                    colors = AssistChipDefaults.assistChipColors(
+                                        labelColor = GreenIn,
+                                        leadingIconContentColor = GreenIn
+                                    )
+                                )
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (!isActive) {
+                                Button(
+                                    onClick = { viewModel.selectBook(bk) },
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Text("Switch to", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold))
+                                }
+                            }
+
+                            IconButton(
+                                onClick = {
+                                    bookToRename = bk
+                                    renameBookName = bk.name
+                                }
+                            ) {
+                                Icon(Icons.Default.Edit, contentDescription = "Rename Book", tint = Color(0xFF475569))
+                            }
+
+                            IconButton(
+                                onClick = {
+                                    bookToDelete = bk
+                                }
+                            ) {
+                                Icon(Icons.Default.Delete, contentDescription = "Delete Book", tint = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- Dialogs ---
+
+    // 1. Add Business Dialog
+    if (showAddBusinessDialog) {
+        AlertDialog(
+            onDismissRequest = { showAddBusinessDialog = false },
+            title = { Text("Create New Business", fontWeight = FontWeight.Bold) },
+            text = {
+                OutlinedTextField(
+                    value = newBusinessName,
+                    onValueChange = { newBusinessName = it },
+                    label = { Text("Business / Company Name") },
+                    placeholder = { Text("e.g. Fiza Shop") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("add_business_dialog_input")
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val name = newBusinessName.trim()
+                        if (name.isNotEmpty()) {
+                            viewModel.createBusiness(name)
+                            newBusinessName = ""
+                            showAddBusinessDialog = false
+                            Toast.makeText(context, "Business created!", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                    modifier = Modifier.testTag("add_business_dialog_confirm")
+                ) {
+                    Text("Create")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddBusinessDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // 2. Rename Business Dialog
+    if (businessToRename != null) {
+        val biz = businessToRename!!
+        AlertDialog(
+            onDismissRequest = { businessToRename = null },
+            title = { Text("Rename Business", fontWeight = FontWeight.Bold) },
+            text = {
+                OutlinedTextField(
+                    value = renameBusinessName,
+                    onValueChange = { renameBusinessName = it },
+                    label = { Text("New Business Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("rename_business_dialog_input")
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val name = renameBusinessName.trim()
+                        if (name.isNotEmpty()) {
+                            viewModel.updateBusiness(biz.copy(name = name))
+                            businessToRename = null
+                            Toast.makeText(context, "Business renamed successfully!", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                    modifier = Modifier.testTag("rename_business_dialog_confirm")
+                ) {
+                    Text("Save")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { businessToRename = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // 3. Delete Business Dialog
+    if (businessToDelete != null) {
+        val biz = businessToDelete!!
+        AlertDialog(
+            onDismissRequest = { businessToDelete = null },
+            title = { Text("Delete Business?", fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    Text("This will permanently delete '${biz.name}' and all its cashbooks, staff, and transactions. This action cannot be undone.", color = MaterialTheme.colorScheme.error)
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("To confirm, type the exact business name:")
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("'${biz.name}'", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = deleteConfirmationInput,
+                        onValueChange = { deleteConfirmationInput = it },
+                        placeholder = { Text("Retype name") },
+                        modifier = Modifier.fillMaxWidth().testTag("delete_business_dialog_input"),
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (deleteConfirmationInput == biz.name) {
+                            viewModel.deleteBusiness(biz)
+                            businessToDelete = null
+                        }
+                    },
+                    enabled = deleteConfirmationInput == biz.name,
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier.testTag("delete_business_dialog_confirm")
+                ) {
+                    Text("Delete permanently")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { businessToDelete = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // 4. Add Book Dialog
+    if (showAddBookDialog) {
+        AlertDialog(
+            onDismissRequest = { showAddBookDialog = false },
+            title = { Text("Create New Cashbook", fontWeight = FontWeight.Bold) },
+            text = {
+                OutlinedTextField(
+                    value = newBookName,
+                    onValueChange = { newBookName = it },
+                    label = { Text("Cashbook Name") },
+                    placeholder = { Text("e.g. Daily Sales") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("add_book_dialog_input")
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val name = newBookName.trim()
+                        if (name.isNotEmpty()) {
+                            viewModel.createBook(name)
+                            newBookName = ""
+                            showAddBookDialog = false
+                            Toast.makeText(context, "Cashbook created!", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                    modifier = Modifier.testTag("add_book_dialog_confirm")
+                ) {
+                    Text("Create")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddBookDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // 5. Rename Book Dialog
+    if (bookToRename != null) {
+        val bk = bookToRename!!
+        AlertDialog(
+            onDismissRequest = { bookToRename = null },
+            title = { Text("Rename Cashbook", fontWeight = FontWeight.Bold) },
+            text = {
+                OutlinedTextField(
+                    value = renameBookName,
+                    onValueChange = { renameBookName = it },
+                    label = { Text("New Cashbook Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("rename_book_dialog_input")
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val name = renameBookName.trim()
+                        if (name.isNotEmpty()) {
+                            viewModel.updateBook(bk.copy(name = name))
+                            bookToRename = null
+                            Toast.makeText(context, "Cashbook renamed successfully!", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                    modifier = Modifier.testTag("rename_book_dialog_confirm")
+                ) {
+                    Text("Save")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { bookToRename = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // 6. Delete Book Dialog
+    if (bookToDelete != null) {
+        val bk = bookToDelete!!
+        AlertDialog(
+            onDismissRequest = { bookToDelete = null },
+            title = { Text("Delete Cashbook?", fontWeight = FontWeight.Bold) },
+            text = {
+                Text("Are you sure you want to delete '${bk.name}' and all its associated transactions? This action is permanent and cannot be undone.", color = MaterialTheme.colorScheme.error)
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.deleteBook(bk)
+                        bookToDelete = null
+                        Toast.makeText(context, "Cashbook deleted.", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier.testTag("delete_book_dialog_confirm")
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { bookToDelete = null }) {
                     Text("Cancel")
                 }
             }

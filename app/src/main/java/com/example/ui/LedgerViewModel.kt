@@ -26,7 +26,8 @@ enum class Screen {
     WHATS_NEW,
     HELP_DOCS,
     CONTACT_US,
-    SETTINGS
+    SETTINGS,
+    MANAGE_WORKSPACE
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -300,6 +301,16 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun updateBusiness(business: Business) {
+        viewModelScope.launch {
+            repository.updateBusiness(business)
+            if (_activeBusiness.value?.id == business.id) {
+                _activeBusiness.value = business
+            }
+            triggerCloudSync()
+        }
+    }
+
     fun createBusinessAndBook(businessName: String, bookName: String) {
         viewModelScope.launch {
             val id = repository.insertBusiness(Business(name = businessName))
@@ -336,6 +347,16 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             val id = repository.insertBook(Book(businessId = bizId, name = name))
             val newBook = Book(id = id.toInt(), businessId = bizId, name = name)
             _activeBook.value = newBook
+            triggerCloudSync()
+        }
+    }
+
+    fun updateBook(book: Book) {
+        viewModelScope.launch {
+            repository.updateBook(book)
+            if (_activeBook.value?.id == book.id) {
+                _activeBook.value = book
+            }
             triggerCloudSync()
         }
     }
