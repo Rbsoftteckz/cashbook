@@ -25,7 +25,8 @@ enum class Screen {
     SYNC_CENTER,
     WHATS_NEW,
     HELP_DOCS,
-    CONTACT_US
+    CONTACT_US,
+    SETTINGS
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)

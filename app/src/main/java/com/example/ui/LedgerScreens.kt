@@ -1,6 +1,12 @@
 package com.example.ui
 
 import android.content.Intent
+import android.graphics.pdf.PdfDocument
+import android.graphics.Paint
+import android.graphics.Color as AndroidColor
+import androidx.core.content.FileProvider
+import java.io.File
+import android.content.Context
 import android.util.Log
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -159,6 +165,10 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
 
     var showAddBusinessDialog by remember { mutableStateOf(false) }
     var newBusinessName by remember { mutableStateOf("") }
+
+    var businessToDelete by remember { mutableStateOf<com.example.data.Business?>(null) }
+    var bookToDelete by remember { mutableStateOf<com.example.data.Book?>(null) }
+    var deleteConfirmationInput by remember { mutableStateOf("") }
 
     if (isAppLockEnabled && !isAppUnlocked) {
         AppSecureLockScreen(viewModel = viewModel, onUnlockSuccess = {})
@@ -327,16 +337,29 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         }
                     )
 
+                    val isSynced = syncStatus.contains("Synced", ignoreCase = true) && viewModel.syncManager.isUserSignedIn()
                     NavigationDrawerItem(
-                        icon = { Icon(Icons.Default.CloudSync, contentDescription = null) },
+                        icon = { 
+                            Icon(
+                                Icons.Default.CloudSync, 
+                                contentDescription = null,
+                                tint = if (isSynced) GreenIn else Color.Red
+                            ) 
+                        },
                         label = { Text("Google Drive Cloud Sync") },
                         selected = currentScreen == Screen.SYNC_CENTER,
+                        badge = {
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .clip(CircleShape)
+                                    .background(if (isSynced) GreenIn else Color.Red)
+                            )
+                        },
                         colors = NavigationDrawerItemDefaults.colors(
-                            selectedContainerColor = GreenIn.copy(alpha = 0.15f),
+                            selectedContainerColor = if (isSynced) GreenIn.copy(alpha = 0.15f) else Color.Red.copy(alpha = 0.1f),
                             unselectedContainerColor = Color.Transparent,
-                            selectedIconColor = GreenIn,
-                            unselectedIconColor = Color(0xFF475569),
-                            selectedTextColor = GreenIn,
+                            selectedTextColor = if (isSynced) GreenIn else Color.Red,
                             unselectedTextColor = Color(0xFF1E293B)
                         ),
                         onClick = {
@@ -417,6 +440,24 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         }
                     )
 
+                    NavigationDrawerItem(
+                        icon = { Icon(Icons.Default.Settings, contentDescription = null) },
+                        label = { Text("Settings") },
+                        selected = currentScreen == Screen.SETTINGS,
+                        colors = NavigationDrawerItemDefaults.colors(
+                            selectedContainerColor = GreenIn.copy(alpha = 0.15f),
+                            unselectedContainerColor = Color.Transparent,
+                            selectedIconColor = GreenIn,
+                            unselectedIconColor = Color(0xFF475569),
+                            selectedTextColor = GreenIn,
+                            unselectedTextColor = Color(0xFF1E293B)
+                        ),
+                        onClick = {
+                            viewModel.setScreen(Screen.SETTINGS)
+                            scope.launch { drawerState.close() }
+                        }
+                    )
+
                     Spacer(modifier = Modifier.height(12.dp))
                     Divider(color = Color(0xFFE2E8F0))
                     Spacer(modifier = Modifier.height(8.dp))
@@ -478,7 +519,10 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                                     Icon(Icons.Default.Check, contentDescription = "Selected", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
                                 } else if (businesses.size > 1 && hasPermission(simulatedRole, "delete_business")) {
                                     IconButton(
-                                        onClick = { viewModel.deleteBusiness(biz) },
+                                        onClick = {
+                                            businessToDelete = biz
+                                            deleteConfirmationInput = ""
+                                        },
                                         modifier = Modifier.size(24.dp)
                                     ) {
                                         Icon(Icons.Default.Delete, contentDescription = "Delete business", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(14.dp))
@@ -530,6 +574,18 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         containerColor = MaterialTheme.colorScheme.surface
                     ),
                     actions = {
+                        // Google Drive Cloud Sync status indicator (Red if not synced, Green if synced)
+                        val isSynced = syncStatus.contains("Synced", ignoreCase = true) && viewModel.syncManager.isUserSignedIn()
+                        IconButton(
+                            onClick = { viewModel.setScreen(Screen.SYNC_CENTER) },
+                            modifier = Modifier.testTag("top_bar_sync_indicator")
+                        ) {
+                            Icon(
+                                imageVector = if (isSynced) Icons.Default.CloudDone else Icons.Default.CloudOff,
+                                contentDescription = "Cloud Sync Status",
+                                tint = if (isSynced) GreenIn else Color.Red
+                            )
+                        }
                         IconButton(
                             onClick = {
                                 if (hasPermission(simulatedRole, "add_book")) {
@@ -552,9 +608,9 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                     NavigationBarItem(
                         selected = currentScreen == Screen.DASHBOARD,
                         onClick = { viewModel.setScreen(Screen.DASHBOARD) },
-                        icon = { Icon(Icons.Default.AccountBalanceWallet, contentDescription = null) },
-                        label = { Text("Cashbook") },
-                        modifier = Modifier.testTag("nav_cashbook")
+                        icon = { Icon(Icons.Default.Home, contentDescription = null) },
+                        label = { Text("Home") },
+                        modifier = Modifier.testTag("nav_home")
                     )
                     NavigationBarItem(
                         selected = currentScreen == Screen.REPORTS,
@@ -562,6 +618,20 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         icon = { Icon(Icons.Default.Analytics, contentDescription = null) },
                         label = { Text("Reports") },
                         modifier = Modifier.testTag("nav_reports")
+                    )
+                    NavigationBarItem(
+                        selected = currentScreen == Screen.SYNC_CENTER,
+                        onClick = { viewModel.setScreen(Screen.SYNC_CENTER) },
+                        icon = { Icon(Icons.Default.CloudSync, contentDescription = null) },
+                        label = { Text("Sync") },
+                        modifier = Modifier.testTag("nav_sync")
+                    )
+                    NavigationBarItem(
+                        selected = currentScreen == Screen.SETTINGS,
+                        onClick = { viewModel.setScreen(Screen.SETTINGS) },
+                        icon = { Icon(Icons.Default.Settings, contentDescription = null) },
+                        label = { Text("Settings") },
+                        modifier = Modifier.testTag("nav_settings")
                     )
                 }
             }
@@ -589,6 +659,7 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         Screen.WHATS_NEW -> WhatsNewScreen(viewModel)
                         Screen.HELP_DOCS -> HelpDocsScreen(viewModel)
                         Screen.CONTACT_US -> ContactUsScreen(viewModel)
+                        Screen.SETTINGS -> SettingsScreen(viewModel)
                     }
                 }
 
@@ -633,7 +704,10 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                                             if (isSelected) {
                                                 Icon(Icons.Default.Check, contentDescription = "Active", tint = MaterialTheme.colorScheme.primary)
                                             } else if (books.size > 1 && hasPermission(simulatedRole, "delete_book")) {
-                                                IconButton(onClick = { viewModel.deleteBook(book) }) {
+                                                IconButton(onClick = {
+                                                    bookToDelete = book
+                                                    deleteConfirmationInput = ""
+                                                }) {
                                                     Icon(Icons.Default.Delete, contentDescription = "Delete book", tint = MaterialTheme.colorScheme.error)
                                                 }
                                             }
@@ -728,6 +802,98 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                     AppLockSettingsDialog(
                         viewModel = viewModel,
                         onDismiss = { showSecuritySettingsDialog = false }
+                    )
+                }
+
+                // Delete Business re-typing confirmation dialog
+                if (businessToDelete != null) {
+                    val biz = businessToDelete!!
+                    AlertDialog(
+                        onDismissRequest = { businessToDelete = null },
+                        title = { Text("Delete Business?", fontWeight = FontWeight.Bold) },
+                        text = {
+                            Column {
+                                Text("This will permanently delete '${biz.name}' and all its cashbooks, staff, and transactions. This action cannot be undone.", color = MaterialTheme.colorScheme.error)
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Text("To confirm, type the exact business name:")
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text("'${biz.name}'", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                                Spacer(modifier = Modifier.height(8.dp))
+                                OutlinedTextField(
+                                    value = deleteConfirmationInput,
+                                    onValueChange = { deleteConfirmationInput = it },
+                                    placeholder = { Text("Retype name") },
+                                    modifier = Modifier.fillMaxWidth().testTag("delete_business_confirm_input"),
+                                    singleLine = true
+                                )
+                            }
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    if (deleteConfirmationInput == biz.name) {
+                                        viewModel.deleteBusiness(biz)
+                                        businessToDelete = null
+                                    }
+                                },
+                                enabled = deleteConfirmationInput == biz.name,
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                                modifier = Modifier.testTag("delete_business_confirm_button")
+                            ) {
+                                Text("Delete permanently")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { businessToDelete = null }) {
+                                Text("Cancel")
+                            }
+                        }
+                    )
+                }
+
+                // Delete Book re-typing confirmation dialog
+                if (bookToDelete != null) {
+                    val b = bookToDelete!!
+                    AlertDialog(
+                        onDismissRequest = { bookToDelete = null },
+                        title = { Text("Delete Cashbook?", fontWeight = FontWeight.Bold) },
+                        text = {
+                            Column {
+                                Text("This will permanently delete '${b.name}' and all its entries. This action cannot be undone.", color = MaterialTheme.colorScheme.error)
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Text("To confirm, type the exact book name:")
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text("'${b.name}'", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                                Spacer(modifier = Modifier.height(8.dp))
+                                OutlinedTextField(
+                                    value = deleteConfirmationInput,
+                                    onValueChange = { deleteConfirmationInput = it },
+                                    placeholder = { Text("Retype name") },
+                                    modifier = Modifier.fillMaxWidth().testTag("delete_book_confirm_input"),
+                                    singleLine = true
+                                )
+                            }
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    if (deleteConfirmationInput == b.name) {
+                                        viewModel.deleteBook(b)
+                                        bookToDelete = null
+                                    }
+                                },
+                                enabled = deleteConfirmationInput == b.name,
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                                modifier = Modifier.testTag("delete_book_confirm_button")
+                            ) {
+                                Text("Delete permanently")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { bookToDelete = null }) {
+                                Text("Cancel")
+                            }
+                        }
                     )
                 }
             }
@@ -2948,6 +3114,7 @@ fun UdharScreen(viewModel: LedgerViewModel) {
 @Composable
 fun ReportsScreen(viewModel: LedgerViewModel) {
     val activeBookTransactions by viewModel.activeBookTransactions.collectAsStateWithLifecycle()
+    val activeBook by viewModel.activeBook.collectAsStateWithLifecycle()
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
 
@@ -3080,30 +3247,98 @@ fun ReportsScreen(viewModel: LedgerViewModel) {
             }
         }
 
-        // Export Statement CSV
+        // Export & Share Statement Reports
         item {
-            Button(
-                onClick = {
-                    val csvData = viewModel.getCSVData()
-                    clipboardManager.setText(AnnotatedString(csvData))
-                    Toast.makeText(context, "Full Statement CSV copied to clipboard!", Toast.LENGTH_LONG).show()
-
-                    val sendIntent = Intent().apply {
-                        action = Intent.ACTION_SEND
-                        putExtra(Intent.EXTRA_TEXT, csvData)
-                        type = "text/comma-separated-values"
-                    }
-                    context.startActivity(Intent.createChooser(sendIntent, "Share CSV Statement Report"))
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(54.dp)
-                    .testTag("export_csv_button"),
-                shape = RoundedCornerShape(12.dp)
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
             ) {
-                Icon(Icons.Default.Share, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Export and Share Corporate Statement CSV", fontWeight = FontWeight.Bold)
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Export & Share Reports", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                    Text("Instantly share accounting statements with partners or clients via WhatsApp or mail.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    
+                    Spacer(modifier = Modifier.height(4.dp))
+                    
+                    // Share Text Report Button (Formatted for WhatsApp)
+                    Button(
+                        onClick = {
+                            val textReport = generateTextReport(activeBook, activeBookTransactions)
+                            val sendIntent = Intent().apply {
+                                action = Intent.ACTION_SEND
+                                putExtra(Intent.EXTRA_TEXT, textReport)
+                                type = "text/plain"
+                            }
+                            try {
+                                sendIntent.setPackage("com.whatsapp")
+                                context.startActivity(sendIntent)
+                            } catch (e: Exception) {
+                                sendIntent.setPackage(null)
+                                context.startActivity(Intent.createChooser(sendIntent, "Share Text Statement Report"))
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth().testTag("share_text_report_button"),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF25D366)) // WhatsApp Green color
+                    ) {
+                        Icon(Icons.Default.Chat, contentDescription = null, tint = Color.White)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Share on WhatsApp as Text", fontWeight = FontWeight.Bold, color = Color.White)
+                    }
+
+                    // Share PDF Report Button
+                    Button(
+                        onClick = {
+                            try {
+                                val pdfFile = generatePdfReport(context, activeBook, activeBookTransactions)
+                                val pdfUri = FileProvider.getUriForFile(context, "com.example.fileprovider", pdfFile)
+                                val shareIntent = Intent().apply {
+                                    action = Intent.ACTION_SEND
+                                    putExtra(Intent.EXTRA_STREAM, pdfUri)
+                                    type = "application/pdf"
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                try {
+                                    shareIntent.setPackage("com.whatsapp")
+                                    context.startActivity(shareIntent)
+                                } catch (e: Exception) {
+                                    shareIntent.setPackage(null)
+                                    context.startActivity(Intent.createChooser(shareIntent, "Share PDF Statement Report"))
+                                }
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "PDF Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth().testTag("share_pdf_report_button"),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                    ) {
+                        Icon(Icons.Default.PictureAsPdf, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Share as PDF Document", fontWeight = FontWeight.Bold)
+                    }
+
+                    // Share CSV Report Button
+                    OutlinedButton(
+                        onClick = {
+                            val csvData = viewModel.getCSVData()
+                            clipboardManager.setText(AnnotatedString(csvData))
+                            Toast.makeText(context, "Full Statement CSV copied to clipboard!", Toast.LENGTH_LONG).show()
+
+                            val sendIntent = Intent().apply {
+                                action = Intent.ACTION_SEND
+                                putExtra(Intent.EXTRA_TEXT, csvData)
+                                type = "text/comma-separated-values"
+                            }
+                            context.startActivity(Intent.createChooser(sendIntent, "Share CSV Statement Report"))
+                        },
+                        modifier = Modifier.fillMaxWidth().testTag("export_csv_button"),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.Share, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Share Corporate CSV Spreadsheet", fontWeight = FontWeight.Bold)
+                    }
+                }
             }
         }
     }
@@ -5220,6 +5455,429 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                 )
             }
         }
+    }
+}
+
+fun generateTextReport(activeBook: Book?, transactions: List<Transaction>): String {
+    val bookName = activeBook?.name ?: "All Cashbooks"
+    val totalIn = transactions.filter { it.type == "IN" }.sumOf { it.amount }
+    val totalOut = transactions.filter { it.type == "OUT" }.sumOf { it.amount }
+    val netBalance = totalIn - totalOut
+
+    val sb = java.lang.StringBuilder()
+    sb.append("📊 CASHBOOK STATEMENT REPORT 📊\n")
+    sb.append("===============================\n")
+    sb.append("Book: $bookName\n")
+    sb.append("Report Date: ${SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()).format(Date())}\n")
+    sb.append("===============================\n")
+    sb.append("Total In (+): Rs. ${String.format("%,.0f", totalIn)}\n")
+    sb.append("Total Out (-): Rs. ${String.format("%,.0f", totalOut)}\n")
+    sb.append("Net Balance: Rs. ${String.format("%,.0f", netBalance)}\n")
+    sb.append("===============================\n\n")
+    sb.append("TRANSACTION HISTORY:\n")
+    transactions.forEachIndexed { index, tx ->
+        val dateStr = SimpleDateFormat("dd-MMM-yyyy", Locale.getDefault()).format(Date(tx.timestamp))
+        val typePrefix = if (tx.type == "IN") "[IN]" else "[OUT]"
+        sb.append("${index + 1}. $dateStr $typePrefix Rs. ${String.format("%,.0f", tx.amount)} - ${tx.remarks} (${tx.paymentMethod})\n")
+    }
+    sb.append("\nGenerated by CashBook Pro App.")
+    return sb.toString()
+}
+
+fun generatePdfReport(context: Context, activeBook: Book?, transactions: List<Transaction>): File {
+    val pdfDocument = PdfDocument()
+    // A4 Dimensions: 595 x 842 points
+    val pageInfo = PdfDocument.PageInfo.Builder(595, 842, 1).create()
+    val page = pdfDocument.startPage(pageInfo)
+    val canvas = page.canvas
+
+    val paint = Paint()
+    
+    // Header Banner
+    paint.color = AndroidColor.parseColor("#10B981") // Theme Green
+    canvas.drawRect(0f, 0f, 595f, 80f, paint)
+    
+    // Title
+    paint.color = AndroidColor.WHITE
+    paint.textSize = 20f
+    paint.isFakeBoldText = true
+    canvas.drawText("CASHBOOK STATEMENT REPORT", 30f, 48f, paint)
+    
+    // Subtitle
+    paint.textSize = 10f
+    paint.isFakeBoldText = false
+    canvas.drawText("App: CashBook Pro | Elegant Cloud Ledger Syncing", 30f, 65f, paint)
+
+    // Metadata
+    paint.color = AndroidColor.BLACK
+    paint.textSize = 12f
+    paint.isFakeBoldText = true
+    val bookName = activeBook?.name ?: "All Books"
+    canvas.drawText("Active Book: $bookName", 30f, 110f, paint)
+    
+    paint.isFakeBoldText = false
+    val dateStr = SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()).format(Date())
+    canvas.drawText("Generated On: $dateStr", 30f, 130f, paint)
+
+    // Summary Box Background
+    paint.color = AndroidColor.parseColor("#F1F5F9") // Slate 100
+    canvas.drawRect(30f, 150f, 565f, 220f, paint)
+
+    // Summary Box Content
+    val totalIn = transactions.filter { it.type == "IN" }.sumOf { it.amount }
+    val totalOut = transactions.filter { it.type == "OUT" }.sumOf { it.amount }
+    val netBalance = totalIn - totalOut
+
+    paint.color = AndroidColor.BLACK
+    paint.textSize = 11f
+    paint.isFakeBoldText = true
+    canvas.drawText("Financial Summary:", 45f, 175f, paint)
+
+    paint.isFakeBoldText = false
+    canvas.drawText("Total Cash In (+): Rs. ${String.format("%,.0f", totalIn)}", 45f, 195f, paint)
+    canvas.drawText("Total Cash Out (-): Rs. ${String.format("%,.0f", totalOut)}", 220f, 195f, paint)
+    
+    paint.isFakeBoldText = true
+    paint.color = if (netBalance >= 0) AndroidColor.parseColor("#047857") else AndroidColor.parseColor("#B91C1C")
+    canvas.drawText("Net Balance: Rs. ${String.format("%,.0f", netBalance)}", 410f, 195f, paint)
+
+    // Table Header
+    paint.color = AndroidColor.parseColor("#334155") // Dark slate 700
+    canvas.drawRect(30f, 240f, 565f, 265f, paint)
+
+    paint.color = AndroidColor.WHITE
+    paint.textSize = 10f
+    paint.isFakeBoldText = true
+    canvas.drawText("Date", 40f, 257f, paint)
+    canvas.drawText("Type", 120f, 257f, paint)
+    canvas.drawText("Remarks / Category", 170f, 257f, paint)
+    canvas.drawText("Payment", 380f, 257f, paint)
+    canvas.drawText("Amount (Rs.)", 480f, 257f, paint)
+
+    // Table Rows
+    paint.color = AndroidColor.BLACK
+    paint.isFakeBoldText = false
+    var currentY = 285f
+    val limit = 22
+    transactions.take(limit).forEach { tx ->
+        val txDate = SimpleDateFormat("dd-MMM-yyyy", Locale.getDefault()).format(Date(tx.timestamp))
+        val isIn = tx.type == "IN"
+        
+        paint.color = AndroidColor.parseColor("#F8FAFC")
+        canvas.drawRect(30f, currentY - 12f, 565f, currentY + 6f, paint)
+
+        paint.color = AndroidColor.BLACK
+        canvas.drawText(txDate, 40f, currentY, paint)
+        
+        paint.color = if (isIn) AndroidColor.parseColor("#059669") else AndroidColor.parseColor("#DC2626")
+        canvas.drawText(if (isIn) "IN" else "OUT", 120f, currentY, paint)
+
+        paint.color = AndroidColor.BLACK
+        val displayRemarks = if (tx.remarks.length > 30) tx.remarks.take(27) + "..." else tx.remarks
+        canvas.drawText("$displayRemarks [${tx.category}]", 170f, currentY, paint)
+        canvas.drawText(tx.paymentMethod, 380f, currentY, paint)
+
+        paint.color = if (isIn) AndroidColor.parseColor("#059669") else AndroidColor.parseColor("#DC2626")
+        paint.isFakeBoldText = true
+        val amtStr = String.format("%,.0f", tx.amount)
+        canvas.drawText(amtStr, 480f, currentY, paint)
+        paint.isFakeBoldText = false
+
+        currentY += 22f
+    }
+
+    if (transactions.size > limit) {
+        paint.color = AndroidColor.GRAY
+        paint.textSize = 9f
+        canvas.drawText("... and ${transactions.size - limit} more transactions (truncated in PDF overview)", 40f, currentY + 10f, paint)
+    }
+
+    paint.color = AndroidColor.parseColor("#94A3B8")
+    paint.textSize = 9f
+    canvas.drawText("Page 1 of 1 | CashBook Pro Statement Report", 30f, 820f, paint)
+
+    pdfDocument.finishPage(page)
+
+    val file = File(context.cacheDir, "cashbook_report.pdf")
+    pdfDocument.writeTo(file.outputStream())
+    pdfDocument.close()
+
+    return file
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsScreen(viewModel: LedgerViewModel) {
+    val simulatedRole by viewModel.simulatedRole.collectAsStateWithLifecycle()
+    val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
+    val isUserSignedIn = viewModel.syncManager.isUserSignedIn()
+    val context = LocalContext.current
+    var showAddBusinessDialog by remember { mutableStateOf(false) }
+    var newBusinessName by remember { mutableStateOf("") }
+    val businesses by viewModel.businesses.collectAsStateWithLifecycle()
+    val activeBusiness by viewModel.activeBusiness.collectAsStateWithLifecycle()
+    
+    var businessToDelete by remember { mutableStateOf<Business?>(null) }
+    var deleteConfirmationInput by remember { mutableStateOf("") }
+    
+    var showSecuritySettingsDialog by remember { mutableStateOf(false) }
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            Text(
+                "App Settings",
+                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.titleLarge
+            )
+            Text(
+                "Configure your cashbook workspace and backup preferences",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        // Section 1: Security & PIN Lock
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Security Lock", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                    Text("Protect your ledger from unauthorized access with a secure 4-digit PIN.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    
+                    Button(
+                        onClick = { showSecuritySettingsDialog = true },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.Lock, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Configure App PIN Lock")
+                    }
+                }
+            }
+        }
+
+        // Section 2: Backup & Cloud Sync Info
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Google Drive Cloud Sync", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Status:")
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            val isSynced = syncStatus.contains("Synced", ignoreCase = true) && isUserSignedIn
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .clip(CircleShape)
+                                    .background(if (isSynced) GreenIn else Color.Red)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (isSynced) "Synced to Cloud" else if (isUserSignedIn) "Pending Sync" else "Offline (Local Only)",
+                                fontWeight = FontWeight.Bold,
+                                color = if (isSynced) GreenIn else Color.Red
+                            )
+                        }
+                    }
+
+                    Button(
+                        onClick = { viewModel.setScreen(Screen.SYNC_CENTER) },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.CloudSync, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Open Drive Sync Center")
+                    }
+                }
+            }
+        }
+
+        // Section 3: Simulation & Roles
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Operator Role Simulator", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                    Text("Select a simulated operator role to test permissions and restrictions.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf("Boss", "Partner", "Data Entry").forEach { role ->
+                            val selected = simulatedRole == role
+                            FilterChip(
+                                selected = selected,
+                                onClick = { viewModel.setSimulatedRole(role) },
+                                label = { Text(role) },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Section 4: Workspace Businesses
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Manage Businesses", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                        IconButton(onClick = { showAddBusinessDialog = true }) {
+                            Icon(Icons.Default.Add, contentDescription = "Add Business")
+                        }
+                    }
+
+                    businesses.forEach { biz ->
+                        val isSelected = biz.id == activeBusiness?.id
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f) else Color.Transparent)
+                                .clickable { viewModel.selectBusiness(biz) }
+                                .padding(12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Storefront, contentDescription = null, tint = if (isSelected) GreenIn else Color.Gray)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(biz.name, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal)
+                            }
+                            if (businesses.size > 1 && hasPermission(simulatedRole, "delete_business")) {
+                                IconButton(onClick = {
+                                    businessToDelete = biz
+                                    deleteConfirmationInput = ""
+                                }) {
+                                    Icon(Icons.Default.Delete, contentDescription = "Delete business", tint = MaterialTheme.colorScheme.error)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // PIN lock settings dialog inside SettingsScreen
+    if (showSecuritySettingsDialog) {
+        AppLockSettingsDialog(
+            viewModel = viewModel,
+            onDismiss = { showSecuritySettingsDialog = false }
+        )
+    }
+
+    // Create Business Dialog inside SettingsScreen
+    if (showAddBusinessDialog) {
+        AlertDialog(
+            onDismissRequest = { showAddBusinessDialog = false },
+            title = { Text("Create New Business", fontWeight = FontWeight.Bold) },
+            text = {
+                OutlinedTextField(
+                    value = newBusinessName,
+                    onValueChange = { newBusinessName = it },
+                    label = { Text("Business / Company Name") },
+                    placeholder = { Text("e.g. Fiza Shop") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val name = newBusinessName.trim()
+                        if (name.isNotEmpty()) {
+                            viewModel.createBusiness(name)
+                            newBusinessName = ""
+                            showAddBusinessDialog = false
+                            Toast.makeText(context, "Business created!", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = GreenIn)
+                ) {
+                    Text("Create")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddBusinessDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Delete Business re-typing confirmation dialog
+    if (businessToDelete != null) {
+        val biz = businessToDelete!!
+        AlertDialog(
+            onDismissRequest = { businessToDelete = null },
+            title = { Text("Delete Business?", fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    Text("This will permanently delete '${biz.name}' and all its cashbooks, staff, and transactions. This action cannot be undone.", color = MaterialTheme.colorScheme.error)
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("To confirm, type the exact business name:")
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("'${biz.name}'", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = deleteConfirmationInput,
+                        onValueChange = { deleteConfirmationInput = it },
+                        placeholder = { Text("Retype name") },
+                        modifier = Modifier.fillMaxWidth().testTag("delete_business_confirm_input"),
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (deleteConfirmationInput == biz.name) {
+                            viewModel.deleteBusiness(biz)
+                            businessToDelete = null
+                        }
+                    },
+                    enabled = deleteConfirmationInput == biz.name,
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier.testTag("delete_business_confirm_button")
+                ) {
+                    Text("Delete permanently")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { businessToDelete = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
 
