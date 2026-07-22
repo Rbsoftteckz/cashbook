@@ -45,12 +45,6 @@ class GoogleDriveSyncManager(private val context: Context) {
             detectedRedirectUri = "https://localhost"
         }
 
-        // Clean up legacy custom values if they match old hardcoded defaults to allow automatic sync for all users
-        val savedId = prefs.getString("custom_client_id", "")
-        if (savedId == "755700558600-jl4pipc2klikiac22ivk8s3qvn0pjtc7.apps.googleusercontent.com" || 
-            savedId == "755700558600-jl4pipc2klikiac22ivk8s3qvn0pjtc7") {
-            prefs.edit().remove("custom_client_id").apply()
-        }
         val savedUri = prefs.getString("custom_redirect_uri", "")
         if (savedUri == "https://localhost/oauth2redirect" || savedUri == "https://localhost" || savedUri?.contains("asia-east1.run.app") == true) {
             prefs.edit().remove("custom_redirect_uri").apply()
@@ -62,14 +56,14 @@ class GoogleDriveSyncManager(private val context: Context) {
         val DEFAULT_CLIENT_ID: String = if (com.example.BuildConfig.OAUTH_CLIENT_ID.isNotBlank() && !com.example.BuildConfig.OAUTH_CLIENT_ID.startsWith("MY_")) {
             com.example.BuildConfig.OAUTH_CLIENT_ID
         } else {
-            "381324439605-pustt1n8j4gank1iuh94d4rdk0ivl8eb.apps.googleusercontent.com"
+            "755700558600-jl4pipc2klikiac22ivk8s3qvn0pjtc7.apps.googleusercontent.com"
         }
         const val REDIRECT_URI = "https://localhost/oauth2redirect"
     }
 
     fun getClientId(): String {
         val saved = prefs.getString("custom_client_id", "")
-        return if (!saved.isNullOrBlank() && saved != "755700558600-jl4pipc2klikiac22ivk8s3qvn0pjtc7.apps.googleusercontent.com" && saved != "755700558600-jl4pipc2klikiac22ivk8s3qvn0pjtc7") saved else detectedClientId
+        return if (!saved.isNullOrBlank()) saved else detectedClientId
     }
 
     fun saveClientId(clientId: String) {
@@ -173,6 +167,7 @@ class GoogleDriveSyncManager(private val context: Context) {
                 put("paymentMethod", tx.paymentMethod)
                 put("remarks", tx.remarks)
                 put("timestamp", tx.timestamp)
+                put("isSynced", tx.isSynced)
             })
         }
         root.put("transactions", txArray)
@@ -199,6 +194,7 @@ class GoogleDriveSyncManager(private val context: Context) {
                 put("type", pTx.type)
                 put("remarks", pTx.remarks)
                 put("timestamp", pTx.timestamp)
+                put("isSynced", pTx.isSynced)
             })
         }
         root.put("party_transactions", pTxArray)
@@ -286,7 +282,8 @@ class GoogleDriveSyncManager(private val context: Context) {
                             category = obj.getString("category"),
                             paymentMethod = obj.getString("paymentMethod"),
                             remarks = obj.getString("remarks"),
-                            timestamp = obj.getLong("timestamp")
+                            timestamp = obj.getLong("timestamp"),
+                            isSynced = true
                         )
                     )
                 }
@@ -304,7 +301,8 @@ class GoogleDriveSyncManager(private val context: Context) {
                             amount = obj.getDouble("amount"),
                             type = obj.getString("type"),
                             remarks = obj.getString("remarks"),
-                            timestamp = obj.getLong("timestamp")
+                            timestamp = obj.getLong("timestamp"),
+                            isSynced = true
                         )
                     )
                 }

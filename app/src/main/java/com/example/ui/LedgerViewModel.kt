@@ -27,7 +27,8 @@ enum class Screen {
     HELP_DOCS,
     CONTACT_US,
     SETTINGS,
-    MANAGE_WORKSPACE
+    MANAGE_WORKSPACE,
+    PROFILE
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -271,6 +272,9 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
                 val message = syncManager.syncWithCloud(localJson, database.ledgerDao())
                 _syncStatus.value = message
+                if (message.contains("backed up", ignoreCase = true) || message.contains("Synced", ignoreCase = true)) {
+                    repository.markAllTransactionsSynced()
+                }
             } catch (e: Exception) {
                 _syncStatus.value = "Sync Interrupted: ${e.message}"
             } finally {
@@ -383,7 +387,8 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                     type = type,
                     category = category,
                     paymentMethod = paymentMethod,
-                    remarks = remarks
+                    remarks = remarks,
+                    isSynced = syncManager.isUserSignedIn()
                 )
             )
             triggerCloudSync()
@@ -489,7 +494,8 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                     partyId = partyId,
                     amount = amount,
                     type = type,
-                    remarks = remarks
+                    remarks = remarks,
+                    isSynced = syncManager.isUserSignedIn()
                 )
             )
             triggerCloudSync()

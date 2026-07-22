@@ -197,6 +197,10 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                                 )
                             )
                         )
+                        .clickable {
+                            viewModel.setScreen(Screen.PROFILE)
+                            scope.launch { drawerState.close() }
+                        }
                         .padding(24.dp)
                 ) {
                     Column {
@@ -275,6 +279,24 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF64748B) // Slate-500
+                    )
+
+                    NavigationDrawerItem(
+                        icon = { Icon(Icons.Default.AccountCircle, contentDescription = null) },
+                        label = { Text("Profile & Account") },
+                        selected = currentScreen == Screen.PROFILE,
+                        colors = NavigationDrawerItemDefaults.colors(
+                            selectedContainerColor = GreenIn.copy(alpha = 0.15f),
+                            unselectedContainerColor = Color.Transparent,
+                            selectedIconColor = GreenIn,
+                            unselectedIconColor = Color(0xFF475569),
+                            selectedTextColor = GreenIn,
+                            unselectedTextColor = Color(0xFF1E293B)
+                        ),
+                        onClick = {
+                            viewModel.setScreen(Screen.PROFILE)
+                            scope.launch { drawerState.close() }
+                        }
                     )
 
                     NavigationDrawerItem(
@@ -463,23 +485,27 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                     val isDrawerSignedIn = remember(drawerAuthVersion) { viewModel.syncManager.isUserSignedIn() }
                     val drawerEmail = remember(drawerAuthVersion) { viewModel.syncManager.getEmail() }
 
-                    if (isDrawerSignedIn) {
-                        NavigationDrawerItem(
-                            icon = { Icon(Icons.Default.Logout, contentDescription = "Log Out", tint = MaterialTheme.colorScheme.error) },
-                            label = { Text("Log Out (${drawerEmail.take(15)}${if (drawerEmail.length > 15) "..." else ""})", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold) },
-                            selected = false,
-                            colors = NavigationDrawerItemDefaults.colors(
-                                unselectedContainerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.12f)
-                            ),
-                            onClick = {
-                                viewModel.syncManager.clearAuth()
-                                drawerAuthVersion++
-                                viewModel.triggerCloudSync()
-                                Toast.makeText(context, "Logged out from Google Account.", Toast.LENGTH_SHORT).show()
-                                scope.launch { drawerState.close() }
-                            }
-                        )
-                    }
+                    NavigationDrawerItem(
+                        icon = { Icon(Icons.Default.Logout, contentDescription = "Log Out", tint = MaterialTheme.colorScheme.error) },
+                        label = {
+                            Text(
+                                text = if (isDrawerSignedIn) "Log Out (${if (drawerEmail.length > 12) drawerEmail.take(12) + "..." else drawerEmail})" else "Log Out / Reset Session",
+                                color = MaterialTheme.colorScheme.error,
+                                fontWeight = FontWeight.Bold
+                            )
+                        },
+                        selected = false,
+                        colors = NavigationDrawerItemDefaults.colors(
+                            unselectedContainerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.12f)
+                        ),
+                        onClick = {
+                            viewModel.syncManager.clearAuth()
+                            drawerAuthVersion++
+                            viewModel.triggerCloudSync()
+                            Toast.makeText(context, "Logged out / Session reset successfully.", Toast.LENGTH_SHORT).show()
+                            scope.launch { drawerState.close() }
+                        }
+                    )
 
                     Spacer(modifier = Modifier.height(12.dp))
                     Divider(color = Color(0xFFE2E8F0))
@@ -621,6 +647,16 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         ) {
                             Icon(Icons.Default.AddCard, contentDescription = "Create New Book")
                         }
+                        IconButton(
+                            onClick = { viewModel.setScreen(Screen.PROFILE) },
+                            modifier = Modifier.testTag("top_bar_profile_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AccountCircle,
+                                contentDescription = "User Account Profile",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
                     }
                 )
             },
@@ -691,6 +727,7 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         Screen.CONTACT_US -> ContactUsScreen(viewModel)
                         Screen.SETTINGS -> SettingsScreen(viewModel)
                         Screen.MANAGE_WORKSPACE -> ManageWorkspaceScreen(viewModel)
+                        Screen.PROFILE -> ProfileScreen(viewModel)
                     }
                 }
 
@@ -1611,11 +1648,18 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
                                 color = if (tx.type == "IN") GreenIn else RedOut
                             )
-                            Text(
-                                text = tx.paymentMethod,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = tx.paymentMethod,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                TransactionSyncCheckIndicator(isSynced = tx.isSynced)
+                            }
                         }
                     }
                 }
@@ -2031,6 +2075,46 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
     }
 }
 
+@Composable
+fun TransactionSyncCheckIndicator(
+    isSynced: Boolean,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+        modifier = modifier
+    ) {
+        if (isSynced) {
+            Icon(
+                imageVector = Icons.Default.DoneAll,
+                contentDescription = "Synced to Drive (Double Green Check)",
+                tint = Color(0xFF25D366),
+                modifier = Modifier.size(16.dp)
+            )
+            Text(
+                text = "Synced",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color(0xFF25D366),
+                fontWeight = FontWeight.Bold
+            )
+        } else {
+            Icon(
+                imageVector = Icons.Default.Check,
+                contentDescription = "Offline / Unsynced (Single Red Check)",
+                tint = Color(0xFFEF4444),
+                modifier = Modifier.size(16.dp)
+            )
+            Text(
+                text = "Offline",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color(0xFFEF4444),
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TransactionItemCard(
@@ -2154,12 +2238,21 @@ fun TransactionItemCard(
 
                     Spacer(modifier = Modifier.height(4.dp))
 
-                    val formattedDate = SimpleDateFormat("dd MMM, hh:mm a", Locale.getDefault()).format(Date(transaction.timestamp))
-                    Text(
-                        text = formattedDate,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val formattedDate = SimpleDateFormat("dd MMM, hh:mm a", Locale.getDefault()).format(Date(transaction.timestamp))
+                        Text(
+                            text = formattedDate,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        )
+
+                        // WhatsApp style cloud sync check mark indicator
+                        TransactionSyncCheckIndicator(isSynced = transaction.isSynced)
+                    }
                 }
             }
 
@@ -2848,19 +2941,23 @@ fun UdharScreen(viewModel: LedgerViewModel) {
                                     }
                                 }
 
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = "Rs. ${pTx.amount}",
-                                        fontWeight = FontWeight.Black,
-                                        fontSize = 16.sp,
-                                        color = if (pTx.type == "GAVE") GreenIn else RedOut
-                                    )
-                                    if (hasPermission(simulatedRole, "delete_transaction")) {
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        IconButton(onClick = { viewModel.deletePartyTransaction(pTx) }) {
-                                            Icon(Icons.Default.Clear, contentDescription = "Delete credit entry", modifier = Modifier.size(16.dp))
+                                Column(horizontalAlignment = Alignment.End) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = "Rs. ${pTx.amount}",
+                                            fontWeight = FontWeight.Black,
+                                            fontSize = 16.sp,
+                                            color = if (pTx.type == "GAVE") GreenIn else RedOut
+                                        )
+                                        if (hasPermission(simulatedRole, "delete_transaction")) {
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            IconButton(onClick = { viewModel.deletePartyTransaction(pTx) }) {
+                                                Icon(Icons.Default.Clear, contentDescription = "Delete credit entry", modifier = Modifier.size(16.dp))
+                                            }
                                         }
                                     }
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    TransactionSyncCheckIndicator(isSynced = pTx.isSynced)
                                 }
                             }
                         }
@@ -4065,31 +4162,19 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                                     )
                                 }
                                 Text(
-                                    "Google blocks sign-in with 'Error 403: access_denied' for sensitive scopes like Google Drive when the user email is not in your Test Users list.",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                                Text(
-                                    "How to allow other users / emails to sign in:",
+                                    "Google Client ID Configured:",
                                     style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
                                 )
                                 Text(
-                                    "1. Open Google Cloud Console (https://console.cloud.google.com/apis/credentials/consent).\n" +
-                                    "2. Ensure Publishing Status is 'Testing'.\n" +
-                                    "3. Scroll down to 'Test Users' -> click '+ ADD USERS'.\n" +
-                                    "4. Add any email (up to 100 emails) you want to allow.\n" +
-                                    "   -> Added users can sign in immediately with zero errors!",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                                Text(
-                                    "Note on 'Advanced' bypass & Google Verification:",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    "• Why 'Advanced' bypass is missing: Google removed the bypass option for restricted/sensitive APIs like Google Drive to prevent unauthorized access.\n" +
-                                    "• Why preview URL failed verification: 'ais-pre-...' is a private preview URL requiring workspace login, so Google's public verification bot cannot crawl it. For public release, use a free public landing page (e.g. GitHub Pages or Netlify) for your privacy policy.\n" +
-                                    "• Offline Backup alternative: Users can also use 'Manual JSON Backup & Restore' below to backup/restore data locally without needing Google sign-in!",
+                                    "Active Client ID: 755700558600-jl4pipc2klikiac22ivk8s3qvn0pjtc7.apps.googleusercontent.com\n\n" +
+                                    "Google Cloud Console checklist for this Client ID:\n" +
+                                    "1. Authorized JavaScript origins (Origin ONLY, no path):\n" +
+                                    "   https://gen-lang-client-0052637237.firebaseapp.com\n" +
+                                    "2. Authorized redirect URIs (WITH path):\n" +
+                                    "   https://gen-lang-client-0052637237.firebaseapp.com/__/auth/handler\n" +
+                                    "3. Test users: Ensure mailofrb@gmail.com is added under 'OAuth consent screen' -> 'Test users'.",
                                     style = MaterialTheme.typography.bodySmall
                                 )
                             }
@@ -4359,6 +4444,17 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
 
     // Google Sign-In WebView Dialog
     if (showOAuthDialog) {
+        var showManualPasteDialog by remember { mutableStateOf(false) }
+        var pastedUrlInput by remember { mutableStateOf("") }
+        val finalClientId = customClientIdInput.ifBlank { syncManager.getClientId() }
+        val finalRedirectUri = customRedirectUriInput.ifBlank { syncManager.getRedirectUri() }
+        val authUrl = "https://accounts.google.com/o/oauth2/v2/auth?" +
+                "client_id=$finalClientId&" +
+                "redirect_uri=$finalRedirectUri&" +
+                "response_type=token&" +
+                "scope=https://www.googleapis.com/auth/drive.appdata%20email%20profile%20openid&" +
+                "prompt=select_account"
+
         Dialog(onDismissRequest = { showOAuthDialog = false }) {
             Card(
                 modifier = Modifier
@@ -4370,13 +4466,52 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(16.dp),
+                            .padding(12.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text("Sign In with Google", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                        IconButton(onClick = { showOAuthDialog = false }) {
-                            Icon(Icons.Default.Close, contentDescription = "Close WebView")
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(
+                                onClick = {
+                                    try {
+                                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(authUrl))
+                                        context.startActivity(intent)
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "Failed to open browser", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            ) {
+                                Icon(Icons.Default.OpenInBrowser, contentDescription = "Open in Chrome")
+                            }
+                            IconButton(onClick = { showOAuthDialog = false }) {
+                                Icon(Icons.Default.Close, contentDescription = "Close WebView")
+                            }
+                        }
+                    }
+
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "Blocked by WebView? Try External Browser",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextButton(
+                                onClick = { showManualPasteDialog = true },
+                                modifier = Modifier.padding(start = 4.dp)
+                            ) {
+                                Text("Paste Link", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
 
@@ -4427,13 +4562,6 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                                     }
                                 }
 
-                                val finalClientId = customClientIdInput.ifBlank { syncManager.getClientId() }
-                                val finalRedirectUri = customRedirectUriInput.ifBlank { syncManager.getRedirectUri() }
-                                val authUrl = "https://accounts.google.com/o/oauth2/v2/auth?" +
-                                        "client_id=$finalClientId&" +
-                                        "redirect_uri=$finalRedirectUri&" +
-                                        "response_type=token&" +
-                                        "scope=https://www.googleapis.com/auth/drive.appdata%20email%20profile"
                                 loadUrl(authUrl)
                             }
                         },
@@ -4443,6 +4571,54 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                     )
                 }
             }
+        }
+
+        if (showManualPasteDialog) {
+            AlertDialog(
+                onDismissRequest = { showManualPasteDialog = false },
+                title = { Text("Paste Google Redirect Link") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            "If you completed Google sign-in in Chrome, copy the final redirect URL (or token) from Chrome address bar and paste it below:",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        OutlinedTextField(
+                            value = pastedUrlInput,
+                            onValueChange = { pastedUrlInput = it },
+                            label = { Text("Pasted Redirect URL / Token") },
+                            placeholder = { Text("https://...#access_token=ya29...") },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp)
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            val parsedToken = extractAccessToken(pastedUrlInput)
+                            val token = if (!parsedToken.isNullOrBlank()) parsedToken else if (pastedUrlInput.trim().startsWith("ya29.")) pastedUrlInput.trim() else null
+                            if (!token.isNullOrBlank()) {
+                                syncManager.saveAccessToken(token)
+                                authStateVersion++
+                                viewModel.triggerCloudSync()
+                                showManualPasteDialog = false
+                                showOAuthDialog = false
+                                Toast.makeText(context, "Google Authorization successful! Sync active.", Toast.LENGTH_LONG).show()
+                            } else {
+                                Toast.makeText(context, "Invalid redirect link or token format.", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    ) {
+                        Text("Connect")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showManualPasteDialog = false }) {
+                        Text("Cancel")
+                    }
+                }
+            )
         }
     }
 
@@ -6779,6 +6955,394 @@ fun ManageWorkspaceScreen(viewModel: LedgerViewModel) {
                 }
             }
         )
+    }
+}
+
+// --- SCREEN 10: USER PROFILE & ACCOUNT SETTINGS ---
+@Composable
+fun ProfileScreen(viewModel: LedgerViewModel) {
+    val context = LocalContext.current
+    val syncManager = viewModel.syncManager
+    
+    var profileAuthVersion by remember { mutableStateOf(0) }
+    val isUserSignedIn = remember(profileAuthVersion) { syncManager.isUserSignedIn() }
+    val userEmail = remember(profileAuthVersion) { syncManager.getEmail() }
+    val userName = remember(profileAuthVersion) { syncManager.getName() }
+    val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
+    val activeBusiness by viewModel.activeBusiness.collectAsStateWithLifecycle()
+    val simulatedRole by viewModel.simulatedRole.collectAsStateWithLifecycle()
+    
+    var showOAuthDialogInProfile by remember { mutableStateOf(false) }
+    var customClientIdInput by remember { mutableStateOf(syncManager.getClientId()) }
+    var customRedirectUriInput by remember { mutableStateOf(syncManager.getRedirectUri()) }
+    
+    var showLogoutConfirmDialog by remember { mutableStateOf(false) }
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // Top Header
+        item {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(64.dp)
+                        .clip(CircleShape)
+                        .background(if (isUserSignedIn) GreenIn else MaterialTheme.colorScheme.primary),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = if (userName.isNotBlank()) userName.take(1).uppercase()
+                               else if (userEmail.isNotBlank()) userEmail.take(1).uppercase()
+                               else "P",
+                        style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
+                        color = Color.White
+                    )
+                }
+                Column {
+                    Text(
+                        text = if (userName.isNotBlank()) userName else if (userEmail.isNotBlank()) userEmail.substringBefore("@") else "User Profile",
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                    Text(
+                        text = if (isUserSignedIn) userEmail else "Offline Mode (Local Account)",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        // Account Status & Primary Logout Action Card
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isUserSignedIn) GreenIn.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                ),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    if (isUserSignedIn) GreenIn.copy(alpha = 0.3f) else MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                ),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(
+                                imageVector = if (isUserSignedIn) Icons.Default.VerifiedUser else Icons.Default.CloudOff,
+                                contentDescription = null,
+                                tint = if (isUserSignedIn) GreenIn else MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "Account & Cloud Sync State",
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                        }
+
+                        Surface(
+                            color = if (isUserSignedIn) GreenIn else Color(0xFF64748B),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text(
+                                text = if (isUserSignedIn) "ONLINE" else "OFFLINE",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = Color.White,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
+                    if (isUserSignedIn) {
+                        Text(
+                            text = "Signed in as: $userEmail",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "Your cashbook entries and reports automatically sync to your private Google Drive app storage.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        Text(
+                            text = "Currently running in local offline mode.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "Connect a Google Account anytime to enable real-time cloud backup to Google Drive.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                    // Logout & Login Buttons (ALWAYS VISIBLE whether online or offline!)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        if (!isUserSignedIn) {
+                            Button(
+                                onClick = { showOAuthDialogInProfile = true },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Icon(Icons.Default.Login, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Sign in with Google", fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        // Logout button is ALWAYS available for both online and offline users!
+                        Button(
+                            onClick = { showLogoutConfirmDialog = true },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.Logout, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (isUserSignedIn) "Log Out" else "Reset Session",
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Section: Active Business & Security Profile
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Business & Role Profile", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Active Business:", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(activeBusiness?.name ?: "Default Cashbook", fontWeight = FontWeight.Bold)
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Simulated Role:", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Surface(
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Text(
+                                text = simulatedRole,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Active OAuth Client ID:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            text = syncManager.getClientId().take(22) + "...",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+            }
+        }
+
+        // Section: Quick Shortcuts
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Account Shortcuts & Settings", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+
+                    OutlinedButton(
+                        onClick = { viewModel.setScreen(Screen.SYNC_CENTER) },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.CloudSync, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Google Drive Sync Center")
+                    }
+
+                    OutlinedButton(
+                        onClick = { viewModel.setScreen(Screen.SETTINGS) },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.Settings, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("All App Settings & Manual Backups")
+                    }
+                }
+            }
+        }
+    }
+
+    // Logout Confirmation Dialog
+    if (showLogoutConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showLogoutConfirmDialog = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Default.Logout, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                    Text(if (isUserSignedIn) "Confirm Log Out" else "Confirm Session Reset")
+                }
+            },
+            text = {
+                Text(
+                    text = if (isUserSignedIn)
+                        "Are you sure you want to log out from $userEmail? This will clear your active Google authorization token on this device. Your offline cashbook database will remain safely on your phone."
+                    else
+                        "Are you sure you want to reset your local session state? Your offline database will not be deleted."
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        syncManager.clearAuth()
+                        profileAuthVersion++
+                        viewModel.triggerCloudSync()
+                        showLogoutConfirmDialog = false
+                        Toast.makeText(context, "Successfully logged out!", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Log Out Now", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLogoutConfirmDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Google Sign-In Dialog inside Profile
+    if (showOAuthDialogInProfile) {
+        val finalClientId = customClientIdInput.ifBlank { syncManager.getClientId() }
+        val finalRedirectUri = customRedirectUriInput.ifBlank { syncManager.getRedirectUri() }
+        val authUrl = "https://accounts.google.com/o/oauth2/v2/auth?" +
+                "client_id=$finalClientId&" +
+                "redirect_uri=$finalRedirectUri&" +
+                "response_type=token&" +
+                "scope=https://www.googleapis.com/auth/drive.appdata%20email%20profile%20openid&" +
+                "prompt=select_account"
+
+        Dialog(onDismissRequest = { showOAuthDialogInProfile = false }) {
+            Card(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(vertical = 24.dp, horizontal = 12.dp),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Sign In with Google", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                        IconButton(onClick = { showOAuthDialogInProfile = false }) {
+                            Icon(Icons.Default.Close, contentDescription = "Close WebView")
+                        }
+                    }
+
+                    AndroidView(
+                        factory = { ctx ->
+                            WebView(ctx).apply {
+                                settings.javaScriptEnabled = true
+                                settings.domStorageEnabled = true
+                                val defaultUa = android.webkit.WebSettings.getDefaultUserAgent(ctx)
+                                val sanitizedUa = if (defaultUa.isNullOrBlank()) {
+                                    "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+                                } else {
+                                    defaultUa.replace("; wv", "").replace("Version/4.0 ", "").replace("Version/4.0", "")
+                                }
+                                settings.userAgentString = sanitizedUa
+
+                                webViewClient = object : WebViewClient() {
+                                    override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+                                        return handleRedirect(url)
+                                    }
+
+                                    override fun shouldOverrideUrlLoading(view: WebView?, request: android.webkit.WebResourceRequest?): Boolean {
+                                        return handleRedirect(request?.url?.toString())
+                                    }
+
+                                    override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                                        super.onPageStarted(view, url, favicon)
+                                        handleRedirect(url)
+                                    }
+
+                                    private fun handleRedirect(url: String?): Boolean {
+                                        val currentRedirectUri = syncManager.getRedirectUri()
+                                        if (url != null && (url.startsWith(currentRedirectUri) || url.contains("access_token="))) {
+                                            val token = extractAccessToken(url)
+                                            if (token != null) {
+                                                syncManager.saveAccessToken(token)
+                                                profileAuthVersion++
+                                                viewModel.triggerCloudSync()
+                                                showOAuthDialogInProfile = false
+                                                Toast.makeText(context, "Google Authorization successful! Sync active.", Toast.LENGTH_LONG).show()
+                                                return true
+                                            }
+                                        }
+                                        return false
+                                    }
+                                }
+
+                                loadUrl(authUrl)
+                            }
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                    )
+                }
+            }
+        }
     }
 }
 

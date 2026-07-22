@@ -41,7 +41,8 @@ data class Transaction(
     val category: String,
     val paymentMethod: String, // "Cash", "Online", "Bank"
     val remarks: String,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    val isSynced: Boolean = false
 )
 
 @Entity(tableName = "parties")
@@ -70,7 +71,8 @@ data class PartyTransaction(
     val amount: Double,
     val type: String, // "GAVE" or "GOT"
     val remarks: String,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    val isSynced: Boolean = false
 )
 
 @Entity(tableName = "team_members")
@@ -132,6 +134,12 @@ interface LedgerDao {
 
     @Update
     suspend fun updateTransaction(transaction: Transaction)
+
+    @Query("UPDATE transactions SET isSynced = 1")
+    suspend fun markAllTransactionsSynced()
+
+    @Query("UPDATE party_transactions SET isSynced = 1")
+    suspend fun markAllPartyTransactionsSynced()
 
     // Parties
     @Query("SELECT * FROM parties ORDER BY name ASC")
@@ -260,6 +268,11 @@ class LedgerRepository(private val ledgerDao: LedgerDao) {
 
     suspend fun deleteTransaction(transaction: Transaction) {
         ledgerDao.deleteTransaction(transaction)
+    }
+
+    suspend fun markAllTransactionsSynced() {
+        ledgerDao.markAllTransactionsSynced()
+        ledgerDao.markAllPartyTransactionsSynced()
     }
 
     suspend fun insertParty(party: Party): Long {
