@@ -272,8 +272,23 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
                 val message = syncManager.syncWithCloud(localJson, database.ledgerDao())
                 _syncStatus.value = message
-                if (message.contains("backed up", ignoreCase = true) || message.contains("Synced", ignoreCase = true)) {
+                if (message.contains("backed up", ignoreCase = true) || message.contains("Synced", ignoreCase = true) || message.contains("Restored", ignoreCase = true)) {
                     repository.markAllTransactionsSynced()
+                }
+
+                // After sync, ensure active business & active book are selected from restored list if needed
+                val currentBizList = repository.allBusinesses.first()
+                if (currentBizList.isNotEmpty()) {
+                    if (_activeBusiness.value == null || _activeBusiness.value?.name == "My Business") {
+                        // Prefer non-default business if available
+                        val restoredBiz = currentBizList.find { it.name != "My Business" } ?: currentBizList.first()
+                        _activeBusiness.value = restoredBiz
+                    }
+                    val activeBizId = _activeBusiness.value?.id ?: 1
+                    val currentBooksList = repository.getBooksForBusiness(activeBizId).first()
+                    if (currentBooksList.isNotEmpty()) {
+                        _activeBook.value = currentBooksList.first()
+                    }
                 }
             } catch (e: Exception) {
                 _syncStatus.value = "Sync Interrupted: ${e.message}"

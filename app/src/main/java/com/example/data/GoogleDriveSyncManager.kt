@@ -387,22 +387,34 @@ class GoogleDriveSyncManager(private val context: Context) {
                 if (cloudBackupStr != null) {
                     try {
                         val cloudObj = JSONObject(cloudBackupStr!!)
-                        val cloudTime = cloudObj.optLong("timestamp", 0)
-                        val localTime = JSONObject(localBackupJson).optLong("timestamp", 0)
+                        
+                        val cloudBizArray = cloudObj.optJSONArray("businesses")
+                        val cloudBooksArray = cloudObj.optJSONArray("books")
+                        val cloudPartiesArray = cloudObj.optJSONArray("parties")
+                        val cloudTxArray = cloudObj.optJSONArray("transactions")
+                        val cloudPTxArray = cloudObj.optJSONArray("party_transactions")
+                        val cloudTeamArray = cloudObj.optJSONArray("team_members")
 
-                        if (cloudTime > localTime) {
-                            // Cloud backup is newer! Let's restore and merge locally
+                        val cloudHasData = (cloudBizArray != null && cloudBizArray.length() > 0) ||
+                                           (cloudBooksArray != null && cloudBooksArray.length() > 0) ||
+                                           (cloudPartiesArray != null && cloudPartiesArray.length() > 0) ||
+                                           (cloudTxArray != null && cloudTxArray.length() > 0) ||
+                                           (cloudPTxArray != null && cloudPTxArray.length() > 0) ||
+                                           (cloudTeamArray != null && cloudTeamArray.length() > 0)
+
+                        if (cloudHasData) {
+                            // Automatically restore all cloud businesses, books, transactions, parties & team members to local DB
                             restoreDatabase(cloudBackupStr!!, dao)
-                            return@withContext "Synced: Restored newer backup from Google Drive!"
+                            return@withContext "Synced: Restored existing cloud backup! All businesses & books loaded."
                         } else {
-                            // Local backup is newer or same! Overwrite/Update the Cloud file
+                            // Cloud backup file exists but is empty, update with local backup
                             uploadToDrive(token, localBackupJson, fileId!!)
-                            return@withContext "Synced: Local ledger backup updated to Google Drive!"
+                            return@withContext "Synced: Local ledger backed up to Google Drive."
                         }
                     } catch (e: Exception) {
                         // Fallback to update drive if reading fails
                         uploadToDrive(token, localBackupJson, fileId!!)
-                        return@withContext "Synced: Clean merge upload to Google Drive complete."
+                        return@withContext "Synced: Backup updated to Google Drive."
                     }
                 } else {
                     uploadToDrive(token, localBackupJson, fileId!!)

@@ -4174,7 +4174,9 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                                     "   https://gen-lang-client-0052637237.firebaseapp.com\n" +
                                     "2. Authorized redirect URIs (WITH path):\n" +
                                     "   https://gen-lang-client-0052637237.firebaseapp.com/__/auth/handler\n" +
-                                    "3. Test users: Ensure mailofrb@gmail.com is added under 'OAuth consent screen' -> 'Test users'.",
+                                    "3. Support email & Test users:\n" +
+                                    "   • Set User Support email to: rbmengal@live.com\n" +
+                                    "   • Add Test users under 'OAuth consent screen' -> 'Test users': rbmengal@live.com and rasoolbakhsh@luawms.edu.pk",
                                     style = MaterialTheme.typography.bodySmall
                                 )
                             }
