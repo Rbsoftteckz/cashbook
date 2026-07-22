@@ -31,11 +31,18 @@ class GoogleDriveSyncManager(private val context: Context) {
             if (oAuthClientId.isNotBlank()) {
                 detectedClientId = oAuthClientId
             }
-            // By default, we use https://localhost which is already pre-configured in the user's Google Console
-            // and is successfully intercepted locally by the Android WebViewClient.
-            detectedRedirectUri = "https://localhost"
+            val projectId = obj.optString("projectId", "")
+            if (projectId.isNotBlank()) {
+                // Every Google OAuth Client ID automatically created by Firebase has 
+                // https://<projectId>.firebaseapp.com/__/auth/handler pre-registered as an Authorized Redirect URI
+                // in the Google Developer Console. Using this guarantees zero redirect_uri_mismatch errors.
+                detectedRedirectUri = "https://$projectId.firebaseapp.com/__/auth/handler"
+            } else {
+                detectedRedirectUri = "https://localhost"
+            }
         } catch (e: Exception) {
             Log.e("GoogleDriveSyncManager", "Failed to load firebase-applet-config.json from assets", e)
+            detectedRedirectUri = "https://localhost"
         }
 
         // Clean up legacy custom values if they match old hardcoded defaults to allow automatic sync for all users
@@ -45,7 +52,7 @@ class GoogleDriveSyncManager(private val context: Context) {
             prefs.edit().remove("custom_client_id").apply()
         }
         val savedUri = prefs.getString("custom_redirect_uri", "")
-        if (savedUri == "https://localhost/oauth2redirect" || savedUri?.contains("firebaseapp.com") == true) {
+        if (savedUri == "https://localhost/oauth2redirect" || savedUri == "https://localhost" || savedUri?.contains("asia-east1.run.app") == true) {
             prefs.edit().remove("custom_redirect_uri").apply()
         }
     }
@@ -71,7 +78,7 @@ class GoogleDriveSyncManager(private val context: Context) {
 
     fun getRedirectUri(): String {
         val saved = prefs.getString("custom_redirect_uri", "")
-        return if (!saved.isNullOrBlank() && saved != "https://localhost/oauth2redirect") saved else detectedRedirectUri
+        return if (!saved.isNullOrBlank() && saved != "https://localhost/oauth2redirect" && saved != "https://localhost") saved else detectedRedirectUri
     }
 
     fun saveRedirectUri(uri: String) {
