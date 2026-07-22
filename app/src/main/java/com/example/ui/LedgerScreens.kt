@@ -163,6 +163,8 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
     var showAddBookDialog by remember { mutableStateOf(false) }
     var newBookName by remember { mutableStateOf("") }
 
+    var drawerAuthVersion by remember { mutableStateOf(0) }
+
     var showAddBusinessDialog by remember { mutableStateOf(false) }
     var newBusinessName by remember { mutableStateOf("") }
 
@@ -457,6 +459,27 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                             scope.launch { drawerState.close() }
                         }
                     )
+
+                    val isDrawerSignedIn = remember(drawerAuthVersion) { viewModel.syncManager.isUserSignedIn() }
+                    val drawerEmail = remember(drawerAuthVersion) { viewModel.syncManager.getEmail() }
+
+                    if (isDrawerSignedIn) {
+                        NavigationDrawerItem(
+                            icon = { Icon(Icons.Default.Logout, contentDescription = "Log Out", tint = MaterialTheme.colorScheme.error) },
+                            label = { Text("Log Out (${drawerEmail.take(15)}${if (drawerEmail.length > 15) "..." else ""})", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold) },
+                            selected = false,
+                            colors = NavigationDrawerItemDefaults.colors(
+                                unselectedContainerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.12f)
+                            ),
+                            onClick = {
+                                viewModel.syncManager.clearAuth()
+                                drawerAuthVersion++
+                                viewModel.triggerCloudSync()
+                                Toast.makeText(context, "Logged out from Google Account.", Toast.LENGTH_SHORT).show()
+                                scope.launch { drawerState.close() }
+                            }
+                        )
+                    }
 
                     Spacer(modifier = Modifier.height(12.dp))
                     Divider(color = Color(0xFFE2E8F0))
@@ -3923,10 +3946,11 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
     var rawJsonText by remember { mutableStateOf("") }
     var showBackupRestoreDialog by remember { mutableStateOf(false) }
     var isAdvancedOpen by remember { mutableStateOf(false) }
+    var authStateVersion by remember { mutableStateOf(0) }
 
-    val isUserSignedIn = syncManager.isUserSignedIn()
-    val email = syncManager.getEmail()
-    val displayName = syncManager.getName()
+    val isUserSignedIn = remember(authStateVersion) { syncManager.isUserSignedIn() }
+    val email = remember(authStateVersion) { syncManager.getEmail() }
+    val displayName = remember(authStateVersion) { syncManager.getName() }
 
     LazyColumn(
         modifier = Modifier
@@ -4015,6 +4039,61 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                             Spacer(modifier = Modifier.width(8.dp))
                             Text("Sign in with Google")
                         }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.15f),
+                                contentColor = MaterialTheme.colorScheme.onErrorContainer
+                            ),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f)),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Icon(
+                                        imageVector = Icons.Default.Warning,
+                                        contentDescription = "OAuth Testing Mode Info",
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Text(
+                                        "Getting 'Access blocked' (Error 403)?",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                Text(
+                                    "Google blocks sign-in with 'Error 403: access_denied' for sensitive scopes like Google Drive when the user email is not in your Test Users list.",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                Text(
+                                    "How to allow other users / emails to sign in:",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    "1. Open Google Cloud Console (https://console.cloud.google.com/apis/credentials/consent).\n" +
+                                    "2. Ensure Publishing Status is 'Testing'.\n" +
+                                    "3. Scroll down to 'Test Users' -> click '+ ADD USERS'.\n" +
+                                    "4. Add any email (up to 100 emails) you want to allow.\n" +
+                                    "   -> Added users can sign in immediately with zero errors!",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                Text(
+                                    "Note on 'Advanced' bypass & Google Verification:",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    "• Why 'Advanced' bypass is missing: Google removed the bypass option for restricted/sensitive APIs like Google Drive to prevent unauthorized access.\n" +
+                                    "• Why preview URL failed verification: 'ais-pre-...' is a private preview URL requiring workspace login, so Google's public verification bot cannot crawl it. For public release, use a free public landing page (e.g. GitHub Pages or Netlify) for your privacy policy.\n" +
+                                    "• Offline Backup alternative: Users can also use 'Manual JSON Backup & Restore' below to backup/restore data locally without needing Google sign-in!",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
                     } else {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -4039,6 +4118,7 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                                 onClick = {
                                     if (hasPermission(simulatedRole, "clear_sync")) {
                                         syncManager.clearAuth()
+                                        authStateVersion++
                                         viewModel.triggerCloudSync()
                                         Toast.makeText(context, "Logged out from Google Account.", Toast.LENGTH_SHORT).show()
                                     } else {
@@ -4336,6 +4416,7 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                                             val token = extractAccessToken(url)
                                             if (token != null) {
                                                 syncManager.saveAccessToken(token)
+                                                authStateVersion++
                                                 viewModel.triggerCloudSync()
                                                 showOAuthDialog = false
                                                 Toast.makeText(context, "Google Authorization successful! Sync active.", Toast.LENGTH_LONG).show()
@@ -5827,7 +5908,9 @@ fun generatePdfReport(context: Context, activeBook: Book?, transactions: List<Tr
 fun SettingsScreen(viewModel: LedgerViewModel) {
     val simulatedRole by viewModel.simulatedRole.collectAsStateWithLifecycle()
     val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
-    val isUserSignedIn = viewModel.syncManager.isUserSignedIn()
+    var settingsAuthVersion by remember { mutableStateOf(0) }
+    val isUserSignedIn = remember(settingsAuthVersion) { viewModel.syncManager.isUserSignedIn() }
+    val userEmail = remember(settingsAuthVersion) { viewModel.syncManager.getEmail() }
     val context = LocalContext.current
     var showAddBusinessDialog by remember { mutableStateOf(false) }
     var newBusinessName by remember { mutableStateOf("") }
@@ -5913,14 +5996,58 @@ fun SettingsScreen(viewModel: LedgerViewModel) {
                         }
                     }
 
-                    Button(
-                        onClick = { viewModel.setScreen(Screen.SYNC_CENTER) },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Icon(Icons.Default.CloudSync, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Open Drive Sync Center")
+                    if (isUserSignedIn) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Account:", style = MaterialTheme.typography.bodySmall)
+                            Text(userEmail, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = { viewModel.setScreen(Screen.SYNC_CENTER) },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Icon(Icons.Default.CloudSync, contentDescription = null)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Sync Center")
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    if (hasPermission(simulatedRole, "clear_sync")) {
+                                        viewModel.syncManager.clearAuth()
+                                        settingsAuthVersion++
+                                        viewModel.triggerCloudSync()
+                                        Toast.makeText(context, "Logged out from Google Account.", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        Toast.makeText(context, "Unauthorized: Data Entry or read-only Partners cannot wipe cloud credentials.", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                            ) {
+                                Icon(Icons.Default.Logout, contentDescription = null)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Log Out")
+                            }
+                        }
+                    } else {
+                        Button(
+                            onClick = { viewModel.setScreen(Screen.SYNC_CENTER) },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.CloudSync, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Open Drive Sync Center")
+                        }
                     }
                 }
             }
