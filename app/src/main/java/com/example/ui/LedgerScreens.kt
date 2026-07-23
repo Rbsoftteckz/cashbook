@@ -4496,48 +4496,50 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                             Text("Sign in with Google")
                         }
 
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.15f),
-                                contentColor = MaterialTheme.colorScheme.onErrorContainer
-                            ),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f)),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Icon(
-                                        imageVector = Icons.Default.Warning,
-                                        contentDescription = "OAuth Testing Mode Info",
-                                        tint = MaterialTheme.colorScheme.error,
-                                        modifier = Modifier.size(20.dp)
+                        if (syncStatus.contains("Error", ignoreCase = true) || syncStatus.contains("403")) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.15f),
+                                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                                ),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f)),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Icon(
+                                            imageVector = Icons.Default.Warning,
+                                            contentDescription = "OAuth Testing Mode Info",
+                                            tint = MaterialTheme.colorScheme.error,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                        Text(
+                                            "Getting 'Access blocked' (Error 403)?",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                    Text(
+                                        "Google Client ID Configured:",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
                                     )
                                     Text(
-                                        "Getting 'Access blocked' (Error 403)?",
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Bold
+                                        "Active Client ID: 755700558600-jl4pipc2klikiac22ivk8s3qvn0pjtc7.apps.googleusercontent.com\n\n" +
+                                        "Google Cloud Console checklist for this Client ID:\n" +
+                                        "1. Authorized JavaScript origins (Origin ONLY, no path):\n" +
+                                        "   https://gen-lang-client-0052637237.firebaseapp.com\n" +
+                                        "2. Authorized redirect URIs (WITH path):\n" +
+                                        "   https://gen-lang-client-0052637237.firebaseapp.com/__/auth/handler\n" +
+                                        "3. Support email & Test users:\n" +
+                                        "   • Set User Support email to: rbmengal@live.com\n" +
+                                        "   • Add Test users under 'OAuth consent screen' -> 'Test users': rbmengal@live.com and rasoolbakhsh@luawms.edu.pk",
+                                        style = MaterialTheme.typography.bodySmall
                                     )
                                 }
-                                Text(
-                                    "Google Client ID Configured:",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                Text(
-                                    "Active Client ID: 755700558600-jl4pipc2klikiac22ivk8s3qvn0pjtc7.apps.googleusercontent.com\n\n" +
-                                    "Google Cloud Console checklist for this Client ID:\n" +
-                                    "1. Authorized JavaScript origins (Origin ONLY, no path):\n" +
-                                    "   https://gen-lang-client-0052637237.firebaseapp.com\n" +
-                                    "2. Authorized redirect URIs (WITH path):\n" +
-                                    "   https://gen-lang-client-0052637237.firebaseapp.com/__/auth/handler\n" +
-                                    "3. Support email & Test users:\n" +
-                                    "   • Set User Support email to: rbmengal@live.com\n" +
-                                    "   • Add Test users under 'OAuth consent screen' -> 'Test users': rbmengal@live.com and rasoolbakhsh@luawms.edu.pk",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
                             }
                         }
                     } else {
@@ -6161,7 +6163,7 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                             value = userEmail,
                             onValueChange = { userEmail = it },
                             label = { Text("Email Address") },
-                            placeholder = { Text("e.g. rasool@example.com") },
+                            placeholder = { Text("e.g. rasoolbakhsh@gmail.com") },
                             leadingIcon = { Icon(Icons.Default.Email, contentDescription = null, tint = GreenIn) },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),

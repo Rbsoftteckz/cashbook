@@ -23,22 +23,19 @@ jobs:
           cache: 'gradle'
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@v4
 
-      - name: Generate Dummy Debug Keystore
+      - name: Ensure Consistent Signing Keystore
         run: |
-          keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          if [ ! -f debug.keystore ]; then
+            keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=CashBook,O=CashBook,C=US"
+          fi
 
-      - name: Optimize Gradle Properties for CI
-        run: |
-          # Remove in-process compilation strategy to prevent KSP NullPointerException in headless runners
-          sed -i '/kotlin.compiler.execution.strategy/d' gradle.properties
-
-      - name: Build Debug APK
-        run: gradle assembleDebug
+      - name: Build Debug & Release APK
+        run: gradle assembleDebug assembleRelease
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: CashBook-Debug-APK
+          name: CashBook-APK
           path: app/build/outputs/apk/debug/app-debug.apk
