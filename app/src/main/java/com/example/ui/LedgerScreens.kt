@@ -3958,8 +3958,10 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
         }
 
         // Super Admin / Boss: APK Download Link Settings Card
+        var showApkGuideDialog by remember { mutableStateOf(false) }
+
         Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f)),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.35f)),
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -3974,12 +3976,12 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                         Icon(Icons.Default.Download, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                         Column {
                             Text(
-                                "APK Download Link for Partners & Admins",
+                                "Universal APK Download Link for All Users",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                "GitHub / Build Artifact address sent in team invitations",
+                                "Share standalone install link with any person or device",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -3998,47 +4000,99 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                             configuredApkUrl = newVal
                             syncManager.saveApkDownloadUrl(newVal)
                         },
-                        label = { Text("Downloadable APK Address / GitHub Artifact URL") },
-                        placeholder = { Text("https://github.com/.../artifacts/...") },
+                        label = { Text("Public APK Download Link") },
+                        placeholder = { Text("https://...") },
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(8.dp),
                         textStyle = TextStyle(fontSize = 11.sp, fontFamily = FontFamily.Monospace),
                         trailingIcon = {
                             IconButton(onClick = {
                                 clipboardManager.setText(AnnotatedString(configuredApkUrl))
-                                Toast.makeText(context, "Copied APK link to clipboard!", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Copied public APK link!", Toast.LENGTH_SHORT).show()
                             }) {
-                                Icon(Icons.Default.ContentCopy, contentDescription = "Copy")
+                                Icon(Icons.Default.ContentCopy, contentDescription = "Copy Link")
                             }
                         }
                     )
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        TextButton(
-                            onClick = {
-                                val defaultUrl = "https://github.com/fizaumrani316-cloud/cashbook/actions/runs/29947992454/artifacts/8541031105"
-                                configuredApkUrl = defaultUrl
-                                syncManager.saveApkDownloadUrl(defaultUrl)
-                                Toast.makeText(context, "Reset to GitHub default link", Toast.LENGTH_SHORT).show()
-                            }
-                        ) {
-                            Text("Reset Link", fontSize = 12.sp)
-                        }
                         Button(
                             onClick = {
-                                syncManager.saveApkDownloadUrl(configuredApkUrl)
-                                Toast.makeText(context, "Saved downloadable address!", Toast.LENGTH_SHORT).show()
+                                try {
+                                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                        type = "text/plain"
+                                        putExtra(Intent.EXTRA_SUBJECT, "Download CashBook Ledger App APK")
+                                        putExtra(
+                                            Intent.EXTRA_TEXT,
+                                            "📲 Download & Install CashBook Ledger App for All Android Devices:\n\n" +
+                                            "1️⃣ Public App Preview & Web App:\nhttps://ais-pre-da4saffzzctvdmze42ct3v-707128247986.asia-east1.run.app\n\n" +
+                                            "2️⃣ Direct APK Download Link:\n$configuredApkUrl\n\n" +
+                                            "Compatible with all Android phones and devices!"
+                                        )
+                                    }
+                                    context.startActivity(Intent.createChooser(shareIntent, "Share APK Download Link"))
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Sharing link...", Toast.LENGTH_SHORT).show()
+                                }
                             },
-                            shape = RoundedCornerShape(6.dp)
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(8.dp)
                         ) {
-                            Text("Save Link", fontSize = 12.sp)
+                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Share Link to All", fontSize = 11.sp)
+                        }
+
+                        OutlinedButton(
+                            onClick = { showApkGuideDialog = true },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("APK Export Guide", fontSize = 11.sp)
                         }
                     }
                 }
             }
+        }
+
+        if (showApkGuideDialog) {
+            AlertDialog(
+                onDismissRequest = { showApkGuideDialog = false },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("📦", fontSize = 22.sp)
+                        Text("How to Download APK for Everyone")
+                    }
+                },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            "To get the official standalone APK file for all Android phones:",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            "1. Look at the top right header/menu in Google AI Studio.\n" +
+                            "2. Click on Settings / Export menu (or Project menu).\n" +
+                            "3. Select 'Generate APK / AAB'.\n" +
+                            "4. Once generated, download the `.apk` file or copy its download URL.\n" +
+                            "5. Share that URL or `.apk` file with ANY user or device. Anyone can install it without restrictions!",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(onClick = { showApkGuideDialog = false }) {
+                        Text("Got it")
+                    }
+                }
+            )
         }
 
         // Team members lazy column
