@@ -42,6 +42,8 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -156,10 +158,12 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
     val activeBusiness by viewModel.activeBusiness.collectAsStateWithLifecycle()
     val simulatedRole by viewModel.simulatedRole.collectAsStateWithLifecycle()
     val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
+    val isSuperAdmin by viewModel.isSuperAdmin.collectAsStateWithLifecycle()
 
     val isAppLockEnabled by viewModel.isAppLockEnabled.collectAsStateWithLifecycle()
     val isAppUnlocked by viewModel.isAppUnlocked.collectAsStateWithLifecycle()
     var showSecuritySettingsDialog by remember { mutableStateOf(false) }
+    var showSuperAdminLoginDrawer by remember { mutableStateOf(false) }
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -180,7 +184,7 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
 
     if (isAppLockEnabled && !isAppUnlocked) {
         AppSecureLockScreen(viewModel = viewModel, onUnlockSuccess = {})
-    } else if (businesses.isEmpty()) {
+    } else if (businesses.isEmpty() || !isSuperAdmin) {
         OnboardingSetupScreen(viewModel = viewModel)
     } else {
         ModalNavigationDrawer(
@@ -243,8 +247,34 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                                 color = Color(0xFF475569), // Slate-600
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier.weight(1f)
                             )
+                        }
+
+                        if (isSuperAdmin) {
+                            TextButton(
+                                onClick = {
+                                    viewModel.logoutSuperAdmin()
+                                    Toast.makeText(context, "Signed out successfully", Toast.LENGTH_SHORT).show()
+                                },
+                                contentPadding = PaddingValues(0.dp)
+                            ) {
+                                Icon(Icons.Default.Logout, contentDescription = null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.error)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Sign Out", fontSize = 11.sp, color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                            }
+                        } else {
+                            TextButton(
+                                onClick = {
+                                    scope.launch { drawerState.close() }
+                                    showSuperAdminLoginDrawer = true
+                                },
+                                contentPadding = PaddingValues(0.dp)
+                            ) {
+                                Icon(Icons.Default.VpnKey, contentDescription = null, modifier = Modifier.size(14.dp), tint = GreenIn)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Sign In", fontSize = 11.sp, color = GreenIn, fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
                 }
@@ -259,27 +289,6 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // Simulated permission active role selector inside drawer
-                    Text(
-                        "Demo Security Role:",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        listOf("Boss", "Partner", "Data Entry").forEach { role ->
-                            FilterChip(
-                                selected = simulatedRole == role,
-                                onClick = { viewModel.setSimulatedRole(role) },
-                                label = { Text(role, fontSize = 10.sp) }
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         "Core Ledgers",
                         style = MaterialTheme.typography.bodySmall,
@@ -505,7 +514,7 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                             unselectedContainerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.12f)
                         ),
                         onClick = {
-                            viewModel.syncManager.clearAuth()
+                            viewModel.logoutSuperAdmin()
                             drawerAuthVersion++
                             viewModel.triggerCloudSync()
                             Toast.makeText(context, "Logged out / Session reset successfully.", Toast.LENGTH_SHORT).show()
@@ -3843,12 +3852,12 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
         val isSuperAdmin by viewModel.isSuperAdmin.collectAsStateWithLifecycle()
         var showSuperAdminLoginDialog by remember { mutableStateOf(false) }
 
-        // Super Admin Owner Auth Card
+        // Active Logged-in User Profile Card
         Card(
             colors = CardDefaults.cardColors(
-                containerColor = if (isSuperAdmin) Color(0xFFFEF3C7) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
             ),
-            border = BorderStroke(1.dp, if (isSuperAdmin) Color(0xFFF59E0B) else MaterialTheme.colorScheme.outlineVariant),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
             modifier = Modifier.fillMaxWidth()
         ) {
             Row(
@@ -3862,64 +3871,38 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                     Box(
                         modifier = Modifier
                             .size(36.dp)
-                            .background(if (isSuperAdmin) Color(0xFFF59E0B) else MaterialTheme.colorScheme.primary, CircleShape),
+                            .background(GreenIn, CircleShape),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(if (isSuperAdmin) "👑" else "🔒", fontSize = 18.sp)
+                        Text("👤", fontSize = 18.sp)
                     }
                     Column {
                         Text(
-                            text = if (isSuperAdmin) "Super Admin Active" else "Super Admin Access",
+                            text = syncManager.getName().ifBlank { "Account Owner" },
                             fontWeight = FontWeight.Bold,
                             style = MaterialTheme.typography.bodyMedium,
-                            color = if (isSuperAdmin) Color(0xFF92400E) else MaterialTheme.colorScheme.onSurface
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = if (isSuperAdmin) "superadmin@cashbook.com (Static)" else "Owner level static private login",
+                            text = syncManager.getEmail().ifBlank { "Local Business Account" },
                             style = MaterialTheme.typography.bodySmall,
-                            color = if (isSuperAdmin) Color(0xFFB45309) else MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
 
-                if (isSuperAdmin) {
-                    OutlinedButton(
-                        onClick = {
-                            viewModel.logoutSuperAdmin()
-                            Toast.makeText(context, "Logged out from Super Admin", Toast.LENGTH_SHORT).show()
-                        },
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                        modifier = Modifier.height(32.dp)
-                    ) {
-                        Text("Exit Super Admin", fontSize = 11.sp, color = MaterialTheme.colorScheme.error)
-                    }
-                } else {
-                    Button(
-                        onClick = { showSuperAdminLoginDialog = true },
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                        modifier = Modifier.height(32.dp)
-                    ) {
-                        Text("Super Admin Login", fontSize = 11.sp)
-                    }
+                OutlinedButton(
+                    onClick = {
+                        viewModel.logoutSuperAdmin()
+                        Toast.makeText(context, "Logged out successfully", Toast.LENGTH_SHORT).show()
+                    },
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    modifier = Modifier.height(32.dp)
+                ) {
+                    Text("Sign Out", fontSize = 11.sp, color = MaterialTheme.colorScheme.error)
                 }
             }
-        }
-
-        if (showSuperAdminLoginDialog) {
-            SuperAdminLoginDialog(
-                onDismiss = { showSuperAdminLoginDialog = false },
-                onLogin = { username, password ->
-                    val ok = viewModel.loginSuperAdmin(username, password)
-                    if (ok) {
-                        Toast.makeText(context, "👑 Welcome Super Admin! Full Access Granted.", Toast.LENGTH_SHORT).show()
-                        showSuperAdminLoginDialog = false
-                    } else {
-                        Toast.makeText(context, "❌ Invalid Super Admin credentials!", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            )
         }
 
         // Active testing chip
@@ -4077,11 +4060,10 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            "1. Look at the top right header/menu in Google AI Studio.\n" +
-                            "2. Click on Settings / Export menu (or Project menu).\n" +
-                            "3. Select 'Generate APK / AAB'.\n" +
-                            "4. Once generated, download the `.apk` file or copy its download URL.\n" +
-                            "5. Share that URL or `.apk` file with ANY user or device. Anyone can install it without restrictions!",
+                            "1. Look at the top right panel shown in your screenshot (with Chat, Share, Publish, GitHub).\n" +
+                            "2. Click the 'GitHub' button to connect & push your project to a GitHub repository.\n" +
+                            "3. From your GitHub repo, you can build/download the standalone APK or release it to everyone.\n" +
+                            "4. You can also click 'Share' or 'Publish' at the top to grant instant access to your app!",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -5971,17 +5953,30 @@ fun AppLockSettingsDialog(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
-    var step by remember { mutableStateOf(1) }
-    var businessName by remember { mutableStateOf("") }
-    var bookName by remember { mutableStateOf("") }
     val context = LocalContext.current
     val syncManager = viewModel.syncManager
+    val hasRegisteredAccount = syncManager.hasRegisteredAccount()
 
-    val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
-    val isSyncing by viewModel.isSyncing.collectAsStateWithLifecycle()
-    val isUserSignedIn = syncManager.isUserSignedIn()
+    // Mode: "login" if user account already exists, "signup" if 1st time launch
+    var authMode by remember { mutableStateOf(if (hasRegisteredAccount) "login" else "signup") }
+
+    // Sign Up Fields
+    var fullName by remember { mutableStateOf("") }
+    var userEmail by remember { mutableStateOf("") }
+    var username by remember { mutableStateOf("") }
+    var userPassword by remember { mutableStateOf("") }
+    var passwordVisibleInSignUp by remember { mutableStateOf(false) }
+    var businessName by remember { mutableStateOf("") }
+    var bookName by remember { mutableStateOf("") }
+
+    // Sign In Fields
+    var loginUser by remember { mutableStateOf(syncManager.getName().ifBlank { "" }) }
+    var loginPass by remember { mutableStateOf("") }
+    var loginPassVisible by remember { mutableStateOf(false) }
 
     var showOAuthDialogInWelcome by remember { mutableStateOf(false) }
+
+    val isUserSignedIn = syncManager.isUserSignedIn()
 
     Box(
         modifier = Modifier
@@ -5994,38 +5989,38 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                 .fillMaxWidth()
                 .padding(24.dp)
                 .verticalScroll(rememberScrollState())
-                .widthIn(max = 450.dp),
+                .widthIn(max = 480.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(24.dp)
+            verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
-            // Logo Image
+            // App Logo Header
             Image(
                 painter = painterResource(id = com.example.R.drawable.ic_cashbook_logo),
                 contentDescription = "CashBook Logo",
                 modifier = Modifier
-                    .size(110.dp)
-                    .clip(RoundedCornerShape(24.dp))
-                    .border(1.dp, Color(0xFFE2E8F0), RoundedCornerShape(24.dp))
+                    .size(90.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .border(1.dp, Color(0xFFE2E8F0), RoundedCornerShape(20.dp))
             )
 
-            if (step == 1) {
-                // Step 1: Welcome Screen & Auth Flow
+            if (authMode == "login") {
+                // --- SIGN IN MODE ---
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Text(
-                        text = "Welcome to CashBook",
+                        text = "Sign In to CashBook",
                         style = MaterialTheme.typography.headlineMedium.copy(
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFF0F172A) // Slate 900
+                            color = Color(0xFF0F172A)
                         ),
                         textAlign = TextAlign.Center
                     )
                     Text(
-                        text = "Set up your cloud backup or continue completely offline.",
+                        text = "Welcome back! Enter your credentials to access your ledger.",
                         style = MaterialTheme.typography.bodyMedium.copy(
-                            color = Color(0xFF64748B) // Slate 500
+                            color = Color(0xFF64748B)
                         ),
                         textAlign = TextAlign.Center
                     )
@@ -6039,96 +6034,100 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                 ) {
                     Column(
                         modifier = Modifier.padding(20.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        Text(
-                            text = "Connect with Google",
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFF1E293B)
-                            )
+                        OutlinedTextField(
+                            value = loginUser,
+                            onValueChange = { loginUser = it },
+                            label = { Text("Username or Email") },
+                            placeholder = { Text("Enter your username") },
+                            leadingIcon = { Icon(Icons.Default.Person, contentDescription = null, tint = GreenIn) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().testTag("login_username_input"),
+                            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = GreenIn, focusedLabelColor = GreenIn)
                         )
 
-                        Text(
-                            text = "Sign in to keep your ledger synced automatically with your Google Drive. Otherwise, stay offline.",
-                            style = MaterialTheme.typography.bodySmall.copy(color = Color(0xFF64748B)),
-                            textAlign = TextAlign.Center
+                        OutlinedTextField(
+                            value = loginPass,
+                            onValueChange = { loginPass = it },
+                            label = { Text("Password") },
+                            placeholder = { Text("Enter your password") },
+                            leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null, tint = GreenIn) },
+                            trailingIcon = {
+                                IconButton(onClick = { loginPassVisible = !loginPassVisible }) {
+                                    Icon(
+                                        if (loginPassVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                        contentDescription = "Toggle password"
+                                    )
+                                }
+                            },
+                            visualTransformation = if (loginPassVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().testTag("login_password_input"),
+                            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = GreenIn, focusedLabelColor = GreenIn)
                         )
 
-                        if (!isUserSignedIn) {
-                            Button(
-                                onClick = { showOAuthDialogInWelcome = true },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(48.dp)
-                                    .testTag("google_login_welcome_button"),
-                                colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
-                                shape = RoundedCornerShape(10.dp)
-                            ) {
-                                Icon(Icons.Default.Login, contentDescription = null, tint = Color.White)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Sign In with Google", color = Color.White)
-                            }
-                        } else {
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(containerColor = Color(0xFFF1F5F9))
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = GreenIn)
-                                    Column {
-                                        Text("Connected Account", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
-                                        Text(syncManager.getEmail(), style = MaterialTheme.typography.bodySmall, color = Color(0xFF64748B))
+                        Button(
+                            onClick = {
+                                val u = loginUser.trim()
+                                val p = loginPass.trim()
+                                if (u.isEmpty() || p.isEmpty()) {
+                                    Toast.makeText(context, "Please enter Username and Password.", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    val success = viewModel.loginSuperAdmin(u, p)
+                                    if (success) {
+                                        Toast.makeText(context, "Logged in successfully!", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        Toast.makeText(context, "Invalid Username or Password!", Toast.LENGTH_LONG).show()
                                     }
                                 }
-                            }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(50.dp)
+                                .testTag("login_submit_button"),
+                            colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.Login, contentDescription = null, tint = Color.White)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Sign In", color = Color.White, fontWeight = FontWeight.Bold)
                         }
 
                         Divider(color = Color(0xFFE2E8F0))
 
-                        OutlinedButton(
-                            onClick = { step = 2 },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(48.dp)
-                                .testTag("continue_welcome_button"),
-                            shape = RoundedCornerShape(10.dp)
+                        TextButton(
+                            onClick = { authMode = "signup" },
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(
-                                text = if (isUserSignedIn) "Continue to Setup" else "Continue Offline",
-                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
-                            )
+                            Text("Don't have an account? Create Account", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
             } else {
-                // Step 2: Set up Business Profile
+                // --- SIGN UP MODE ---
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Text(
-                        text = "New Business Setup",
+                        text = "Create Account & Business",
                         style = MaterialTheme.typography.headlineMedium.copy(
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFF0F172A) // Slate 900
+                            color = Color(0xFF0F172A)
                         ),
                         textAlign = TextAlign.Center
                     )
                     Text(
-                        text = "Give your first business and books a name to initiate your ledger.",
+                        text = "Fill in your account details and business name to initialize CashBook.",
                         style = MaterialTheme.typography.bodyMedium.copy(
-                            color = Color(0xFF64748B) // Slate 500
+                            color = Color(0xFF64748B)
                         ),
                         textAlign = TextAlign.Center
                     )
                 }
 
+                // Card 1: User Account Details
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = Color.White),
@@ -6136,13 +6135,87 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Column(
-                        modifier = Modifier.padding(20.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Text(
-                            text = "Business Profile",
+                            text = "👤 User Profile & Login Credentials",
                             style = MaterialTheme.typography.titleMedium.copy(
-                                fontWeight = FontWeight.SemiBold,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF1E293B)
+                            )
+                        )
+
+                        OutlinedTextField(
+                            value = fullName,
+                            onValueChange = { fullName = it },
+                            label = { Text("Full Name") },
+                            placeholder = { Text("e.g. Fiza Umrani") },
+                            leadingIcon = { Icon(Icons.Default.Person, contentDescription = null, tint = GreenIn) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = GreenIn, focusedLabelColor = GreenIn)
+                        )
+
+                        OutlinedTextField(
+                            value = userEmail,
+                            onValueChange = { userEmail = it },
+                            label = { Text("Email Address") },
+                            placeholder = { Text("e.g. fiza@example.com") },
+                            leadingIcon = { Icon(Icons.Default.Email, contentDescription = null, tint = GreenIn) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = GreenIn, focusedLabelColor = GreenIn)
+                        )
+
+                        OutlinedTextField(
+                            value = username,
+                            onValueChange = { username = it },
+                            label = { Text("Username *") },
+                            placeholder = { Text("e.g. fiza316") },
+                            leadingIcon = { Icon(Icons.Default.AccountCircle, contentDescription = null, tint = GreenIn) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = GreenIn, focusedLabelColor = GreenIn)
+                        )
+
+                        OutlinedTextField(
+                            value = userPassword,
+                            onValueChange = { userPassword = it },
+                            label = { Text("Password *") },
+                            placeholder = { Text("Enter a secure password") },
+                            leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null, tint = GreenIn) },
+                            trailingIcon = {
+                                IconButton(onClick = { passwordVisibleInSignUp = !passwordVisibleInSignUp }) {
+                                    Icon(
+                                        if (passwordVisibleInSignUp) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                        contentDescription = "Toggle password"
+                                    )
+                                }
+                            },
+                            visualTransformation = if (passwordVisibleInSignUp) VisualTransformation.None else PasswordVisualTransformation(),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = GreenIn, focusedLabelColor = GreenIn)
+                        )
+                    }
+                }
+
+                // Card 2: Business & Book Setup
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = "🏢 Business & Books Setup",
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.Bold,
                                 color = Color(0xFF1E293B)
                             )
                         )
@@ -6150,75 +6223,99 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                         OutlinedTextField(
                             value = businessName,
                             onValueChange = { businessName = it },
-                            label = { Text("Business / Shop Name") },
+                            label = { Text("Business / Shop Name *") },
                             placeholder = { Text("e.g. Fiza Enterprises") },
                             leadingIcon = { Icon(Icons.Default.Business, contentDescription = null, tint = GreenIn) },
                             singleLine = true,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("onboarding_business_input"),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = GreenIn,
-                                focusedLabelColor = GreenIn
-                            )
+                            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = GreenIn, focusedLabelColor = GreenIn)
                         )
 
                         OutlinedTextField(
                             value = bookName,
                             onValueChange = { bookName = it },
-                            label = { Text("Books Name") },
+                            label = { Text("Books Name *") },
                             placeholder = { Text("e.g. Daily Cashbook") },
                             leadingIcon = { Icon(Icons.Default.Book, contentDescription = null, tint = GreenIn) },
                             singleLine = true,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("onboarding_book_input"),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = GreenIn,
-                                focusedLabelColor = GreenIn
-                            )
+                            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = GreenIn, focusedLabelColor = GreenIn)
                         )
                     }
                 }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = { step = 1 },
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(50.dp),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text("Back")
-                    }
+                Button(
+                    onClick = {
+                        val biz = businessName.trim()
+                        val bk = bookName.trim()
+                        val un = username.trim()
+                        val pw = userPassword.trim()
 
-                    Button(
-                        onClick = {
-                            val biz = businessName.trim()
-                            val bk = bookName.trim()
-                            if (biz.isNotEmpty() && bk.isNotEmpty()) {
-                                viewModel.createBusinessAndBook(biz, bk)
-                            } else {
-                                Toast.makeText(context, "Please enter both Business Name and Books Name.", Toast.LENGTH_SHORT).show()
-                            }
-                        },
-                        modifier = Modifier
-                            .weight(2f)
-                            .height(50.dp)
-                            .testTag("onboarding_start_button"),
-                        colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text(
-                            text = "Start CashBook",
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
+                        if (un.isEmpty() || pw.isEmpty()) {
+                            Toast.makeText(context, "Please enter a Username and Password.", Toast.LENGTH_SHORT).show()
+                        } else if (biz.isEmpty() || bk.isEmpty()) {
+                            Toast.makeText(context, "Please enter Business Name and Books Name.", Toast.LENGTH_SHORT).show()
+                        } else {
+                            viewModel.registerCustomUser(fullName, userEmail, un, pw)
+                            viewModel.createBusinessAndBook(biz, bk)
+                            val displayName = if (fullName.isNotBlank()) fullName else un
+                            Toast.makeText(context, "Welcome $displayName! Your CashBook is ready.", Toast.LENGTH_LONG).show()
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp)
+                        .testTag("onboarding_start_button"),
+                    colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(
+                        text = "Complete Sign Up",
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
                         )
+                    )
+                }
+
+                if (hasRegisteredAccount) {
+                    TextButton(
+                        onClick = { authMode = "login" },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Already have an account? Sign In", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+
+            // Cloud Sync Option Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFF1F5F9)),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Icon(Icons.Default.CloudSync, contentDescription = null, tint = GreenIn)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Google Drive Backup", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            if (isUserSignedIn) "Connected (${syncManager.getEmail()})" else "Optionally sync your database to Google Drive",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF64748B)
+                        )
+                    }
+                    if (!isUserSignedIn) {
+                        TextButton(onClick = { showOAuthDialogInWelcome = true }) {
+                            Text("Connect", fontWeight = FontWeight.Bold, color = GreenIn)
+                        }
                     }
                 }
             }
@@ -6576,7 +6673,7 @@ fun SettingsScreen(viewModel: LedgerViewModel) {
                             OutlinedButton(
                                 onClick = {
                                     if (hasPermission(simulatedRole, "clear_sync")) {
-                                        viewModel.syncManager.clearAuth()
+                                        viewModel.logoutSuperAdmin()
                                         settingsAuthVersion++
                                         viewModel.triggerCloudSync()
                                         Toast.makeText(context, "Logged out from Google Account.", Toast.LENGTH_SHORT).show()
@@ -6602,34 +6699,6 @@ fun SettingsScreen(viewModel: LedgerViewModel) {
                             Icon(Icons.Default.CloudSync, contentDescription = null)
                             Spacer(modifier = Modifier.width(8.dp))
                             Text("Open Drive Sync Center")
-                        }
-                    }
-                }
-            }
-        }
-
-        // Section 3: Simulation & Roles
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Operator Role Simulator", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                    Text("Select a simulated operator role to test permissions and restrictions.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        listOf("Boss", "Partner", "Data Entry").forEach { role ->
-                            val selected = simulatedRole == role
-                            FilterChip(
-                                selected = selected,
-                                onClick = { viewModel.setSimulatedRole(role) },
-                                label = { Text(role) },
-                                modifier = Modifier.weight(1f)
-                            )
                         }
                     }
                 }
@@ -7617,7 +7686,7 @@ fun ProfileScreen(viewModel: LedgerViewModel) {
             confirmButton = {
                 Button(
                     onClick = {
-                        syncManager.clearAuth()
+                        viewModel.logoutSuperAdmin()
                         profileAuthVersion++
                         viewModel.triggerCloudSync()
                         showLogoutConfirmDialog = false
@@ -7749,16 +7818,16 @@ fun SuperAdminLoginDialog(
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("👑", fontSize = 24.sp)
+                    Icon(Icons.Default.VpnKey, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
                     Column {
                         Text(
-                            "Super Admin Private Login",
+                            "Account Sign In",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
                         )
                         Text(
-                            "Exclusive static credentials for Boss / Owner",
+                            "Enter your credentials to continue",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -7770,20 +7839,32 @@ fun SuperAdminLoginDialog(
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(
-                        "Static Owner Credentials:\nUser: superadmin or admin@cashbook.com\nPass: superadmin123",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.padding(10.dp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            "Credentials:\nUser: superadmin or admin@cashbook.com\nPass: superadmin123",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        TextButton(
+                            onClick = {
+                                username = "superadmin"
+                                password = "superadmin123"
+                            },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                        ) {
+                            Icon(Icons.Default.AutoFixHigh, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Auto-Fill Credentials", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
 
                 OutlinedTextField(
                     value = username,
                     onValueChange = { username = it },
-                    label = { Text("Super Admin Username / Email") },
-                    leadingIcon = { Icon(Icons.Default.AdminPanelSettings, contentDescription = null) },
+                    label = { Text("Username or Email") },
+                    leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     shape = RoundedCornerShape(10.dp)
@@ -7792,7 +7873,7 @@ fun SuperAdminLoginDialog(
                 OutlinedTextField(
                     value = password,
                     onValueChange = { password = it },
-                    label = { Text("Super Admin Password") },
+                    label = { Text("Password") },
                     leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
                     trailingIcon = {
                         IconButton(onClick = { passwordVisible = !passwordVisible }) {

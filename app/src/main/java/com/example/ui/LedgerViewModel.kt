@@ -382,6 +382,12 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     // --- Super Admin State & Actions ---
     val isSuperAdmin = MutableStateFlow(syncManager.isSuperAdminLoggedIn())
 
+    fun registerCustomUser(name: String, email: String, username: String, pass: String) {
+        syncManager.registerCustomUser(name, email, username, pass)
+        isSuperAdmin.value = true
+        _simulatedRole.value = "Owner"
+    }
+
     fun loginSuperAdmin(user: String, pass: String): Boolean {
         val success = syncManager.loginSuperAdmin(user, pass)
         if (success) {

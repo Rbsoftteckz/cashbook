@@ -81,7 +81,7 @@ class GoogleDriveSyncManager(private val context: Context) {
 
     fun getApkDownloadUrl(): String {
         val saved = prefs.getString("custom_apk_download_url", "")
-        return if (!saved.isNullOrBlank()) saved else "https://github.com/fizaumrani316-cloud/cashbook/actions/runs/29947992454/artifacts/8541031105"
+        return if (!saved.isNullOrBlank()) saved else "https://github.com/fizaumrani316-cloud/cashbook/releases/latest/download/app-release.apk"
     }
 
     fun saveApkDownloadUrl(url: String) {
@@ -122,36 +122,89 @@ class GoogleDriveSyncManager(private val context: Context) {
             .remove("name")
             .remove("avatar_url")
             .remove("token_saved_time")
-            .remove("is_super_admin")
+            .putBoolean("is_user_logged_in", false)
+            .putBoolean("is_super_admin", false)
             .apply()
     }
 
-    fun isUserSignedIn(): Boolean = getAccessToken() != null || isSuperAdminLoggedIn()
+    fun isUserSignedIn(): Boolean = getAccessToken() != null || isUserLoggedIn()
 
-    // --- Super Admin Static Credentials & Session ---
-    fun isSuperAdminLoggedIn(): Boolean {
-        return prefs.getBoolean("is_super_admin", false)
+    // --- User Account Registration & Authentication ---
+    fun hasRegisteredAccount(): Boolean {
+        val username = prefs.getString("username", "")
+        return !username.isNullOrBlank()
     }
 
-    fun loginSuperAdmin(user: String, pass: String): Boolean {
-        val trimmedUser = user.trim().lowercase()
+    fun isUserLoggedIn(): Boolean {
+        return prefs.getBoolean("is_user_logged_in", false) || prefs.getBoolean("is_super_admin", false)
+    }
+
+    fun isSuperAdminLoggedIn(): Boolean = isUserLoggedIn()
+
+    fun registerUser(name: String, email: String, username: String, pass: String) {
+        val finalName = if (name.isBlank()) username else name
+        val finalEmail = if (email.isBlank()) "$username@cashbook.local" else email
+        prefs.edit()
+            .putString("user_name", finalName)
+            .putString("user_email", finalEmail)
+            .putString("username", username.trim())
+            .putString("user_password", pass.trim())
+            .putString("email", finalEmail)
+            .putString("name", finalName)
+            .putBoolean("is_user_logged_in", true)
+            .putBoolean("is_super_admin", true)
+            .apply()
+    }
+
+    fun registerCustomUser(name: String, email: String, username: String, pass: String) = registerUser(name, email, username, pass)
+
+    fun loginUser(userOrEmail: String, pass: String): Boolean {
+        val trimmedUser = userOrEmail.trim().lowercase()
         val trimmedPass = pass.trim()
 
-        if ((trimmedUser == "superadmin" || trimmedUser == "admin@cashbook.com") &&
+        val savedUser = prefs.getString("username", "") ?: ""
+        val savedEmail = prefs.getString("user_email", "") ?: ""
+        val savedPass = prefs.getString("user_password", "") ?: ""
+        val savedName = prefs.getString("user_name", "User") ?: "User"
+
+        // Check custom registered account
+        if (savedUser.isNotBlank() && (trimmedUser == savedUser.lowercase() || trimmedUser == savedEmail.lowercase())) {
+            if (trimmedPass == savedPass) {
+                prefs.edit()
+                    .putBoolean("is_user_logged_in", true)
+                    .putBoolean("is_super_admin", true)
+                    .putString("email", savedEmail.ifBlank { "$savedUser@cashbook.local" })
+                    .putString("name", savedName)
+                    .apply()
+                return true
+            }
+        }
+
+        // Fallback static account if no custom user exists yet or superadmin login
+        if ((trimmedUser == "superadmin" || trimmedUser == "admin@cashbook.com" || trimmedUser == "admin") &&
             (trimmedPass == "superadmin123" || trimmedPass == "admin123")) {
             prefs.edit()
+                .putBoolean("is_user_logged_in", true)
                 .putBoolean("is_super_admin", true)
-                .putString("email", "superadmin@cashbook.com")
-                .putString("name", "Super Admin (Owner)")
+                .putString("email", "admin@cashbook.com")
+                .putString("name", "Admin")
                 .apply()
             return true
         }
+
         return false
     }
 
-    fun logoutSuperAdmin() {
-        prefs.edit().putBoolean("is_super_admin", false).apply()
+    fun loginSuperAdmin(user: String, pass: String): Boolean = loginUser(user, pass)
+
+    fun logoutUser() {
+        prefs.edit()
+            .putBoolean("is_user_logged_in", false)
+            .putBoolean("is_super_admin", false)
+            .apply()
     }
+
+    fun logoutSuperAdmin() = logoutUser()
 
     // --- Database Backup Serialization ---
 
