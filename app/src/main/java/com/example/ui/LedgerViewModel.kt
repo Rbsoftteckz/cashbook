@@ -260,21 +260,8 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
         viewModelScope.launch {
             try {
-                // Compile fresh snapshot from state values
-                val localJson = syncManager.serializeDatabase(
-                    businesses = businesses.value,
-                    books = repository.allBooks.first(),
-                    transactions = allTransactions.value,
-                    parties = parties.value,
-                    partyTransactions = allPartyTransactions.value,
-                    teamMembers = allTeamMembers.value
-                )
-
-                val message = syncManager.syncWithCloud(localJson, database.ledgerDao())
+                val message = syncManager.syncWithCloud(database.ledgerDao())
                 _syncStatus.value = message
-                if (message.contains("backed up", ignoreCase = true) || message.contains("Synced", ignoreCase = true) || message.contains("Restored", ignoreCase = true)) {
-                    repository.markAllTransactionsSynced()
-                }
 
                 // After sync, ensure active business & active book are selected from restored list if needed
                 val currentBizList = repository.allBusinesses.first()
@@ -287,7 +274,9 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                     val activeBizId = _activeBusiness.value?.id ?: 1
                     val currentBooksList = repository.getBooksForBusiness(activeBizId).first()
                     if (currentBooksList.isNotEmpty()) {
-                        _activeBook.value = currentBooksList.first()
+                        if (_activeBook.value == null || !currentBooksList.any { it.id == _activeBook.value?.id }) {
+                            _activeBook.value = currentBooksList.first()
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -390,9 +379,27 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    // --- Super Admin State & Actions ---
+    val isSuperAdmin = MutableStateFlow(syncManager.isSuperAdminLoggedIn())
+
+    fun loginSuperAdmin(user: String, pass: String): Boolean {
+        val success = syncManager.loginSuperAdmin(user, pass)
+        if (success) {
+            isSuperAdmin.value = true
+            _simulatedRole.value = "Super Admin"
+        }
+        return success
+    }
+
+    fun logoutSuperAdmin() {
+        syncManager.logoutSuperAdmin()
+        isSuperAdmin.value = false
+        _simulatedRole.value = "Owner"
+    }
+
     // --- Transactions Actions ---
 
-    fun addTransaction(amount: Double, type: String, category: String, paymentMethod: String, remarks: String) {
+    fun addTransaction(amount: Double, type: String, category: String, paymentMethod: String, remarks: String, receiptUri: String? = null) {
         val bookId = _activeBook.value?.id ?: return
         viewModelScope.launch {
             repository.insertTransaction(
@@ -403,7 +410,8 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                     category = category,
                     paymentMethod = paymentMethod,
                     remarks = remarks,
-                    isSynced = syncManager.isUserSignedIn()
+                    isSynced = syncManager.isUserSignedIn(),
+                    receiptUri = receiptUri
                 )
             )
             triggerCloudSync()

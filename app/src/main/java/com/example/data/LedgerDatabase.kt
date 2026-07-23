@@ -42,7 +42,8 @@ data class Transaction(
     val paymentMethod: String, // "Cash", "Online", "Bank"
     val remarks: String,
     val timestamp: Long = System.currentTimeMillis(),
-    val isSynced: Boolean = false
+    val isSynced: Boolean = false,
+    val receiptUri: String? = null
 )
 
 @Entity(tableName = "parties")
@@ -90,6 +91,24 @@ data class TeamMember(
 
 @Dao
 interface LedgerDao {
+    @Query("SELECT * FROM businesses")
+    suspend fun getAllBusinessesList(): List<Business>
+
+    @Query("SELECT * FROM books")
+    suspend fun getAllBooksList(): List<Book>
+
+    @Query("SELECT * FROM transactions")
+    suspend fun getAllTransactionsList(): List<Transaction>
+
+    @Query("SELECT * FROM parties")
+    suspend fun getAllPartiesList(): List<Party>
+
+    @Query("SELECT * FROM party_transactions")
+    suspend fun getAllPartyTransactionsList(): List<PartyTransaction>
+
+    @Query("SELECT * FROM team_members")
+    suspend fun getAllTeamMembersList(): List<TeamMember>
+
     // Businesses
     @Query("SELECT * FROM businesses ORDER BY createdAt DESC")
     fun getAllBusinesses(): Flow<List<Business>>
@@ -182,7 +201,7 @@ interface LedgerDao {
 
 @Database(
     entities = [Business::class, Book::class, Transaction::class, Party::class, PartyTransaction::class, TeamMember::class],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class LedgerDatabase : RoomDatabase() {

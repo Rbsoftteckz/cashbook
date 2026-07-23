@@ -1,5 +1,11 @@
 package com.example.ui
 
+import android.net.Uri
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import coil.compose.AsyncImage
 import android.content.Intent
 import android.graphics.pdf.PdfDocument
 import android.graphics.Paint
@@ -54,7 +60,7 @@ import kotlinx.coroutines.launch
 // --- Permissions Helper ---
 fun hasPermission(role: String, action: String): Boolean {
     return when (role) {
-        "Boss" -> true
+        "Super Admin", "Boss" -> true
         "Admin" -> action != "delete_business" && action != "clear_sync"
         "Partner" -> action == "view" || action == "switch_business"
         "Data Entry" -> action == "view" || action == "add_transaction" || action == "add_book"
@@ -1676,8 +1682,8 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
             categories = categories,
             paymentMethods = paymentMethods,
             onDismiss = { showTransactionDialog = null },
-            onSave = { amount, category, method, remarks ->
-                viewModel.addTransaction(amount, type, category, method, remarks)
+            onSave = { amount, category, method, remarks, receiptUri ->
+                viewModel.addTransaction(amount, type, category, method, remarks, receiptUri)
                 showTransactionDialog = null
             }
         )
@@ -2038,8 +2044,8 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                 categories = categories,
                 paymentMethods = paymentMethods,
                 onDismiss = { showTransactionDialog = null },
-                onSave = { amount, category, method, remarks ->
-                    viewModel.addTransaction(amount, type, category, method, remarks)
+                onSave = { amount, category, method, remarks, receiptUri ->
+                    viewModel.addTransaction(amount, type, category, method, remarks, receiptUri)
                     showTransactionDialog = null
                 }
             )
@@ -2057,15 +2063,17 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                 initialCategory = tx.category,
                 initialMethod = tx.paymentMethod,
                 initialRemarks = tx.remarks,
+                initialReceiptUri = tx.receiptUri,
                 isEdit = true,
                 onDismiss = { selectedTxForEdit = null },
-                onSave = { amount, category, method, remarks ->
+                onSave = { amount, category, method, remarks, receiptUri ->
                     viewModel.updateTransaction(
                         tx.copy(
                             amount = amount,
                             category = category,
                             paymentMethod = method,
-                            remarks = remarks
+                            remarks = remarks,
+                            receiptUri = receiptUri
                         )
                     )
                     selectedTxForEdit = null
@@ -2244,11 +2252,36 @@ fun TransactionItemCard(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         val formattedDate = SimpleDateFormat("dd MMM, hh:mm a", Locale.getDefault()).format(Date(transaction.timestamp))
-                        Text(
-                            text = formattedDate,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                text = formattedDate,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            )
+                            if (transaction.receiptUri != null) {
+                                var showViewer by remember { mutableStateOf(false) }
+                                Surface(
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    shape = RoundedCornerShape(4.dp),
+                                    modifier = Modifier.clickable { showViewer = true }
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                    ) {
+                                        Icon(Icons.Default.Receipt, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(12.dp))
+                                        Text("Receipt 📷", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                                    }
+                                }
+                                if (showViewer) {
+                                    ReceiptViewerDialog(
+                                        receiptUri = transaction.receiptUri,
+                                        onDismiss = { showViewer = false }
+                                    )
+                                }
+                            }
+                        }
 
                         // WhatsApp style cloud sync check mark indicator
                         TransactionSyncCheckIndicator(isSynced = transaction.isSynced)
@@ -2299,18 +2332,48 @@ fun AddEditTransactionDialog(
     initialCategory: String = "",
     initialMethod: String = "",
     initialRemarks: String = "",
+    initialReceiptUri: String? = null,
     isEdit: Boolean = false,
     onDismiss: () -> Unit,
-    onSave: (Double, String, String, String) -> Unit
+    onSave: (Double, String, String, String, String?) -> Unit
 ) {
     var amountInput by remember { mutableStateOf(initialAmount) }
     var category by remember { mutableStateOf(if (initialCategory.isBlank()) categories.first() else initialCategory) }
     var paymentMethod by remember { mutableStateOf(if (initialMethod.isBlank()) paymentMethods.first() else initialMethod) }
     var remarks by remember { mutableStateOf(initialRemarks) }
+    var receiptUri by remember { mutableStateOf<String?>(initialReceiptUri) }
 
     var expandedCat by remember { mutableStateOf(false) }
     var expandedMethod by remember { mutableStateOf(false) }
     var showCalculator by remember { mutableStateOf(false) }
+
+    val context = LocalContext.current
+
+    val galleryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            receiptUri = uri.toString()
+            Toast.makeText(context, "Receipt attached!", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicturePreview()
+    ) { bitmap: Bitmap? ->
+        if (bitmap != null) {
+            try {
+                val file = File(context.cacheDir, "receipt_${System.currentTimeMillis()}.jpg")
+                file.outputStream().use { out ->
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+                }
+                receiptUri = Uri.fromFile(file).toString()
+                Toast.makeText(context, "Photo captured as receipt!", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(context, "Error saving photo: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     // Dynamic Math Calculator Parser
     val evaluatedValue = remember(amountInput) {
@@ -2576,6 +2639,76 @@ fun AddEditTransactionDialog(
                     }
                 }
 
+                // Attach Receipt Section
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Icon(Icons.Default.ReceiptLong, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                                Text("Attach Bill / Receipt", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                            }
+                            if (receiptUri != null) {
+                                TextButton(onClick = { receiptUri = null }) {
+                                    Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(2.dp))
+                                    Text("Remove", fontSize = 11.sp, color = MaterialTheme.colorScheme.error)
+                                }
+                            }
+                        }
+
+                        if (receiptUri != null) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(110.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color.Black.copy(alpha = 0.05f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                AsyncImage(
+                                    model = receiptUri,
+                                    contentDescription = "Receipt Attachment Preview",
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+                        } else {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedButton(
+                                    onClick = { cameraLauncher.launch(null) },
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(vertical = 8.dp, horizontal = 4.dp)
+                                ) {
+                                    Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Camera", fontSize = 12.sp)
+                                }
+                                OutlinedButton(
+                                    onClick = { galleryLauncher.launch("image/*") },
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(vertical = 8.dp, horizontal = 4.dp)
+                                ) {
+                                    Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Gallery", fontSize = 12.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+
                 OutlinedTextField(
                     value = remarks,
                     onValueChange = { remarks = it },
@@ -2600,7 +2733,7 @@ fun AddEditTransactionDialog(
                         onClick = {
                             val finalAmount = evaluatedValue ?: amountInput.toDoubleOrNull() ?: 0.0
                             if (finalAmount > 0.0) {
-                                onSave(finalAmount, category, paymentMethod, remarks)
+                                onSave(finalAmount, category, paymentMethod, remarks, receiptUri)
                             } else {
                                 onDismiss()
                             }
@@ -3647,6 +3780,7 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
     val activeTeamMembers by viewModel.activeBusinessTeamMembers.collectAsStateWithLifecycle()
     val simulatedRole by viewModel.simulatedRole.collectAsStateWithLifecycle()
     val activeBusiness by viewModel.activeBusiness.collectAsStateWithLifecycle()
+    val syncManager = viewModel.syncManager
 
     var showAddStaffDialog by remember { mutableStateOf(false) }
     var staffName by remember { mutableStateOf("") }
@@ -3663,6 +3797,9 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
     val roles = listOf("Boss", "Admin", "Partner", "Data Entry")
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
+
+    var showApkUrlConfigCard by remember { mutableStateOf(false) }
+    var configuredApkUrl by remember { mutableStateOf(syncManager.getApkDownloadUrl()) }
 
     Column(
         modifier = Modifier
@@ -3703,6 +3840,88 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
             }
         }
 
+        val isSuperAdmin by viewModel.isSuperAdmin.collectAsStateWithLifecycle()
+        var showSuperAdminLoginDialog by remember { mutableStateOf(false) }
+
+        // Super Admin Owner Auth Card
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = if (isSuperAdmin) Color(0xFFFEF3C7) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            ),
+            border = BorderStroke(1.dp, if (isSuperAdmin) Color(0xFFF59E0B) else MaterialTheme.colorScheme.outlineVariant),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(if (isSuperAdmin) Color(0xFFF59E0B) else MaterialTheme.colorScheme.primary, CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(if (isSuperAdmin) "👑" else "🔒", fontSize = 18.sp)
+                    }
+                    Column {
+                        Text(
+                            text = if (isSuperAdmin) "Super Admin Active" else "Super Admin Access",
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (isSuperAdmin) Color(0xFF92400E) else MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = if (isSuperAdmin) "superadmin@cashbook.com (Static)" else "Owner level static private login",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isSuperAdmin) Color(0xFFB45309) else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                if (isSuperAdmin) {
+                    OutlinedButton(
+                        onClick = {
+                            viewModel.logoutSuperAdmin()
+                            Toast.makeText(context, "Logged out from Super Admin", Toast.LENGTH_SHORT).show()
+                        },
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Text("Exit Super Admin", fontSize = 11.sp, color = MaterialTheme.colorScheme.error)
+                    }
+                } else {
+                    Button(
+                        onClick = { showSuperAdminLoginDialog = true },
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Text("Super Admin Login", fontSize = 11.sp)
+                    }
+                }
+            }
+        }
+
+        if (showSuperAdminLoginDialog) {
+            SuperAdminLoginDialog(
+                onDismiss = { showSuperAdminLoginDialog = false },
+                onLogin = { username, password ->
+                    val ok = viewModel.loginSuperAdmin(username, password)
+                    if (ok) {
+                        Toast.makeText(context, "👑 Welcome Super Admin! Full Access Granted.", Toast.LENGTH_SHORT).show()
+                        showSuperAdminLoginDialog = false
+                    } else {
+                        Toast.makeText(context, "❌ Invalid Super Admin credentials!", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            )
+        }
+
         // Active testing chip
         Card(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)),
@@ -3734,6 +3953,90 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                         onClick = { viewModel.setSimulatedRole("Boss") },
                         label = { Text("Boss (Owner)", fontSize = 11.sp) }
                     )
+                }
+            }
+        }
+
+        // Super Admin / Boss: APK Download Link Settings Card
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showApkUrlConfigCard = !showApkUrlConfigCard },
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Default.Download, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Column {
+                            Text(
+                                "APK Download Link for Partners & Admins",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                "GitHub / Build Artifact address sent in team invitations",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Icon(
+                        imageVector = if (showApkUrlConfigCard) Icons.Default.ArrowDropUp else Icons.Default.ArrowDropDown,
+                        contentDescription = null
+                    )
+                }
+
+                if (showApkUrlConfigCard) {
+                    OutlinedTextField(
+                        value = configuredApkUrl,
+                        onValueChange = { newVal ->
+                            configuredApkUrl = newVal
+                            syncManager.saveApkDownloadUrl(newVal)
+                        },
+                        label = { Text("Downloadable APK Address / GitHub Artifact URL") },
+                        placeholder = { Text("https://github.com/.../artifacts/...") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        textStyle = TextStyle(fontSize = 11.sp, fontFamily = FontFamily.Monospace),
+                        trailingIcon = {
+                            IconButton(onClick = {
+                                clipboardManager.setText(AnnotatedString(configuredApkUrl))
+                                Toast.makeText(context, "Copied APK link to clipboard!", Toast.LENGTH_SHORT).show()
+                            }) {
+                                Icon(Icons.Default.ContentCopy, contentDescription = "Copy")
+                            }
+                        }
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(
+                            onClick = {
+                                val defaultUrl = "https://github.com/fizaumrani316-cloud/cashbook/actions/runs/29947992454/artifacts/8541031105"
+                                configuredApkUrl = defaultUrl
+                                syncManager.saveApkDownloadUrl(defaultUrl)
+                                Toast.makeText(context, "Reset to GitHub default link", Toast.LENGTH_SHORT).show()
+                            }
+                        ) {
+                            Text("Reset Link", fontSize = 12.sp)
+                        }
+                        Button(
+                            onClick = {
+                                syncManager.saveApkDownloadUrl(configuredApkUrl)
+                                Toast.makeText(context, "Saved downloadable address!", Toast.LENGTH_SHORT).show()
+                            },
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Text("Save Link", fontSize = 12.sp)
+                        }
+                    }
                 }
             }
         }
@@ -3898,7 +4201,7 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
         val appName = "CashBook"
         val appVersion = "v1.1"
         val apkFileName = "CashBook_${appVersion}_Debug.apk"
-        val downloadUrl = "https://ais-pre-da4saffzzctvdmze42ct3v-707128247986.asia-east1.run.app/apk"
+        var editableDownloadUrl by remember { mutableStateOf(syncManager.getApkDownloadUrl()) }
         
         val inviteText = """
             🌟 Invitation to join ${bizName} on ${appName} (${appVersion})!
@@ -3906,11 +4209,11 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
             Hi $lastAddedCollaboratorName,
             You've been invited to join "${bizName}" as a *$lastAddedCollaboratorRole* on the ${appName} app.
             
-            📥 Download App (Debug APK):
+            📥 Download App (Debug APK / Build Artifact):
             App Name: ${appName}
             Version: ${appVersion}
             File Name: ${apkFileName}
-            Download Link: ${downloadUrl}
+            Download Link: $editableDownloadUrl
             
             🔑 To connect your profile, use this link or invite code:
             Invite Link: $inviteLink
@@ -3952,6 +4255,26 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                             IconButton(onClick = {
                                 clipboardManager.setText(AnnotatedString(inviteLink))
                                 Toast.makeText(context, "📋 Copied invite link to clipboard!", Toast.LENGTH_SHORT).show()
+                            }) {
+                                Icon(Icons.Default.ContentCopy, contentDescription = "Copy")
+                            }
+                        }
+                    )
+
+                    OutlinedTextField(
+                        value = editableDownloadUrl,
+                        onValueChange = { newVal ->
+                            editableDownloadUrl = newVal
+                            syncManager.saveApkDownloadUrl(newVal)
+                        },
+                        label = { Text("Downloadable APK Address (GitHub Artifact)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 11.sp),
+                        shape = RoundedCornerShape(8.dp),
+                        trailingIcon = {
+                            IconButton(onClick = {
+                                clipboardManager.setText(AnnotatedString(editableDownloadUrl))
+                                Toast.makeText(context, "📋 Copied APK download URL to clipboard!", Toast.LENGTH_SHORT).show()
                             }) {
                                 Icon(Icons.Default.ContentCopy, contentDescription = "Copy")
                             }
@@ -7342,6 +7665,213 @@ fun ProfileScreen(viewModel: LedgerViewModel) {
                             .weight(1f)
                             .fillMaxWidth()
                     )
+                }
+            }
+        }
+    }
+}
+
+// --- SUPER ADMIN LOGIN DIALOG ---
+@Composable
+fun SuperAdminLoginDialog(
+    onDismiss: () -> Unit,
+    onLogin: (String, String) -> Unit
+) {
+    var username by remember { mutableStateOf("superadmin") }
+    var password by remember { mutableStateOf("") }
+    var passwordVisible by remember { mutableStateOf(false) }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("👑", fontSize = 24.sp)
+                    Column {
+                        Text(
+                            "Super Admin Private Login",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            "Exclusive static credentials for Boss / Owner",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        "Static Owner Credentials:\nUser: superadmin or admin@cashbook.com\nPass: superadmin123",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.padding(10.dp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                OutlinedTextField(
+                    value = username,
+                    onValueChange = { username = it },
+                    label = { Text("Super Admin Username / Email") },
+                    leadingIcon = { Icon(Icons.Default.AdminPanelSettings, contentDescription = null) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    shape = RoundedCornerShape(10.dp)
+                )
+
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("Super Admin Password") },
+                    leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
+                    trailingIcon = {
+                        IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                            Icon(
+                                imageVector = if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                contentDescription = "Toggle Password Visibility"
+                            )
+                        }
+                    },
+                    visualTransformation = if (passwordVisible) androidx.compose.ui.text.input.VisualTransformation.None else androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    shape = RoundedCornerShape(10.dp)
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = onDismiss) {
+                        Text("Cancel")
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = { onLogin(username, password) },
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("Log In as Super Admin")
+                    }
+                }
+            }
+        }
+    }
+}
+
+// --- RECEIPT IMAGE VIEWER DIALOG ---
+@Composable
+fun ReceiptViewerDialog(
+    receiptUri: String,
+    onDismiss: () -> Unit,
+    onDeleteReceipt: (() -> Unit)? = null
+) {
+    val context = LocalContext.current
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(8.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Icon(Icons.Default.ReceiptLong, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Text("Transaction Receipt", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    }
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "Close")
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 200.dp, max = 380.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.Black.copy(alpha = 0.05f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    AsyncImage(
+                        model = receiptUri,
+                        contentDescription = "Receipt Image",
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(4.dp)
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (onDeleteReceipt != null) {
+                        TextButton(
+                            onClick = onDeleteReceipt,
+                            colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                        ) {
+                            Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Delete Receipt")
+                        }
+                    } else {
+                        Spacer(modifier = Modifier.width(1.dp))
+                    }
+
+                    Row {
+                        OutlinedButton(
+                            onClick = {
+                                try {
+                                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                        type = "image/*"
+                                        putExtra(Intent.EXTRA_STREAM, Uri.parse(receiptUri))
+                                        putExtra(Intent.EXTRA_TEXT, "Attached Transaction Receipt from CashBook App")
+                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    }
+                                    context.startActivity(Intent.createChooser(shareIntent, "Share Receipt Image"))
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Sharing receipt...", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Share")
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(onClick = onDismiss) {
+                            Text("Close")
+                        }
+                    }
                 }
             }
         }

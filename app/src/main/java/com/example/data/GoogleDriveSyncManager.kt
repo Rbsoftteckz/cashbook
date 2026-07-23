@@ -79,6 +79,15 @@ class GoogleDriveSyncManager(private val context: Context) {
         prefs.edit().putString("custom_redirect_uri", uri).apply()
     }
 
+    fun getApkDownloadUrl(): String {
+        val saved = prefs.getString("custom_apk_download_url", "")
+        return if (!saved.isNullOrBlank()) saved else "https://github.com/fizaumrani316-cloud/cashbook/actions/runs/29947992454/artifacts/8541031105"
+    }
+
+    fun saveApkDownloadUrl(url: String) {
+        prefs.edit().putString("custom_apk_download_url", url).apply()
+    }
+
     // --- SharedPreferences Auth Storage ---
 
     fun saveAccessToken(token: String, email: String = "", name: String = "", avatarUrl: String = "") {
@@ -113,10 +122,36 @@ class GoogleDriveSyncManager(private val context: Context) {
             .remove("name")
             .remove("avatar_url")
             .remove("token_saved_time")
+            .remove("is_super_admin")
             .apply()
     }
 
-    fun isUserSignedIn(): Boolean = getAccessToken() != null
+    fun isUserSignedIn(): Boolean = getAccessToken() != null || isSuperAdminLoggedIn()
+
+    // --- Super Admin Static Credentials & Session ---
+    fun isSuperAdminLoggedIn(): Boolean {
+        return prefs.getBoolean("is_super_admin", false)
+    }
+
+    fun loginSuperAdmin(user: String, pass: String): Boolean {
+        val trimmedUser = user.trim().lowercase()
+        val trimmedPass = pass.trim()
+
+        if ((trimmedUser == "superadmin" || trimmedUser == "admin@cashbook.com") &&
+            (trimmedPass == "superadmin123" || trimmedPass == "admin123")) {
+            prefs.edit()
+                .putBoolean("is_super_admin", true)
+                .putString("email", "superadmin@cashbook.com")
+                .putString("name", "Super Admin (Owner)")
+                .apply()
+            return true
+        }
+        return false
+    }
+
+    fun logoutSuperAdmin() {
+        prefs.edit().putBoolean("is_super_admin", false).apply()
+    }
 
     // --- Database Backup Serialization ---
 
@@ -168,6 +203,7 @@ class GoogleDriveSyncManager(private val context: Context) {
                 put("remarks", tx.remarks)
                 put("timestamp", tx.timestamp)
                 put("isSynced", tx.isSynced)
+                if (tx.receiptUri != null) put("receiptUri", tx.receiptUri)
             })
         }
         root.put("transactions", txArray)
@@ -215,6 +251,24 @@ class GoogleDriveSyncManager(private val context: Context) {
         root.put("team_members", teamArray)
 
         return root.toString(2)
+    }
+
+    suspend fun serializeDatabaseFromDao(dao: LedgerDao): String = withContext(Dispatchers.IO) {
+        val businesses = dao.getAllBusinessesList()
+        val books = dao.getAllBooksList()
+        val transactions = dao.getAllTransactionsList()
+        val parties = dao.getAllPartiesList()
+        val partyTransactions = dao.getAllPartyTransactionsList()
+        val teamMembers = dao.getAllTeamMembersList()
+
+        serializeDatabase(
+            businesses = businesses,
+            books = books,
+            transactions = transactions,
+            parties = parties,
+            partyTransactions = partyTransactions,
+            teamMembers = teamMembers
+        )
     }
 
     suspend fun restoreDatabase(jsonString: String, dao: LedgerDao): Boolean = withContext(Dispatchers.IO) {
@@ -283,7 +337,8 @@ class GoogleDriveSyncManager(private val context: Context) {
                             paymentMethod = obj.getString("paymentMethod"),
                             remarks = obj.getString("remarks"),
                             timestamp = obj.getLong("timestamp"),
-                            isSynced = true
+                            isSynced = true,
+                            receiptUri = if (obj.has("receiptUri")) obj.optString("receiptUri", null) else null
                         )
                     )
                 }
@@ -336,7 +391,7 @@ class GoogleDriveSyncManager(private val context: Context) {
 
     // --- Google Drive REST API Communications ---
 
-    suspend fun syncWithCloud(localBackupJson: String, dao: LedgerDao): String = withContext(Dispatchers.IO) {
+    suspend fun syncWithCloud(dao: LedgerDao): String = withContext(Dispatchers.IO) {
         val token = getAccessToken() ?: return@withContext "Authentication Required"
 
         try {
@@ -368,8 +423,17 @@ class GoogleDriveSyncManager(private val context: Context) {
                 }
             }
 
+            // Query local DB state directly from SQLite
+            val localTxs = dao.getAllTransactionsList()
+            val localPartyTxs = dao.getAllPartyTransactionsList()
+            val localParties = dao.getAllPartiesList()
+            val localBooks = dao.getAllBooksList()
+
+            val isLocalEmpty = localTxs.isEmpty() && localPartyTxs.isEmpty() && localParties.isEmpty() &&
+                               (localBooks.isEmpty() || (localBooks.size == 1 && localBooks[0].name == "Cashbook"))
+
             if (fileId != null) {
-                // 3. Drive Backup Exists! Let's download and perform Conflict-Free Local Merging
+                // 3. Drive Backup Exists! Download
                 val downloadUrl = "https://www.googleapis.com/drive/v3/files/$fileId?alt=media"
                 val downloadRequest = Request.Builder()
                     .url(downloadUrl)
@@ -385,44 +449,46 @@ class GoogleDriveSyncManager(private val context: Context) {
                 }
 
                 if (cloudBackupStr != null) {
-                    try {
-                        val cloudObj = JSONObject(cloudBackupStr!!)
-                        
-                        val cloudBizArray = cloudObj.optJSONArray("businesses")
-                        val cloudBooksArray = cloudObj.optJSONArray("books")
-                        val cloudPartiesArray = cloudObj.optJSONArray("parties")
-                        val cloudTxArray = cloudObj.optJSONArray("transactions")
-                        val cloudPTxArray = cloudObj.optJSONArray("party_transactions")
-                        val cloudTeamArray = cloudObj.optJSONArray("team_members")
+                    val cloudObj = JSONObject(cloudBackupStr!!)
+                    val cloudBizArray = cloudObj.optJSONArray("businesses")
+                    val cloudBooksArray = cloudObj.optJSONArray("books")
+                    val cloudPartiesArray = cloudObj.optJSONArray("parties")
+                    val cloudTxArray = cloudObj.optJSONArray("transactions")
+                    val cloudPTxArray = cloudObj.optJSONArray("party_transactions")
 
-                        val cloudHasData = (cloudBizArray != null && cloudBizArray.length() > 0) ||
-                                           (cloudBooksArray != null && cloudBooksArray.length() > 0) ||
-                                           (cloudPartiesArray != null && cloudPartiesArray.length() > 0) ||
-                                           (cloudTxArray != null && cloudTxArray.length() > 0) ||
-                                           (cloudPTxArray != null && cloudPTxArray.length() > 0) ||
-                                           (cloudTeamArray != null && cloudTeamArray.length() > 0)
+                    val cloudHasData = (cloudBizArray != null && cloudBizArray.length() > 0) ||
+                                       (cloudBooksArray != null && cloudBooksArray.length() > 0) ||
+                                       (cloudPartiesArray != null && cloudPartiesArray.length() > 0) ||
+                                       (cloudTxArray != null && cloudTxArray.length() > 0) ||
+                                       (cloudPTxArray != null && cloudPTxArray.length() > 0)
 
-                        if (cloudHasData) {
-                            // Automatically restore all cloud businesses, books, transactions, parties & team members to local DB
-                            restoreDatabase(cloudBackupStr!!, dao)
-                            return@withContext "Synced: Restored existing cloud backup! All businesses & books loaded."
-                        } else {
-                            // Cloud backup file exists but is empty, update with local backup
-                            uploadToDrive(token, localBackupJson, fileId!!)
-                            return@withContext "Synced: Local ledger backed up to Google Drive."
-                        }
-                    } catch (e: Exception) {
-                        // Fallback to update drive if reading fails
-                        uploadToDrive(token, localBackupJson, fileId!!)
-                        return@withContext "Synced: Backup updated to Google Drive."
+                    if (isLocalEmpty && cloudHasData) {
+                        // User uninstalled / reinstalled app or launched with fresh DB -> Auto-Restore!
+                        restoreDatabase(cloudBackupStr!!, dao)
+                        dao.markAllTransactionsSynced()
+                        dao.markAllPartyTransactionsSynced()
+                        return@withContext "Synced: Restored existing cloud backup! All books & records loaded."
+                    } else {
+                        // User actively modified local DB -> Upload latest local DB snapshot to Drive!
+                        val latestLocalJson = serializeDatabaseFromDao(dao)
+                        uploadToDrive(token, latestLocalJson, fileId!!)
+                        dao.markAllTransactionsSynced()
+                        dao.markAllPartyTransactionsSynced()
+                        return@withContext "Synced: Backup saved to Google Drive."
                     }
                 } else {
-                    uploadToDrive(token, localBackupJson, fileId!!)
-                    return@withContext "Synced: Backed up to Google Drive."
+                    val latestLocalJson = serializeDatabaseFromDao(dao)
+                    uploadToDrive(token, latestLocalJson, fileId!!)
+                    dao.markAllTransactionsSynced()
+                    dao.markAllPartyTransactionsSynced()
+                    return@withContext "Synced: Backup saved to Google Drive."
                 }
             } else {
-                // 4. Create new file on Google Drive
-                createNewFileOnDrive(token, localBackupJson)
+                // 4. Create new backup file on Google Drive
+                val latestLocalJson = serializeDatabaseFromDao(dao)
+                createNewFileOnDrive(token, latestLocalJson)
+                dao.markAllTransactionsSynced()
+                dao.markAllPartyTransactionsSynced()
                 return@withContext "Synced: First-time cloud backup completed successfully!"
             }
         } catch (e: Exception) {
