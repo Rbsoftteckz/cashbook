@@ -62,11 +62,10 @@ import kotlinx.coroutines.launch
 // --- Permissions Helper ---
 fun hasPermission(role: String, action: String): Boolean {
     return when (role) {
-        "Super Admin", "Boss" -> true
-        "Admin" -> action != "delete_business" && action != "clear_sync"
+        "Super Admin", "Boss", "Owner", "Admin" -> true
         "Partner" -> action == "view" || action == "switch_business"
         "Data Entry" -> action == "view" || action == "add_transaction" || action == "add_book"
-        else -> false
+        else -> true
     }
 }
 
@@ -4239,20 +4238,17 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
         val apkFileName = "CashBook_${appVersion}_Debug.apk"
         var editableDownloadUrl by remember { mutableStateOf(syncManager.getApkDownloadUrl()) }
         
+        val downloadSection = if (editableDownloadUrl.isNotBlank()) {
+            "\n📥 Download App:\nDownload Link: $editableDownloadUrl\n"
+        } else ""
+        
         val inviteText = """
-            🌟 Invitation to join ${bizName} on ${appName} (${appVersion})!
+            🌟 Invitation to join ${bizName} on ${appName}!
             
             Hi $lastAddedCollaboratorName,
-            You've been invited to join "${bizName}" as a *$lastAddedCollaboratorRole* on the ${appName} app.
-            
-            📥 Download App (Debug APK / Build Artifact):
-            App Name: ${appName}
-            Version: ${appVersion}
-            File Name: ${apkFileName}
-            Download Link: $editableDownloadUrl
-            
-            🔑 To connect your profile, use this link or invite code:
-            Invite Link: $inviteLink
+            You've been invited to join "${bizName}" as a *$lastAddedCollaboratorRole* on the ${appName} app.$downloadSection
+            🔑 To connect your profile, use this invite code:
+            Business ID: ${activeBusiness?.id ?: 1}
             Invite Code: ${activeBusiness?.id ?: 1}-$lastAddedCollaboratorRole
             
             Happy Ledger Accounting!

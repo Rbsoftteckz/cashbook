@@ -385,14 +385,14 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     fun registerCustomUser(name: String, email: String, username: String, pass: String) {
         syncManager.registerCustomUser(name, email, username, pass)
         isSuperAdmin.value = true
-        _simulatedRole.value = "Owner"
+        _simulatedRole.value = "Boss"
     }
 
     fun loginSuperAdmin(user: String, pass: String): Boolean {
         val success = syncManager.loginSuperAdmin(user, pass)
         if (success) {
             isSuperAdmin.value = true
-            _simulatedRole.value = "Super Admin"
+            _simulatedRole.value = "Boss"
         }
         return success
     }
@@ -400,7 +400,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     fun logoutSuperAdmin() {
         syncManager.logoutSuperAdmin()
         isSuperAdmin.value = false
-        _simulatedRole.value = "Owner"
+        _simulatedRole.value = "Boss"
     }
 
     // --- Transactions Actions ---

@@ -80,8 +80,7 @@ class GoogleDriveSyncManager(private val context: Context) {
     }
 
     fun getApkDownloadUrl(): String {
-        val saved = prefs.getString("custom_apk_download_url", "")
-        return if (!saved.isNullOrBlank()) saved else "https://github.com/fizaumrani316-cloud/cashbook/releases/latest/download/app-release.apk"
+        return prefs.getString("custom_apk_download_url", "") ?: ""
     }
 
     fun saveApkDownloadUrl(url: String) {
