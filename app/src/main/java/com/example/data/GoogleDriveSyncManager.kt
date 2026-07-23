@@ -91,13 +91,13 @@ class GoogleDriveSyncManager(private val context: Context) {
     // --- SharedPreferences Auth Storage ---
 
     fun saveAccessToken(token: String, email: String = "", name: String = "", avatarUrl: String = "") {
-        prefs.edit()
+        val editor = prefs.edit()
             .putString("access_token", token)
-            .putString("email", email)
-            .putString("name", name)
-            .putString("avatar_url", avatarUrl)
             .putLong("token_saved_time", System.currentTimeMillis())
-            .apply()
+        if (email.isNotBlank()) editor.putString("google_email", email)
+        if (name.isNotBlank()) editor.putString("google_name", name)
+        if (avatarUrl.isNotBlank()) editor.putString("google_avatar_url", avatarUrl)
+        editor.apply()
     }
 
     fun getAccessToken(): String? {
@@ -105,29 +105,47 @@ class GoogleDriveSyncManager(private val context: Context) {
         val savedTime = prefs.getLong("token_saved_time", 0)
         // Token expires after 1 hour (3600000 ms)
         if (token != null && System.currentTimeMillis() - savedTime > 3600000) {
-            clearAuth()
+            clearGoogleAuth()
             return null
         }
         return token
     }
 
-    fun getEmail(): String = prefs.getString("email", "") ?: ""
-    fun getName(): String = prefs.getString("name", "") ?: ""
-    fun getAvatarUrl(): String = prefs.getString("avatar_url", "") ?: ""
+    fun hasGoogleDriveToken(): Boolean = getAccessToken() != null
+    fun isGoogleDriveConnected(): Boolean = getAccessToken() != null
 
-    fun clearAuth() {
+    fun getGoogleEmail(): String = if (hasGoogleDriveToken()) prefs.getString("google_email", "") ?: "" else ""
+    fun getGoogleName(): String = if (hasGoogleDriveToken()) prefs.getString("google_name", "") ?: "" else ""
+
+    fun getEmail(): String {
+        val googleEmail = getGoogleEmail()
+        if (googleEmail.isNotBlank()) return googleEmail
+        return prefs.getString("user_email", "") ?: prefs.getString("email", "") ?: ""
+    }
+
+    fun getName(): String {
+        val googleName = getGoogleName()
+        if (googleName.isNotBlank()) return googleName
+        return prefs.getString("user_name", "") ?: prefs.getString("name", "") ?: ""
+    }
+
+    fun getAvatarUrl(): String = prefs.getString("google_avatar_url", "") ?: ""
+
+    fun clearGoogleAuth() {
         prefs.edit()
             .remove("access_token")
-            .remove("email")
-            .remove("name")
-            .remove("avatar_url")
+            .remove("google_email")
+            .remove("google_name")
+            .remove("google_avatar_url")
             .remove("token_saved_time")
-            .putBoolean("is_user_logged_in", false)
-            .putBoolean("is_super_admin", false)
             .apply()
     }
 
-    fun isUserSignedIn(): Boolean = getAccessToken() != null || isUserLoggedIn()
+    fun clearAuth() {
+        clearGoogleAuth()
+    }
+
+    fun isUserSignedIn(): Boolean = hasGoogleDriveToken()
 
     // --- User Account Registration & Authentication ---
     fun hasRegisteredAccount(): Boolean {
@@ -149,8 +167,6 @@ class GoogleDriveSyncManager(private val context: Context) {
             .putString("user_email", finalEmail)
             .putString("username", username.trim())
             .putString("user_password", pass.trim())
-            .putString("email", finalEmail)
-            .putString("name", finalName)
             .putBoolean("is_user_logged_in", true)
             .putBoolean("is_super_admin", true)
             .apply()
@@ -173,8 +189,8 @@ class GoogleDriveSyncManager(private val context: Context) {
                 prefs.edit()
                     .putBoolean("is_user_logged_in", true)
                     .putBoolean("is_super_admin", true)
-                    .putString("email", savedEmail.ifBlank { "$savedUser@cashbook.local" })
-                    .putString("name", savedName)
+                    .putString("user_email", savedEmail.ifBlank { "$savedUser@cashbook.local" })
+                    .putString("user_name", savedName)
                     .apply()
                 return true
             }
@@ -186,8 +202,8 @@ class GoogleDriveSyncManager(private val context: Context) {
             prefs.edit()
                 .putBoolean("is_user_logged_in", true)
                 .putBoolean("is_super_admin", true)
-                .putString("email", "admin@cashbook.com")
-                .putString("name", "Admin")
+                .putString("user_email", "admin@cashbook.com")
+                .putString("user_name", "Admin")
                 .apply()
             return true
         }
@@ -198,6 +214,7 @@ class GoogleDriveSyncManager(private val context: Context) {
     fun loginSuperAdmin(user: String, pass: String): Boolean = loginUser(user, pass)
 
     fun logoutUser() {
+        clearGoogleAuth()
         prefs.edit()
             .putBoolean("is_user_logged_in", false)
             .putBoolean("is_super_admin", false)
@@ -445,7 +462,7 @@ class GoogleDriveSyncManager(private val context: Context) {
     // --- Google Drive REST API Communications ---
 
     suspend fun syncWithCloud(dao: LedgerDao): String = withContext(Dispatchers.IO) {
-        val token = getAccessToken() ?: return@withContext "Authentication Required"
+        val token = getAccessToken() ?: return@withContext "Offline (No Google Account connected)"
 
         try {
             // 1. Fetch Google User Profile Information (to sync name/email in drawer)

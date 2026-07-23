@@ -6150,7 +6150,7 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                             value = fullName,
                             onValueChange = { fullName = it },
                             label = { Text("Full Name") },
-                            placeholder = { Text("e.g. Fiza Umrani") },
+                            placeholder = { Text("e.g. Rasool Bakhsh") },
                             leadingIcon = { Icon(Icons.Default.Person, contentDescription = null, tint = GreenIn) },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
@@ -6161,7 +6161,7 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                             value = userEmail,
                             onValueChange = { userEmail = it },
                             label = { Text("Email Address") },
-                            placeholder = { Text("e.g. fiza@example.com") },
+                            placeholder = { Text("e.g. rasool@example.com") },
                             leadingIcon = { Icon(Icons.Default.Email, contentDescription = null, tint = GreenIn) },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
@@ -6172,7 +6172,7 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                             value = username,
                             onValueChange = { username = it },
                             label = { Text("Username *") },
-                            placeholder = { Text("e.g. fiza316") },
+                            placeholder = { Text("e.g. rbmengal") },
                             leadingIcon = { Icon(Icons.Default.AccountCircle, contentDescription = null, tint = GreenIn) },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
@@ -6224,7 +6224,7 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                             value = businessName,
                             onValueChange = { businessName = it },
                             label = { Text("Business / Shop Name *") },
-                            placeholder = { Text("e.g. Fiza Enterprises") },
+                            placeholder = { Text("e.g. RB Mengal Traders") },
                             leadingIcon = { Icon(Icons.Default.Business, contentDescription = null, tint = GreenIn) },
                             singleLine = true,
                             modifier = Modifier
@@ -6773,7 +6773,7 @@ fun SettingsScreen(viewModel: LedgerViewModel) {
                     value = newBusinessName,
                     onValueChange = { newBusinessName = it },
                     label = { Text("Business / Company Name") },
-                    placeholder = { Text("e.g. Fiza Shop") },
+                    placeholder = { Text("e.g. RB Mengal Traders") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -7181,7 +7181,7 @@ fun ManageWorkspaceScreen(viewModel: LedgerViewModel) {
                     value = newBusinessName,
                     onValueChange = { newBusinessName = it },
                     label = { Text("Business / Company Name") },
-                    placeholder = { Text("e.g. Fiza Shop") },
+                    placeholder = { Text("e.g. RB Mengal Traders") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().testTag("add_business_dialog_input")
                 )
