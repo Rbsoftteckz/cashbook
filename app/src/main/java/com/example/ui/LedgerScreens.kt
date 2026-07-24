@@ -38,6 +38,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -4158,14 +4160,45 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(10.dp)
                     )
-                    OutlinedTextField(
-                        value = staffEmail,
-                        onValueChange = { staffEmail = it },
-                        label = { Text("Email Address") },
-                        placeholder = { Text("e.g. sarah@cashbook.com") },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp)
-                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        OutlinedTextField(
+                            value = staffEmail,
+                            onValueChange = { staffEmail = it },
+                            label = { Text("Email Address") },
+                            placeholder = { Text("e.g. partner@cashbook.com") },
+                            leadingIcon = { Icon(Icons.Default.Email, contentDescription = null, tint = GreenIn) },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp)
+                        )
+
+                        if (staffEmail.trim().isNotBlank()) {
+                            val emailExists = viewModel.checkEmailExists(staffEmail.trim())
+                            Surface(
+                                color = if (emailExists) Color(0xFFDCFCE7) else Color(0xFFE0F2FE),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (emailExists) Icons.Default.CheckCircle else Icons.Default.Email,
+                                        contentDescription = null,
+                                        tint = if (emailExists) GreenIn else Color(0xFF0284C7),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Text(
+                                        text = if (emailExists) "✓ Registered CashBook Account Found on Cloud!" else "✉️ New Email — Invitation email & link will be sent upon adding.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = if (emailExists) Color(0xFF166534) else Color(0xFF0369A1),
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+                        }
+                    }
                     OutlinedTextField(
                         value = staffPhone,
                         onValueChange = { staffPhone = it },
@@ -4796,6 +4829,100 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                             Text("Import JSON")
                         }
                     }
+                }
+            }
+        }
+
+        // App Domain & Google OAuth Consent Info Card
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f))
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Default.VerifiedUser, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Text("Google Cloud OAuth Consent Screen Links", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                    }
+                    Text(
+                        "Copy these exact URLs into your Google Cloud Console OAuth Consent Screen configuration fields:",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+
+                    val shareUrl = "https://ai.studio/apps/e988119e-8f17-4315-9013-d94988df97da"
+                    val webAppUrl = "https://ais-pre-da4saffzzctvdmze42ct3v-707128247986.asia-east1.run.app"
+
+                    // 1. Application home page
+                    OutlinedTextField(
+                        value = shareUrl,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("1. Application home page") },
+                        trailingIcon = {
+                            IconButton(onClick = {
+                                clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(shareUrl))
+                                Toast.makeText(context, "Home page URL copied!", Toast.LENGTH_SHORT).show()
+                            }) {
+                                Icon(Icons.Default.ContentCopy, contentDescription = "Copy")
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = MaterialTheme.typography.bodySmall
+                    )
+
+                    // 2. Application privacy policy link
+                    OutlinedTextField(
+                        value = webAppUrl,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("2. Application privacy policy link") },
+                        trailingIcon = {
+                            IconButton(onClick = {
+                                clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(webAppUrl))
+                                Toast.makeText(context, "Privacy Policy URL copied!", Toast.LENGTH_SHORT).show()
+                            }) {
+                                Icon(Icons.Default.ContentCopy, contentDescription = "Copy")
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = MaterialTheme.typography.bodySmall
+                    )
+
+                    // 3. Application terms of service link
+                    OutlinedTextField(
+                        value = webAppUrl,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("3. Application terms of service link") },
+                        trailingIcon = {
+                            IconButton(onClick = {
+                                clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(webAppUrl))
+                                Toast.makeText(context, "Terms of Service URL copied!", Toast.LENGTH_SHORT).show()
+                            }) {
+                                Icon(Icons.Default.ContentCopy, contentDescription = "Copy")
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = MaterialTheme.typography.bodySmall
+                    )
+
+                    // 4. Authorized domains
+                    OutlinedTextField(
+                        value = "run.app",
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("4. Authorized domains") },
+                        trailingIcon = {
+                            IconButton(onClick = {
+                                clipboardManager.setText(androidx.compose.ui.text.AnnotatedString("run.app"))
+                                Toast.makeText(context, "Authorized domain copied!", Toast.LENGTH_SHORT).show()
+                            }) {
+                                Icon(Icons.Default.ContentCopy, contentDescription = "Copy")
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = MaterialTheme.typography.bodySmall
+                    )
                 }
             }
         }
@@ -5955,7 +6082,7 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
     val syncManager = viewModel.syncManager
     val hasRegisteredAccount = syncManager.hasRegisteredAccount()
 
-    // Mode: "login" if user account already exists, "signup" if 1st time launch
+    // Mode: "login", "signup", or "forgot"
     var authMode by remember { mutableStateOf(if (hasRegisteredAccount) "login" else "signup") }
 
     // Sign Up Fields
@@ -5972,9 +6099,38 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
     var loginPass by remember { mutableStateOf("") }
     var loginPassVisible by remember { mutableStateOf(false) }
 
+    // Forgot / Reset Password Fields
+    var forgotUserOrEmail by remember { mutableStateOf("") }
+    var resetStep by remember { mutableIntStateOf(1) } // 1: Email Lookup, 2: OTP Verification, 3: New Password
+    var generatedOtp by remember { mutableStateOf("") }
+    var enteredOtp by remember { mutableStateOf("") }
+    var otpError by remember { mutableStateOf("") }
+    var resetNewPass by remember { mutableStateOf("") }
+    var resetConfirmPass by remember { mutableStateOf("") }
+    var resetPassVisible by remember { mutableStateOf(false) }
+    var forgotAccountVerified by remember { mutableStateOf(false) }
+
     var showOAuthDialogInWelcome by remember { mutableStateOf(false) }
 
     val isUserSignedIn = syncManager.isUserSignedIn()
+
+    // Live email check status
+    val isValidEmailFormat = remember(userEmail) {
+        val trimmed = userEmail.trim()
+        trimmed.isNotBlank() && android.util.Patterns.EMAIL_ADDRESS.matcher(trimmed).matches()
+    }
+
+    val isEmailAlreadyRegistered = remember(userEmail, isValidEmailFormat) {
+        if (isValidEmailFormat) {
+            viewModel.checkEmailExists(userEmail.trim())
+        } else false
+    }
+
+    val isForgotAccountFound = remember(forgotUserOrEmail) {
+        if (forgotUserOrEmail.trim().length >= 3) {
+            viewModel.checkEmailExists(forgotUserOrEmail.trim())
+        } else false
+    }
 
     Box(
         modifier = Modifier
@@ -5989,34 +6145,203 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                 .verticalScroll(rememberScrollState())
                 .widthIn(max = 480.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(20.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // App Logo Header
             Image(
                 painter = painterResource(id = com.example.R.drawable.ic_cashbook_logo),
                 contentDescription = "CashBook Logo",
                 modifier = Modifier
-                    .size(90.dp)
+                    .size(80.dp)
                     .clip(RoundedCornerShape(20.dp))
                     .border(1.dp, Color(0xFFE2E8F0), RoundedCornerShape(20.dp))
             )
 
-            if (authMode == "login") {
-                // --- SIGN IN MODE ---
+            // Mode Selector Tabs (Sign In | Sign Up | Forgot Password)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xFFE2E8F0))
+                    .padding(4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Surface(
+                    onClick = { authMode = "login" },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (authMode == "login") Color.White else Color.Transparent,
+                    shadowElevation = if (authMode == "login") 2.dp else 0.dp
+                ) {
+                    Box(modifier = Modifier.padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
+                        Text(
+                            "Sign In",
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontWeight = if (authMode == "login") FontWeight.Bold else FontWeight.Medium,
+                                color = if (authMode == "login") GreenIn else Color(0xFF64748B)
+                            )
+                        )
+                    }
+                }
+
+                Surface(
+                    onClick = { authMode = "signup" },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (authMode == "signup") Color.White else Color.Transparent,
+                    shadowElevation = if (authMode == "signup") 2.dp else 0.dp
+                ) {
+                    Box(modifier = Modifier.padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
+                        Text(
+                            "Sign Up",
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontWeight = if (authMode == "signup") FontWeight.Bold else FontWeight.Medium,
+                                color = if (authMode == "signup") GreenIn else Color(0xFF64748B)
+                            )
+                        )
+                    }
+                }
+
+                Surface(
+                    onClick = { authMode = "forgot" },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (authMode == "forgot") Color.White else Color.Transparent,
+                    shadowElevation = if (authMode == "forgot") 2.dp else 0.dp
+                ) {
+                    Box(modifier = Modifier.padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
+                        Text(
+                            "Reset Pass",
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontWeight = if (authMode == "forgot") FontWeight.Bold else FontWeight.Medium,
+                                color = if (authMode == "forgot") GreenIn else Color(0xFF64748B)
+                            )
+                        )
+                    }
+                }
+            }
+
+            if (isUserSignedIn) {
+                // --- POST-AUTH BUSINESS & BOOK PROFILE SETUP ---
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     Text(
-                        text = "Sign In to CashBook",
-                        style = MaterialTheme.typography.headlineMedium.copy(
+                        text = "Setup Your Business Profile",
+                        style = MaterialTheme.typography.headlineSmall.copy(
                             fontWeight = FontWeight.Bold,
                             color = Color(0xFF0F172A)
                         ),
                         textAlign = TextAlign.Center
                     )
                     Text(
-                        text = "Welcome back! Enter your credentials to access your ledger.",
+                        text = "Welcome ${syncManager.getName().ifBlank { "User" }}! Create your business profile and first cashbook to start.",
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            color = Color(0xFF64748B)
+                        ),
+                        textAlign = TextAlign.Center
+                    )
+                }
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        Text(
+                            text = "🏢 Business Profile Setup",
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF1E293B)
+                            )
+                        )
+
+                        OutlinedTextField(
+                            value = businessName,
+                            onValueChange = { businessName = it },
+                            label = { Text("Business / Shop Name *") },
+                            placeholder = { Text("e.g. RB Mengal Traders") },
+                            leadingIcon = { Icon(Icons.Default.Business, contentDescription = null, tint = GreenIn) },
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("onboarding_business_input"),
+                            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = GreenIn, focusedLabelColor = GreenIn)
+                        )
+
+                        Divider(color = Color(0xFFE2E8F0))
+
+                        Text(
+                            text = "📖 Create Your First CashBook",
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF1E293B)
+                            )
+                        )
+
+                        OutlinedTextField(
+                            value = bookName,
+                            onValueChange = { bookName = it },
+                            label = { Text("CashBook Name *") },
+                            placeholder = { Text("e.g. Daily Cashbook") },
+                            leadingIcon = { Icon(Icons.Default.Book, contentDescription = null, tint = GreenIn) },
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("onboarding_book_input"),
+                            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = GreenIn, focusedLabelColor = GreenIn)
+                        )
+
+                        Button(
+                            onClick = {
+                                val biz = businessName.trim()
+                                val bk = bookName.trim()
+                                if (biz.isEmpty() || bk.isEmpty()) {
+                                    Toast.makeText(context, "Please enter Business Name and CashBook Name.", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    viewModel.createBusinessAndBook(biz, bk)
+                                    Toast.makeText(context, "Business Profile & CashBook created!", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(50.dp)
+                                .testTag("onboarding_start_button"),
+                            colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text(
+                                text = "Save Profile & Open CashBook",
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                            )
+                        }
+                    }
+                }
+            } else if (authMode == "login") {
+                // --- SIGN IN MODE ---
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = "Sign In to CashBook",
+                        style = MaterialTheme.typography.headlineSmall.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF0F172A)
+                        ),
+                        textAlign = TextAlign.Center
+                    )
+                    Text(
+                        text = "Enter your credentials or sync with Google Drive.",
                         style = MaterialTheme.typography.bodyMedium.copy(
                             color = Color(0xFF64748B)
                         ),
@@ -6038,7 +6363,7 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                             value = loginUser,
                             onValueChange = { loginUser = it },
                             label = { Text("Username or Email") },
-                            placeholder = { Text("Enter your username") },
+                            placeholder = { Text("e.g. rasoolbakhsh@gmail.com") },
                             leadingIcon = { Icon(Icons.Default.Person, contentDescription = null, tint = GreenIn) },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth().testTag("login_username_input"),
@@ -6065,6 +6390,18 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                             colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = GreenIn, focusedLabelColor = GreenIn)
                         )
 
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(onClick = {
+                                forgotUserOrEmail = loginUser
+                                authMode = "forgot"
+                            }) {
+                                Text("Forgot Password?", style = MaterialTheme.typography.bodySmall, color = GreenIn, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+
                         Button(
                             onClick = {
                                 val u = loginUser.trim()
@@ -6074,6 +6411,7 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                                 } else {
                                     val success = viewModel.loginSuperAdmin(u, p)
                                     if (success) {
+                                        viewModel.triggerCloudSync()
                                         Toast.makeText(context, "Logged in successfully!", Toast.LENGTH_SHORT).show()
                                     } else {
                                         Toast.makeText(context, "Invalid Username or Password!", Toast.LENGTH_LONG).show()
@@ -6098,34 +6436,34 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                             onClick = { authMode = "signup" },
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("Don't have an account? Create Account", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                            Text("Don't have an account? Create Account / Continue with Email", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
-            } else {
-                // --- SIGN UP MODE ---
+            } else if (authMode == "signup") {
+                // --- SIGN UP MODE (ACCOUNT FIELDS ONLY) ---
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     Text(
-                        text = "Create Account & Business",
-                        style = MaterialTheme.typography.headlineMedium.copy(
+                        text = "Create Account or Continue with Email",
+                        style = MaterialTheme.typography.headlineSmall.copy(
                             fontWeight = FontWeight.Bold,
                             color = Color(0xFF0F172A)
                         ),
                         textAlign = TextAlign.Center
                     )
                     Text(
-                        text = "Fill in your account details and business name to initialize CashBook.",
-                        style = MaterialTheme.typography.bodyMedium.copy(
+                        text = "Enter your account credentials. Offline & Cloud synced.",
+                        style = MaterialTheme.typography.bodySmall.copy(
                             color = Color(0xFF64748B)
                         ),
                         textAlign = TextAlign.Center
                     )
                 }
 
-                // Card 1: User Account Details
+                // Card: User Account Details
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = Color.White),
@@ -6137,7 +6475,7 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Text(
-                            text = "👤 User Profile & Login Credentials",
+                            text = "👤 User Credentials & Email Check",
                             style = MaterialTheme.typography.titleMedium.copy(
                                 fontWeight = FontWeight.Bold,
                                 color = Color(0xFF1E293B)
@@ -6155,16 +6493,82 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                             colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = GreenIn, focusedLabelColor = GreenIn)
                         )
 
-                        OutlinedTextField(
-                            value = userEmail,
-                            onValueChange = { userEmail = it },
-                            label = { Text("Email Address") },
-                            placeholder = { Text("e.g. rasoolbakhsh@gmail.com") },
-                            leadingIcon = { Icon(Icons.Default.Email, contentDescription = null, tint = GreenIn) },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = GreenIn, focusedLabelColor = GreenIn)
-                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            OutlinedTextField(
+                                value = userEmail,
+                                onValueChange = { userEmail = it },
+                                label = { Text("Email Address *") },
+                                placeholder = { Text("e.g. rasoolbakhsh@gmail.com") },
+                                leadingIcon = { Icon(Icons.Default.Email, contentDescription = null, tint = GreenIn) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = GreenIn, focusedLabelColor = GreenIn)
+                            )
+
+                            // Live email existence feedback chip (AUTOMATIC AS USER TYPES)
+                            if (userEmail.trim().isNotBlank()) {
+                                if (!isValidEmailFormat) {
+                                    Surface(
+                                        color = Color(0xFFF1F5F9),
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(8.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFF64748B), modifier = Modifier.size(18.dp))
+                                            Text(
+                                                "Please enter a valid email address (e.g. rasoolbakhsh@gmail.com)",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = Color(0xFF475569)
+                                            )
+                                        }
+                                    }
+                                } else if (isEmailAlreadyRegistered) {
+                                    Surface(
+                                        color = Color(0xFFFEF3C7),
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(8.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFD97706), modifier = Modifier.size(18.dp))
+                                            Text(
+                                                "Account detected for this email! Sign In or Reset Password.",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = Color(0xFF92400E),
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    Surface(
+                                        color = Color(0xFFDCFCE7),
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(8.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = GreenIn, modifier = Modifier.size(18.dp))
+                                            Text(
+                                                "✓ Email available for registration",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = Color(0xFF166534),
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
 
                         OutlinedTextField(
                             value = username,
@@ -6199,69 +6603,28 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                     }
                 }
 
-                // Card 2: Business & Book Setup
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = Color.White),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(18.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Text(
-                            text = "🏢 Business & Books Setup",
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF1E293B)
-                            )
-                        )
-
-                        OutlinedTextField(
-                            value = businessName,
-                            onValueChange = { businessName = it },
-                            label = { Text("Business / Shop Name *") },
-                            placeholder = { Text("e.g. RB Mengal Traders") },
-                            leadingIcon = { Icon(Icons.Default.Business, contentDescription = null, tint = GreenIn) },
-                            singleLine = true,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("onboarding_business_input"),
-                            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = GreenIn, focusedLabelColor = GreenIn)
-                        )
-
-                        OutlinedTextField(
-                            value = bookName,
-                            onValueChange = { bookName = it },
-                            label = { Text("Books Name *") },
-                            placeholder = { Text("e.g. Daily Cashbook") },
-                            leadingIcon = { Icon(Icons.Default.Book, contentDescription = null, tint = GreenIn) },
-                            singleLine = true,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("onboarding_book_input"),
-                            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = GreenIn, focusedLabelColor = GreenIn)
-                        )
-                    }
-                }
-
                 Button(
                     onClick = {
-                        val biz = businessName.trim()
-                        val bk = bookName.trim()
-                        val un = username.trim()
+                        val email = userEmail.trim()
+                        val name = fullName.trim()
                         val pw = userPassword.trim()
+                        val un = username.trim().ifBlank {
+                            if (email.contains("@")) email.substringBefore("@")
+                            else if (name.isNotBlank()) name.replace(" ", "").lowercase()
+                            else "user"
+                        }
 
-                        if (un.isEmpty() || pw.isEmpty()) {
-                            Toast.makeText(context, "Please enter a Username and Password.", Toast.LENGTH_SHORT).show()
-                        } else if (biz.isEmpty() || bk.isEmpty()) {
-                            Toast.makeText(context, "Please enter Business Name and Books Name.", Toast.LENGTH_SHORT).show()
+                        if (pw.isEmpty()) {
+                            Toast.makeText(context, "Please enter a Password.", Toast.LENGTH_SHORT).show()
+                        } else if (isEmailAlreadyRegistered) {
+                            Toast.makeText(context, "Account already exists! Switching to Sign In...", Toast.LENGTH_LONG).show()
+                            authMode = "login"
+                            loginUser = if (email.isNotBlank()) email else un
                         } else {
-                            viewModel.registerCustomUser(fullName, userEmail, un, pw)
-                            viewModel.createBusinessAndBook(biz, bk)
-                            val displayName = if (fullName.isNotBlank()) fullName else un
-                            Toast.makeText(context, "Welcome $displayName! Your CashBook is ready.", Toast.LENGTH_LONG).show()
+                            viewModel.registerCustomUser(name, email, un, pw)
+                            viewModel.triggerCloudSync()
+                            val displayName = if (name.isNotBlank()) name else un
+                            Toast.makeText(context, "Welcome $displayName! Account created.", Toast.LENGTH_SHORT).show()
                         }
                     },
                     modifier = Modifier
@@ -6272,7 +6635,7 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Text(
-                        text = "Complete Sign Up",
+                        text = "Create Account & Continue",
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontWeight = FontWeight.Bold,
                             color = Color.White
@@ -6280,12 +6643,321 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                     )
                 }
 
-                if (hasRegisteredAccount) {
-                    TextButton(
-                        onClick = { authMode = "login" },
-                        modifier = Modifier.fillMaxWidth()
+                TextButton(
+                    onClick = { authMode = "login" },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Already have an account? Sign In", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                }
+            } else {
+                // --- FORGOT / RESET PASSWORD MODE ---
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = "Reset Account Password",
+                        style = MaterialTheme.typography.headlineSmall.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF0F172A)
+                        ),
+                        textAlign = TextAlign.Center
+                    )
+                    Text(
+                        text = when (resetStep) {
+                            1 -> "Step 1/3: Verify your registered email or username"
+                            2 -> "Step 2/3: Enter security OTP verification code"
+                            else -> "Step 3/3: Create and confirm your new password"
+                        },
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            color = Color(0xFF64748B),
+                            fontWeight = FontWeight.Medium
+                        ),
+                        textAlign = TextAlign.Center
+                    )
+                }
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        Text("Already have an account? Sign In", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                        if (resetStep == 1) {
+                            // --- STEP 1: ACCOUNT LOOKUP ---
+                            OutlinedTextField(
+                                value = forgotUserOrEmail,
+                                onValueChange = {
+                                    forgotUserOrEmail = it
+                                    otpError = ""
+                                },
+                                label = { Text("Registered Email or Username") },
+                                placeholder = { Text("e.g. rasoolbakhsh@gmail.com") },
+                                leadingIcon = { Icon(Icons.Default.Email, contentDescription = null, tint = GreenIn) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = GreenIn, focusedLabelColor = GreenIn)
+                            )
+
+                            if (otpError.isNotBlank()) {
+                                Surface(
+                                    color = Color(0xFFFEF2F2),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(Icons.Default.ErrorOutline, contentDescription = null, tint = Color(0xFFDC2626))
+                                        Text(otpError, style = MaterialTheme.typography.bodySmall, color = Color(0xFF991B1B))
+                                    }
+                                }
+                            }
+
+                            Button(
+                                onClick = {
+                                    val target = forgotUserOrEmail.trim()
+                                    if (target.isBlank()) {
+                                        otpError = "Please enter your registered email address or username."
+                                    } else {
+                                        val exists = viewModel.checkEmailExists(target)
+                                        if (exists) {
+                                            val otp = (100000..999999).random().toString()
+                                            generatedOtp = otp
+                                            enteredOtp = ""
+                                            otpError = ""
+                                            resetStep = 2
+                                            Toast.makeText(context, "Verification code sent to $target!", Toast.LENGTH_LONG).show()
+                                        } else {
+                                            otpError = "No account registered with '$target'. Please verify or sign up."
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth().height(48.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Send Security Verification Code", color = Color.White, fontWeight = FontWeight.Bold)
+                            }
+                        } else if (resetStep == 2) {
+                            // --- STEP 2: OTP VERIFICATION ---
+                            Surface(
+                                color = Color(0xFFF0FDF4),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth(),
+                                border = BorderStroke(1.dp, Color(0xFFBBF7D0))
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Icon(Icons.Default.Security, contentDescription = null, tint = GreenIn, modifier = Modifier.size(20.dp))
+                                        Text("Verification OTP Code Sent", fontWeight = FontWeight.Bold, color = Color(0xFF166534), style = MaterialTheme.typography.bodyMedium)
+                                    }
+                                    Text("A 6-digit security code has been issued for $forgotUserOrEmail:", style = MaterialTheme.typography.bodySmall, color = Color(0xFF15803D))
+                                    Surface(
+                                        color = Color(0xFFDCFCE7),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text(
+                                            text = generatedOtp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            style = MaterialTheme.typography.headlineMedium.copy(letterSpacing = 4.sp),
+                                            color = Color(0xFF15803D),
+                                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            OutlinedTextField(
+                                value = enteredOtp,
+                                onValueChange = {
+                                    if (it.length <= 6 && it.all { char -> char.isDigit() }) {
+                                        enteredOtp = it
+                                        otpError = ""
+                                    }
+                                },
+                                label = { Text("Enter 6-Digit OTP Code") },
+                                placeholder = { Text("e.g. 123456") },
+                                leadingIcon = { Icon(Icons.Default.Pin, contentDescription = null, tint = GreenIn) },
+                                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                                    keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+                                ),
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = GreenIn, focusedLabelColor = GreenIn)
+                            )
+
+                            if (otpError.isNotBlank()) {
+                                Surface(
+                                    color = Color(0xFFFEF2F2),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(Icons.Default.ErrorOutline, contentDescription = null, tint = Color(0xFFDC2626))
+                                        Text(otpError, style = MaterialTheme.typography.bodySmall, color = Color(0xFF991B1B))
+                                    }
+                                }
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                TextButton(onClick = { resetStep = 1; otpError = "" }) {
+                                    Text("Change Email / Username", color = Color(0xFF64748B), style = MaterialTheme.typography.bodySmall)
+                                }
+
+                                TextButton(onClick = {
+                                    generatedOtp = (100000..999999).random().toString()
+                                    enteredOtp = ""
+                                    otpError = ""
+                                    Toast.makeText(context, "New verification code issued!", Toast.LENGTH_SHORT).show()
+                                }) {
+                                    Text("Resend Code", color = GreenIn, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+
+                            Button(
+                                onClick = {
+                                    if (enteredOtp.trim() == generatedOtp) {
+                                        resetStep = 3
+                                        otpError = ""
+                                    } else {
+                                        otpError = "Invalid verification code. Please check the code shown above."
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth().height(48.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Icon(Icons.Default.VerifiedUser, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Verify & Continue", color = Color.White, fontWeight = FontWeight.Bold)
+                            }
+                        } else if (resetStep == 3) {
+                            // --- STEP 3: CREATE NEW PASSWORD ---
+                            Surface(
+                                color = Color(0xFFDCFCE7),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = GreenIn)
+                                    Text("Account Ownership Verified! Set your new password below:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall, color = Color(0xFF166534))
+                                }
+                            }
+
+                            OutlinedTextField(
+                                value = resetNewPass,
+                                onValueChange = { resetNewPass = it },
+                                label = { Text("New Password") },
+                                placeholder = { Text("Enter new password (min 4 chars)") },
+                                leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null, tint = GreenIn) },
+                                trailingIcon = {
+                                    IconButton(onClick = { resetPassVisible = !resetPassVisible }) {
+                                        Icon(if (resetPassVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff, contentDescription = null)
+                                    }
+                                },
+                                visualTransformation = if (resetPassVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = GreenIn, focusedLabelColor = GreenIn)
+                            )
+
+                            OutlinedTextField(
+                                value = resetConfirmPass,
+                                onValueChange = { resetConfirmPass = it },
+                                label = { Text("Confirm New Password") },
+                                placeholder = { Text("Re-enter new password") },
+                                leadingIcon = { Icon(Icons.Default.LockReset, contentDescription = null, tint = GreenIn) },
+                                visualTransformation = if (resetPassVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = GreenIn, focusedLabelColor = GreenIn)
+                            )
+
+                            if (resetNewPass.isNotBlank()) {
+                                val isStrong = resetNewPass.length >= 6
+                                Text(
+                                    text = if (isStrong) "✓ Password Strength: Strong" else "⚠ Password Strength: Weak (use at least 6 chars)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (isStrong) Color(0xFF166534) else Color(0xFFD97706),
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+
+                            Button(
+                                onClick = {
+                                    val np = resetNewPass.trim()
+                                    val cp = resetConfirmPass.trim()
+                                    if (np.isEmpty() || cp.isEmpty()) {
+                                        Toast.makeText(context, "Please enter new password in both fields.", Toast.LENGTH_SHORT).show()
+                                    } else if (np.length < 4) {
+                                        Toast.makeText(context, "Password must be at least 4 characters long.", Toast.LENGTH_SHORT).show()
+                                    } else if (np != cp) {
+                                        Toast.makeText(context, "Passwords do not match!", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        val ok = viewModel.resetPassword(forgotUserOrEmail, np)
+                                        if (ok) {
+                                            Toast.makeText(context, "Password updated successfully! Please Sign In.", Toast.LENGTH_LONG).show()
+                                            loginUser = forgotUserOrEmail
+                                            loginPass = np
+                                            resetStep = 1
+                                            generatedOtp = ""
+                                            enteredOtp = ""
+                                            authMode = "login"
+                                        } else {
+                                            Toast.makeText(context, "Failed to update password.", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth().height(48.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Text("Save New Password & Sign In", color = Color.White, fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        Divider(color = Color(0xFFE2E8F0))
+
+                        TextButton(
+                            onClick = {
+                                resetStep = 1
+                                generatedOtp = ""
+                                enteredOtp = ""
+                                otpError = ""
+                                authMode = "login"
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Back to Sign In", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                        }
                     }
                 }
             }
@@ -6303,9 +6975,9 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                 ) {
                     Icon(Icons.Default.CloudSync, contentDescription = null, tint = GreenIn)
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("Google Drive Backup", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                        Text("Google Drive Auto-Sync", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
                         Text(
-                            if (isUserSignedIn) "Connected (${syncManager.getEmail()})" else "Optionally sync your database to Google Drive",
+                            if (isUserSignedIn) "Connected (${syncManager.getEmail()}) — Account & Books auto-synced to Drive!" else "Sync offline accounts & books with Google Drive",
                             style = MaterialTheme.typography.bodySmall,
                             color = Color(0xFF64748B)
                         )

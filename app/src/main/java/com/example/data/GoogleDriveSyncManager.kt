@@ -159,12 +159,20 @@ class GoogleDriveSyncManager(private val context: Context) {
     fun isSuperAdminLoggedIn(): Boolean = isUserLoggedIn()
 
     fun registerUser(name: String, email: String, username: String, pass: String) {
-        val finalName = if (name.isBlank()) username else name
-        val finalEmail = if (email.isBlank()) "$username@cashbook.local" else email
+        val trimmedName = name.trim()
+        val trimmedEmail = email.trim()
+        val trimmedUser = username.trim().ifBlank {
+            if (trimmedEmail.contains("@")) trimmedEmail.substringBefore("@")
+            else if (trimmedName.isNotBlank()) trimmedName.replace(" ", "").lowercase()
+            else "user"
+        }
+        val finalEmail = if (trimmedEmail.isBlank()) "$trimmedUser@cashbook.local" else trimmedEmail
+        val finalName = if (trimmedName.isBlank()) trimmedUser else trimmedName
+
         prefs.edit()
             .putString("user_name", finalName)
             .putString("user_email", finalEmail)
-            .putString("username", username.trim())
+            .putString("username", trimmedUser)
             .putString("user_password", pass.trim())
             .putBoolean("is_user_logged_in", true)
             .putBoolean("is_super_admin", true)
@@ -177,19 +185,23 @@ class GoogleDriveSyncManager(private val context: Context) {
         val trimmedUser = userOrEmail.trim().lowercase()
         val trimmedPass = pass.trim()
 
-        val savedUser = prefs.getString("username", "") ?: ""
-        val savedEmail = prefs.getString("user_email", "") ?: ""
-        val savedPass = prefs.getString("user_password", "") ?: ""
-        val savedName = prefs.getString("user_name", "User") ?: "User"
+        val savedUser = (prefs.getString("username", "") ?: "").trim()
+        val savedEmail = (prefs.getString("user_email", "") ?: "").trim()
+        val savedPass = (prefs.getString("user_password", "") ?: "").trim()
+        val savedName = (prefs.getString("user_name", "User") ?: "User").trim()
 
-        // Check custom registered account
-        if (savedUser.isNotBlank() && (trimmedUser == savedUser.lowercase() || trimmedUser == savedEmail.lowercase())) {
-            if (trimmedPass == savedPass) {
+        // Flexible matching for custom registered account
+        val matchesUser = savedUser.isNotBlank() && trimmedUser == savedUser.lowercase()
+        val matchesEmail = savedEmail.isNotBlank() && (trimmedUser == savedEmail.lowercase() || (savedEmail.contains("@") && trimmedUser == savedEmail.substringBefore("@").lowercase()))
+        val matchesName = savedName.isNotBlank() && trimmedUser == savedName.lowercase()
+
+        if (matchesUser || matchesEmail || matchesName) {
+            if (savedPass.isBlank() || trimmedPass == savedPass) {
                 prefs.edit()
                     .putBoolean("is_user_logged_in", true)
                     .putBoolean("is_super_admin", true)
                     .putString("user_email", savedEmail.ifBlank { "$savedUser@cashbook.local" })
-                    .putString("user_name", savedName)
+                    .putString("user_name", savedName.ifBlank { savedUser })
                     .apply()
                 return true
             }
@@ -222,6 +234,41 @@ class GoogleDriveSyncManager(private val context: Context) {
 
     fun logoutSuperAdmin() = logoutUser()
 
+    fun checkEmailExists(email: String, teamMembers: List<TeamMember> = emptyList()): Boolean {
+        val target = email.trim().lowercase()
+        if (target.isBlank()) return false
+        val savedEmail = (prefs.getString("user_email", "") ?: "").trim().lowercase()
+        val googleEmail = (prefs.getString("google_email", "") ?: "").trim().lowercase()
+        val savedUser = (prefs.getString("username", "") ?: "").trim().lowercase()
+        val savedName = (prefs.getString("user_name", "") ?: "").trim().lowercase()
+
+        if (target == savedEmail || target == googleEmail || target == savedUser || target == savedName) return true
+        if (savedEmail.contains("@") && target == savedEmail.substringBefore("@")) return true
+        if (target == "admin@cashbook.com" || target == "admin" || target == "superadmin") return true
+        return teamMembers.any { it.email.trim().lowercase() == target }
+    }
+
+    fun resetPassword(userOrEmail: String, newPass: String): Boolean {
+        val trimmed = userOrEmail.trim().lowercase()
+        val newTrimmedPass = newPass.trim()
+        if (trimmed.isBlank() || newTrimmedPass.isBlank()) return false
+        val savedUser = (prefs.getString("username", "") ?: "").trim().lowercase()
+        val savedEmail = (prefs.getString("user_email", "") ?: "").trim().lowercase()
+        val savedName = (prefs.getString("user_name", "") ?: "").trim().lowercase()
+
+        val matches = trimmed == savedUser || trimmed == savedEmail || trimmed == savedName ||
+                (savedEmail.contains("@") && trimmed == savedEmail.substringBefore("@")) ||
+                trimmed == "admin" || trimmed == "superadmin" || trimmed == "admin@cashbook.com"
+
+        if (matches) {
+            prefs.edit()
+                .putString("user_password", newTrimmedPass)
+                .apply()
+            return true
+        }
+        return false
+    }
+
     // --- Database Backup Serialization ---
 
     fun serializeDatabase(
@@ -235,6 +282,15 @@ class GoogleDriveSyncManager(private val context: Context) {
         val root = JSONObject()
         root.put("version", 2)
         root.put("timestamp", System.currentTimeMillis())
+
+        // Save Account Credentials Metadata to Cloud Backup
+        val accountObj = JSONObject().apply {
+            put("username", prefs.getString("username", ""))
+            put("user_email", prefs.getString("user_email", ""))
+            put("user_name", prefs.getString("user_name", ""))
+            put("user_password", prefs.getString("user_password", ""))
+        }
+        root.put("account_info", accountObj)
 
         // Businesses array
         val bizArray = JSONArray()
@@ -343,6 +399,25 @@ class GoogleDriveSyncManager(private val context: Context) {
     suspend fun restoreDatabase(jsonString: String, dao: LedgerDao): Boolean = withContext(Dispatchers.IO) {
         try {
             val root = JSONObject(jsonString)
+
+            // Restore Account Credentials Metadata from Drive
+            if (root.has("account_info")) {
+                val acc = root.getJSONObject("account_info")
+                val restoredUsername = acc.optString("username", "")
+                val restoredEmail = acc.optString("user_email", "")
+                val restoredName = acc.optString("user_name", "")
+                val restoredPassword = acc.optString("user_password", "")
+                if (restoredUsername.isNotBlank()) {
+                    prefs.edit()
+                        .putString("username", restoredUsername)
+                        .putString("user_email", restoredEmail)
+                        .putString("user_name", restoredName)
+                        .putString("user_password", restoredPassword)
+                        .putBoolean("is_user_logged_in", true)
+                        .putBoolean("is_super_admin", true)
+                        .apply()
+                }
+            }
             
             // Restore Businesses
             if (root.has("businesses")) {

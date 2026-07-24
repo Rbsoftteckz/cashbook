@@ -403,6 +403,14 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         _simulatedRole.value = "Boss"
     }
 
+    fun checkEmailExists(email: String): Boolean {
+        return syncManager.checkEmailExists(email, allTeamMembers.value)
+    }
+
+    fun resetPassword(userOrEmail: String, newPass: String): Boolean {
+        return syncManager.resetPassword(userOrEmail, newPass)
+    }
+
     // --- Transactions Actions ---
 
     fun addTransaction(amount: Double, type: String, category: String, paymentMethod: String, remarks: String, receiptUri: String? = null) {
