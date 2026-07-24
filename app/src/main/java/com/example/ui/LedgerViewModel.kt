@@ -223,8 +223,11 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        // Automatic Google Drive Sync on app launch
-        triggerCloudSync()
+        // Automatic Firebase Cloud & Google Drive Sync on app launch
+        viewModelScope.launch {
+            syncManager.fetchFirebaseAccountsCloud()
+            triggerCloudSync()
+        }
 
         // Observe network state to trigger auto-sync when back online
         try {
@@ -390,6 +393,10 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             val bizName = if (name.isNotBlank()) "${name.trim()}'s Business" else if (username.isNotBlank()) "${username.trim()}'s Business" else "My Business"
             createBusinessAndBook(bizName, "Main CashBook")
         }
+        viewModelScope.launch {
+            syncManager.registerUserCloud(name, email, username, pass)
+            triggerCloudSync()
+        }
     }
 
     fun loginSuperAdmin(user: String, pass: String): Boolean {
@@ -400,6 +407,10 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             if (businesses.value.isEmpty()) {
                 val bizName = if (user.isNotBlank()) "${user.trim()}'s Business" else "My Business"
                 createBusinessAndBook(bizName, "Main CashBook")
+            }
+            viewModelScope.launch {
+                syncManager.loginUserCloud(user, pass)
+                triggerCloudSync()
             }
         }
         return success
@@ -412,11 +423,20 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun checkEmailExists(email: String): Boolean {
+        viewModelScope.launch {
+            syncManager.fetchFirebaseAccountsCloud()
+        }
         return syncManager.checkEmailExists(email, allTeamMembers.value)
     }
 
     fun resetPassword(userOrEmail: String, newPass: String): Boolean {
-        return syncManager.resetPassword(userOrEmail, newPass)
+        val success = syncManager.resetPassword(userOrEmail, newPass)
+        if (success) {
+            viewModelScope.launch {
+                syncManager.resetPasswordCloud(userOrEmail, newPass)
+            }
+        }
+        return success
     }
 
     // --- Transactions Actions ---

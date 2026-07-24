@@ -29,6 +29,8 @@ class GoogleDriveSyncManager(private val context: Context) {
 
     private var detectedClientId: String = DEFAULT_CLIENT_ID
     private var detectedRedirectUri: String = "https://localhost"
+    private var firebaseProjectId: String = "gen-lang-client-0052637237"
+    private var firebaseApiKey: String = "AIzaSyDDLCoD8_9lyN1wJVR5sOTNHbKgCdLqZDs"
 
     init {
         try {
@@ -40,12 +42,14 @@ class GoogleDriveSyncManager(private val context: Context) {
             }
             val projectId = obj.optString("projectId", "")
             if (projectId.isNotBlank()) {
-                // Every Google OAuth Client ID automatically created by Firebase has 
-                // https://<projectId>.firebaseapp.com/__/auth/handler pre-registered as an Authorized Redirect URI
-                // in the Google Developer Console. Using this guarantees zero redirect_uri_mismatch errors.
+                firebaseProjectId = projectId
                 detectedRedirectUri = "https://$projectId.firebaseapp.com/__/auth/handler"
             } else {
                 detectedRedirectUri = "https://localhost"
+            }
+            val apiKey = obj.optString("apiKey", "")
+            if (apiKey.isNotBlank()) {
+                firebaseApiKey = apiKey
             }
         } catch (e: Exception) {
             Log.e("GoogleDriveSyncManager", "Failed to load firebase-applet-config.json from assets", e)
@@ -151,7 +155,116 @@ class GoogleDriveSyncManager(private val context: Context) {
         clearGoogleAuth()
     }
 
-    fun isUserSignedIn(): Boolean = hasGoogleDriveToken()
+    fun isUserSignedIn(): Boolean = isUserLoggedIn() || hasGoogleDriveToken()
+
+    // --- Firestore REST Helper Methods ---
+
+    private fun buildFirestoreFields(vararg pairs: Pair<String, Any>): JSONObject {
+        val fields = JSONObject()
+        for ((key, value) in pairs) {
+            val valObj = JSONObject()
+            when (value) {
+                is String -> valObj.put("stringValue", value)
+                is Long -> valObj.put("integerValue", value.toString())
+                is Int -> valObj.put("integerValue", value.toString())
+                is Boolean -> valObj.put("booleanValue", value)
+                else -> valObj.put("stringValue", value.toString())
+            }
+            fields.put(key, valObj)
+        }
+        val root = JSONObject()
+        root.put("fields", fields)
+        return root
+    }
+
+    private fun parseFirestoreUser(docObj: JSONObject): RegisteredAccount {
+        val fields = docObj.optJSONObject("fields") ?: JSONObject()
+        val name = fields.optJSONObject("name")?.optString("stringValue", "") ?: ""
+        val email = fields.optJSONObject("email")?.optString("stringValue", "") ?: ""
+        val username = fields.optJSONObject("username")?.optString("stringValue", "") ?: ""
+        val pass = fields.optJSONObject("pass")?.optString("stringValue", "") ?: ""
+        return RegisteredAccount(name, email, username, pass)
+    }
+
+    suspend fun fetchFirebaseAccountsCloud(): List<RegisteredAccount> = withContext(Dispatchers.IO) {
+        val list = mutableListOf<RegisteredAccount>()
+        try {
+            val url = "https://firestore.googleapis.com/v1/projects/$firebaseProjectId/databases/(default)/documents/users?key=$firebaseApiKey"
+            val request = Request.Builder().url(url).get().build()
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val body = response.body?.string()
+                    if (!body.isNullOrBlank()) {
+                        val root = JSONObject(body)
+                        val docs = root.optJSONArray("documents")
+                        if (docs != null) {
+                            for (i in 0 until docs.length()) {
+                                val acc = parseFirestoreUser(docs.getJSONObject(i))
+                                if (acc.email.isNotBlank() || acc.username.isNotBlank()) {
+                                    list.add(acc)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("GoogleDriveSyncManager", "Error fetching Firestore accounts", e)
+        }
+
+        if (list.isNotEmpty()) {
+            saveGlobalAccounts(list)
+        }
+        getGlobalAccounts()
+    }
+
+    suspend fun registerUserCloud(name: String, email: String, username: String, pass: String): Boolean = withContext(Dispatchers.IO) {
+        registerUser(name, email, username, pass)
+
+        val cleanEmail = email.trim().lowercase()
+        val cleanUser = username.trim().lowercase()
+        val docId = if (cleanEmail.contains("@")) {
+            "user_" + cleanEmail.replace(Regex("[^a-zA-Z0-9_]"), "_")
+        } else {
+            "user_" + cleanUser.replace(Regex("[^a-zA-Z0-9_]"), "_")
+        }
+
+        try {
+            val payload = buildFirestoreFields(
+                "name" to name.trim(),
+                "email" to cleanEmail,
+                "username" to cleanUser,
+                "pass" to pass.trim(),
+                "updatedAt" to System.currentTimeMillis()
+            )
+            val url = "https://firestore.googleapis.com/v1/projects/$firebaseProjectId/databases/(default)/documents/users/$docId?key=$firebaseApiKey"
+            val body = payload.toString().toRequestBody("application/json".toMediaType())
+            val request = Request.Builder().url(url).patch(body).build()
+            client.newCall(request).execute().use { response ->
+                Log.d("GoogleDriveSyncManager", "Firestore register account code: ${response.code}")
+            }
+        } catch (e: Exception) {
+            Log.e("GoogleDriveSyncManager", "Error registering user to Firestore", e)
+        }
+        true
+    }
+
+    suspend fun loginUserCloud(userOrEmail: String, pass: String): Boolean = withContext(Dispatchers.IO) {
+        fetchFirebaseAccountsCloud()
+        loginUser(userOrEmail, pass)
+    }
+
+    suspend fun resetPasswordCloud(userOrEmail: String, newPass: String): Boolean = withContext(Dispatchers.IO) {
+        val success = resetPassword(userOrEmail, newPass)
+        if (success) {
+            val target = userOrEmail.trim().lowercase()
+            val acc = getGlobalAccounts().find { it.email.lowercase() == target || it.username.lowercase() == target }
+            if (acc != null) {
+                registerUserCloud(acc.name, acc.email, acc.username, newPass)
+            }
+        }
+        success
+    }
 
     // --- Global Accounts Registry & Management ---
 
@@ -682,9 +795,73 @@ class GoogleDriveSyncManager(private val context: Context) {
         }
     }
 
-    // --- Google Drive REST API Communications ---
+    // --- Firebase Cloud & Google Drive REST Communications ---
 
-    suspend fun syncWithCloud(dao: LedgerDao): String = withContext(Dispatchers.IO) {
+    suspend fun syncWithFirebaseCloud(dao: LedgerDao): String = withContext(Dispatchers.IO) {
+        try {
+            val userEmail = (prefs.getString("user_email", "") ?: prefs.getString("username", "") ?: "default_user").trim().lowercase()
+            val docId = "cashbook_" + userEmail.replace(Regex("[^a-zA-Z0-9_]"), "_")
+
+            val localJson = serializeDatabaseFromDao(dao)
+            val localTimestamp = try { JSONObject(localJson).optLong("timestamp", System.currentTimeMillis()) } catch (e: Exception) { System.currentTimeMillis() }
+
+            val getUrl = "https://firestore.googleapis.com/v1/projects/$firebaseProjectId/databases/(default)/documents/cashbooks/$docId?key=$firebaseApiKey"
+            val getReq = Request.Builder().url(getUrl).get().build()
+
+            var cloudDataJson: String? = null
+            var cloudUpdatedAt: Long = 0L
+
+            client.newCall(getReq).execute().use { response ->
+                if (response.isSuccessful) {
+                    val bodyStr = response.body?.string()
+                    if (!bodyStr.isNullOrBlank()) {
+                        val root = JSONObject(bodyStr)
+                        val fields = root.optJSONObject("fields")
+                        if (fields != null) {
+                            cloudDataJson = fields.optJSONObject("dataJson")?.optString("stringValue", "")
+                            val updStr = fields.optJSONObject("updatedAt")?.optString("integerValue", "0") ?: "0"
+                            cloudUpdatedAt = updStr.toLongOrNull() ?: 0L
+                        }
+                    }
+                }
+            }
+
+            val localTxs = dao.getAllTransactionsList()
+            val localParties = dao.getAllPartiesList()
+            val isLocalEmpty = localTxs.isEmpty() && localParties.isEmpty()
+
+            if (!cloudDataJson.isNullOrBlank() && (isLocalEmpty || cloudUpdatedAt > localTimestamp)) {
+                restoreDatabase(cloudDataJson!!, dao)
+                dao.markAllTransactionsSynced()
+                dao.markAllPartyTransactionsSynced()
+                return@withContext "☁️ Synced & Restored from Firebase Cloud"
+            }
+
+            val payload = buildFirestoreFields(
+                "userEmail" to userEmail,
+                "dataJson" to localJson,
+                "updatedAt" to System.currentTimeMillis()
+            )
+            val patchUrl = "https://firestore.googleapis.com/v1/projects/$firebaseProjectId/databases/(default)/documents/cashbooks/$docId?key=$firebaseApiKey"
+            val body = payload.toString().toRequestBody("application/json".toMediaType())
+            val patchReq = Request.Builder().url(patchUrl).patch(body).build()
+
+            client.newCall(patchReq).execute().use { response ->
+                if (response.isSuccessful) {
+                    dao.markAllTransactionsSynced()
+                    dao.markAllPartyTransactionsSynced()
+                    return@withContext "☁️ Synced with Firebase Cloud"
+                } else {
+                    return@withContext "Firebase Cloud Sync status: ${response.code}"
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("GoogleDriveSyncManager", "Error in syncWithFirebaseCloud", e)
+            return@withContext "Firebase Cloud Sync: ${e.localizedMessage ?: "Offline"}"
+        }
+    }
+
+    suspend fun syncWithGoogleDrive(dao: LedgerDao): String = withContext(Dispatchers.IO) {
         val token = getAccessToken() ?: return@withContext "Offline (No Google Account connected)"
 
         try {
@@ -788,6 +965,25 @@ class GoogleDriveSyncManager(private val context: Context) {
             Log.e("GoogleDriveSyncManager", "Error synchronizing with Google Drive", e)
             return@withContext "Sync Failed: ${e.message}"
         }
+    }
+
+    suspend fun syncWithCloud(dao: LedgerDao): String = withContext(Dispatchers.IO) {
+        val fbMsg = try {
+            syncWithFirebaseCloud(dao)
+        } catch (e: Exception) {
+            "Firebase Cloud Error"
+        }
+
+        if (hasGoogleDriveToken()) {
+            val driveMsg = try {
+                syncWithGoogleDrive(dao)
+            } catch (e: Exception) {
+                "Drive Error"
+            }
+            return@withContext "$fbMsg | Drive: $driveMsg"
+        }
+
+        return@withContext fbMsg
     }
 
     private fun fetchUserProfile(token: String) {
