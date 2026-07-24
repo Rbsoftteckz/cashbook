@@ -12,6 +12,13 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+data class RegisteredAccount(
+    val name: String,
+    val email: String,
+    val username: String,
+    val pass: String
+)
+
 class GoogleDriveSyncManager(private val context: Context) {
 
     private val prefs = context.getSharedPreferences("google_drive_sync_prefs", Context.MODE_PRIVATE)
@@ -146,10 +153,56 @@ class GoogleDriveSyncManager(private val context: Context) {
 
     fun isUserSignedIn(): Boolean = hasGoogleDriveToken()
 
-    // --- User Account Registration & Authentication ---
+    // --- Global Accounts Registry & Management ---
+
+    fun getGlobalAccounts(): List<RegisteredAccount> {
+        val list = mutableListOf<RegisteredAccount>()
+        val jsonStr = prefs.getString("registered_accounts_json", "[]") ?: "[]"
+        try {
+            val arr = JSONArray(jsonStr)
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                list.add(
+                    RegisteredAccount(
+                        name = obj.optString("name", ""),
+                        email = obj.optString("email", ""),
+                        username = obj.optString("username", ""),
+                        pass = obj.optString("pass", "")
+                    )
+                )
+            }
+        } catch (e: Exception) {
+            Log.e("GoogleDriveSyncManager", "Error parsing registered_accounts_json", e)
+        }
+
+        // Include current active user from prefs if not already in list
+        val savedUser = (prefs.getString("username", "") ?: "").trim()
+        val savedEmail = (prefs.getString("user_email", "") ?: "").trim()
+        val savedName = (prefs.getString("user_name", "") ?: "").trim()
+        val savedPass = (prefs.getString("user_password", "") ?: "").trim()
+        if (savedEmail.isNotBlank() || savedUser.isNotBlank()) {
+            if (list.none { it.email.equals(savedEmail, ignoreCase = true) || it.username.equals(savedUser, ignoreCase = true) }) {
+                list.add(RegisteredAccount(savedName, savedEmail, savedUser, savedPass))
+            }
+        }
+        return list
+    }
+
+    fun saveGlobalAccounts(accounts: List<RegisteredAccount>) {
+        val arr = JSONArray()
+        accounts.forEach { acc ->
+            arr.put(JSONObject().apply {
+                put("name", acc.name)
+                put("email", acc.email)
+                put("username", acc.username)
+                put("pass", acc.pass)
+            })
+        }
+        prefs.edit().putString("registered_accounts_json", arr.toString()).apply()
+    }
+
     fun hasRegisteredAccount(): Boolean {
-        val username = prefs.getString("username", "")
-        return !username.isNullOrBlank()
+        return getGlobalAccounts().isNotEmpty() || !prefs.getString("username", "").isNullOrBlank()
     }
 
     fun isUserLoggedIn(): Boolean {
@@ -168,12 +221,26 @@ class GoogleDriveSyncManager(private val context: Context) {
         }
         val finalEmail = if (trimmedEmail.isBlank()) "$trimmedUser@cashbook.local" else trimmedEmail
         val finalName = if (trimmedName.isBlank()) trimmedUser else trimmedName
+        val finalPass = pass.trim()
+
+        val currentAccounts = getGlobalAccounts().toMutableList()
+        val existingIndex = currentAccounts.indexOfFirst {
+            it.email.equals(finalEmail, ignoreCase = true) ||
+            it.username.equals(trimmedUser, ignoreCase = true)
+        }
+        val newAccount = RegisteredAccount(finalName, finalEmail, trimmedUser, finalPass)
+        if (existingIndex >= 0) {
+            currentAccounts[existingIndex] = newAccount
+        } else {
+            currentAccounts.add(newAccount)
+        }
+        saveGlobalAccounts(currentAccounts)
 
         prefs.edit()
             .putString("user_name", finalName)
             .putString("user_email", finalEmail)
             .putString("username", trimmedUser)
-            .putString("user_password", pass.trim())
+            .putString("user_password", finalPass)
             .putBoolean("is_user_logged_in", true)
             .putBoolean("is_super_admin", true)
             .apply()
@@ -185,37 +252,47 @@ class GoogleDriveSyncManager(private val context: Context) {
         val trimmedUser = userOrEmail.trim().lowercase()
         val trimmedPass = pass.trim()
 
-        val savedUser = (prefs.getString("username", "") ?: "").trim()
-        val savedEmail = (prefs.getString("user_email", "") ?: "").trim()
-        val savedPass = (prefs.getString("user_password", "") ?: "").trim()
-        val savedName = (prefs.getString("user_name", "User") ?: "User").trim()
+        if (trimmedUser.isBlank()) return false
 
-        // Flexible matching for custom registered account
-        val matchesUser = savedUser.isNotBlank() && trimmedUser == savedUser.lowercase()
-        val matchesEmail = savedEmail.isNotBlank() && (trimmedUser == savedEmail.lowercase() || (savedEmail.contains("@") && trimmedUser == savedEmail.substringBefore("@").lowercase()))
-        val matchesName = savedName.isNotBlank() && trimmedUser == savedName.lowercase()
+        val globalAccounts = getGlobalAccounts()
+        val matchedAccount = globalAccounts.firstOrNull { acc ->
+            val accEmail = acc.email.trim().lowercase()
+            val accUser = acc.username.trim().lowercase()
+            val accName = acc.name.trim().lowercase()
 
-        if (matchesUser || matchesEmail || matchesName) {
-            if (savedPass.isBlank() || trimmedPass == savedPass) {
+            trimmedUser == accEmail ||
+            (accEmail.contains("@") && trimmedUser == accEmail.substringBefore("@")) ||
+            trimmedUser == accUser ||
+            trimmedUser == accName
+        }
+
+        if (matchedAccount != null) {
+            if (matchedAccount.pass.isBlank() || trimmedPass == matchedAccount.pass.trim()) {
                 prefs.edit()
                     .putBoolean("is_user_logged_in", true)
                     .putBoolean("is_super_admin", true)
-                    .putString("user_email", savedEmail.ifBlank { "$savedUser@cashbook.local" })
-                    .putString("user_name", savedName.ifBlank { savedUser })
+                    .putString("user_email", matchedAccount.email)
+                    .putString("username", matchedAccount.username)
+                    .putString("user_name", matchedAccount.name)
+                    .putString("user_password", matchedAccount.pass)
                     .apply()
                 return true
             }
+            return false
         }
 
-        // Fallback static account if no custom user exists yet or superadmin login
+        // Fallback static superadmin account
         if ((trimmedUser == "superadmin" || trimmedUser == "admin@cashbook.com" || trimmedUser == "admin") &&
             (trimmedPass == "superadmin123" || trimmedPass == "admin123")) {
-            prefs.edit()
-                .putBoolean("is_user_logged_in", true)
-                .putBoolean("is_super_admin", true)
-                .putString("user_email", "admin@cashbook.com")
-                .putString("user_name", "Admin")
-                .apply()
+            registerUser("Admin", "admin@cashbook.com", "admin", "superadmin123")
+            return true
+        }
+
+        // Fresh account auto-registration if no global accounts exist yet
+        if (globalAccounts.isEmpty() && userOrEmail.trim().isNotBlank() && pass.trim().isNotBlank()) {
+            val autoName = if (userOrEmail.contains("@")) userOrEmail.substringBefore("@").replaceFirstChar { it.uppercase() } else userOrEmail.trim()
+            val autoEmail = if (userOrEmail.contains("@")) userOrEmail.trim() else "${userOrEmail.trim()}@cashbook.local"
+            registerUser(autoName, autoEmail, userOrEmail.trim(), pass.trim())
             return true
         }
 
@@ -237,35 +314,77 @@ class GoogleDriveSyncManager(private val context: Context) {
     fun checkEmailExists(email: String, teamMembers: List<TeamMember> = emptyList()): Boolean {
         val target = email.trim().lowercase()
         if (target.isBlank()) return false
-        val savedEmail = (prefs.getString("user_email", "") ?: "").trim().lowercase()
-        val googleEmail = (prefs.getString("google_email", "") ?: "").trim().lowercase()
-        val savedUser = (prefs.getString("username", "") ?: "").trim().lowercase()
-        val savedName = (prefs.getString("user_name", "") ?: "").trim().lowercase()
 
-        if (target == savedEmail || target == googleEmail || target == savedUser || target == savedName) return true
-        if (savedEmail.contains("@") && target == savedEmail.substringBefore("@")) return true
+        // 1. Check Global Registered Accounts list
+        val globalAccounts = getGlobalAccounts()
+        val inGlobal = globalAccounts.any { acc ->
+            val accEmail = acc.email.trim().lowercase()
+            val accUser = acc.username.trim().lowercase()
+            val accName = acc.name.trim().lowercase()
+
+            target == accEmail ||
+            (accEmail.contains("@") && target == accEmail.substringBefore("@")) ||
+            target == accUser ||
+            target == accName
+        }
+        if (inGlobal) return true
+
+        // 2. Check Google authenticated email
+        val googleEmail = (prefs.getString("google_email", "") ?: "").trim().lowercase()
+        if (googleEmail.isNotBlank() && target == googleEmail) return true
+
+        // 3. Static admin identifiers
         if (target == "admin@cashbook.com" || target == "admin" || target == "superadmin") return true
-        return teamMembers.any { it.email.trim().lowercase() == target }
+
+        // 4. Team members list
+        return teamMembers.any {
+            val tmEmail = it.email.trim().lowercase()
+            target == tmEmail || (tmEmail.contains("@") && target == tmEmail.substringBefore("@"))
+        }
     }
 
     fun resetPassword(userOrEmail: String, newPass: String): Boolean {
         val trimmed = userOrEmail.trim().lowercase()
         val newTrimmedPass = newPass.trim()
         if (trimmed.isBlank() || newTrimmedPass.isBlank()) return false
-        val savedUser = (prefs.getString("username", "") ?: "").trim().lowercase()
-        val savedEmail = (prefs.getString("user_email", "") ?: "").trim().lowercase()
-        val savedName = (prefs.getString("user_name", "") ?: "").trim().lowercase()
 
-        val matches = trimmed == savedUser || trimmed == savedEmail || trimmed == savedName ||
-                (savedEmail.contains("@") && trimmed == savedEmail.substringBefore("@")) ||
-                trimmed == "admin" || trimmed == "superadmin" || trimmed == "admin@cashbook.com"
+        val globalAccounts = getGlobalAccounts().toMutableList()
+        val index = globalAccounts.indexOfFirst { acc ->
+            val accEmail = acc.email.trim().lowercase()
+            val accUser = acc.username.trim().lowercase()
+            val accName = acc.name.trim().lowercase()
 
-        if (matches) {
-            prefs.edit()
-                .putString("user_password", newTrimmedPass)
-                .apply()
+            trimmed == accEmail ||
+            (accEmail.contains("@") && trimmed == accEmail.substringBefore("@")) ||
+            trimmed == accUser ||
+            trimmed == accName ||
+            trimmed == "admin" || trimmed == "superadmin" || trimmed == "admin@cashbook.com"
+        }
+
+        if (index >= 0) {
+            val existing = globalAccounts[index]
+            val updated = RegisteredAccount(existing.name, existing.email, existing.username, newTrimmedPass)
+            globalAccounts[index] = updated
+            saveGlobalAccounts(globalAccounts)
+
+            val currentEmail = (prefs.getString("user_email", "") ?: "").trim().lowercase()
+            val currentUsername = (prefs.getString("username", "") ?: "").trim().lowercase()
+            if (trimmed == currentEmail || trimmed == currentUsername || existing.email.lowercase() == currentEmail) {
+                prefs.edit().putString("user_password", newTrimmedPass).apply()
+            }
             return true
         }
+
+        val savedUser = (prefs.getString("username", "") ?: "").trim().lowercase()
+        val savedEmail = (prefs.getString("user_email", "") ?: "").trim().lowercase()
+        if (trimmed == savedUser || trimmed == savedEmail || trimmed == "admin" || trimmed == "superadmin" || trimmed == "admin@cashbook.com") {
+            val finalEmail = if (savedEmail.isNotBlank()) savedEmail else if (trimmed.contains("@")) trimmed else "$trimmed@cashbook.local"
+            val finalName = if (trimmed.contains("@")) trimmed.substringBefore("@").replaceFirstChar { it.uppercase() } else trimmed.replaceFirstChar { it.uppercase() }
+            val finalUser = if (savedUser.isNotBlank()) savedUser else trimmed
+            registerUser(finalName, finalEmail, finalUser, newTrimmedPass)
+            return true
+        }
+
         return false
     }
 
@@ -291,6 +410,17 @@ class GoogleDriveSyncManager(private val context: Context) {
             put("user_password", prefs.getString("user_password", ""))
         }
         root.put("account_info", accountObj)
+
+        val globalAccountsArr = JSONArray()
+        getGlobalAccounts().forEach { acc ->
+            globalAccountsArr.put(JSONObject().apply {
+                put("name", acc.name)
+                put("email", acc.email)
+                put("username", acc.username)
+                put("pass", acc.pass)
+            })
+        }
+        root.put("global_accounts", globalAccountsArr)
 
         // Businesses array
         val bizArray = JSONArray()
@@ -416,6 +546,25 @@ class GoogleDriveSyncManager(private val context: Context) {
                         .putBoolean("is_user_logged_in", true)
                         .putBoolean("is_super_admin", true)
                         .apply()
+                }
+            }
+
+            if (root.has("global_accounts")) {
+                val accArr = root.getJSONArray("global_accounts")
+                val restoredList = mutableListOf<RegisteredAccount>()
+                for (i in 0 until accArr.length()) {
+                    val obj = accArr.getJSONObject(i)
+                    restoredList.add(
+                        RegisteredAccount(
+                            name = obj.optString("name", ""),
+                            email = obj.optString("email", ""),
+                            username = obj.optString("username", ""),
+                            pass = obj.optString("pass", "")
+                        )
+                    )
+                }
+                if (restoredList.isNotEmpty()) {
+                    saveGlobalAccounts(restoredList)
                 }
             }
             

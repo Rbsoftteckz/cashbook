@@ -185,9 +185,14 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
 
     if (isAppLockEnabled && !isAppUnlocked) {
         AppSecureLockScreen(viewModel = viewModel, onUnlockSuccess = {})
-    } else if (businesses.isEmpty() || !isSuperAdmin) {
+    } else if (!isSuperAdmin) {
         OnboardingSetupScreen(viewModel = viewModel)
     } else {
+        if (businesses.isEmpty()) {
+            LaunchedEffect(Unit) {
+                viewModel.createBusinessAndBook("My Business", "Main CashBook")
+            }
+        }
         ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
@@ -6412,9 +6417,14 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                                     val success = viewModel.loginSuperAdmin(u, p)
                                     if (success) {
                                         viewModel.triggerCloudSync()
-                                        Toast.makeText(context, "Logged in successfully!", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "Welcome! Signed in successfully.", Toast.LENGTH_SHORT).show()
                                     } else {
-                                        Toast.makeText(context, "Invalid Username or Password!", Toast.LENGTH_LONG).show()
+                                        val emailExists = viewModel.checkEmailExists(u)
+                                        if (emailExists) {
+                                            Toast.makeText(context, "Incorrect password for '$u'. Tap 'Forgot Password?' to reset.", Toast.LENGTH_LONG).show()
+                                        } else {
+                                            Toast.makeText(context, "Account '$u' not found. Please tap 'Create Account' to register.", Toast.LENGTH_LONG).show()
+                                        }
                                     }
                                 }
                             },
@@ -6539,7 +6549,7 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                                         ) {
                                             Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFD97706), modifier = Modifier.size(18.dp))
                                             Text(
-                                                "Account detected for this email! Sign In or Reset Password.",
+                                                "This email already exists! Please Sign In or Reset Password.",
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = Color(0xFF92400E),
                                                 fontWeight = FontWeight.SemiBold
@@ -6924,13 +6934,11 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                                     } else {
                                         val ok = viewModel.resetPassword(forgotUserOrEmail, np)
                                         if (ok) {
-                                            Toast.makeText(context, "Password updated successfully! Please Sign In.", Toast.LENGTH_LONG).show()
-                                            loginUser = forgotUserOrEmail
-                                            loginPass = np
+                                            Toast.makeText(context, "Password updated successfully! Welcome back.", Toast.LENGTH_LONG).show()
+                                            viewModel.loginSuperAdmin(forgotUserOrEmail, np)
                                             resetStep = 1
                                             generatedOtp = ""
                                             enteredOtp = ""
-                                            authMode = "login"
                                         } else {
                                             Toast.makeText(context, "Failed to update password.", Toast.LENGTH_SHORT).show()
                                         }

@@ -386,6 +386,10 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         syncManager.registerCustomUser(name, email, username, pass)
         isSuperAdmin.value = true
         _simulatedRole.value = "Boss"
+        if (businesses.value.isEmpty()) {
+            val bizName = if (name.isNotBlank()) "${name.trim()}'s Business" else if (username.isNotBlank()) "${username.trim()}'s Business" else "My Business"
+            createBusinessAndBook(bizName, "Main CashBook")
+        }
     }
 
     fun loginSuperAdmin(user: String, pass: String): Boolean {
@@ -393,6 +397,10 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         if (success) {
             isSuperAdmin.value = true
             _simulatedRole.value = "Boss"
+            if (businesses.value.isEmpty()) {
+                val bizName = if (user.isNotBlank()) "${user.trim()}'s Business" else "My Business"
+                createBusinessAndBook(bizName, "Main CashBook")
+            }
         }
         return success
     }
