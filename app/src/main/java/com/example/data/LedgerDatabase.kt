@@ -18,6 +18,7 @@ data class Book(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val businessId: Int = 1, // Links books to specific business
     val name: String,
+    val phone: String = "",
     val createdAt: Long = System.currentTimeMillis()
 )
 
@@ -201,7 +202,7 @@ interface LedgerDao {
 
 @Database(
     entities = [Business::class, Book::class, Transaction::class, Party::class, PartyTransaction::class, TeamMember::class],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class LedgerDatabase : RoomDatabase() {

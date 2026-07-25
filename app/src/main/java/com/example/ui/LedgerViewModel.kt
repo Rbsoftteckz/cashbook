@@ -281,6 +281,10 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                             _activeBook.value = currentBooksList.first()
                         }
                     }
+                } else if (syncManager.isUserSignedIn()) {
+                    val email = syncManager.getEmail()
+                    val bizName = if (email.isNotBlank()) "${email.substringBefore("@")}'s Business" else "My Business"
+                    createBusinessAndBook(bizName, "Main CashBook")
                 }
             } catch (e: Exception) {
                 _syncStatus.value = "Sync Interrupted: ${e.message}"
@@ -306,8 +310,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             val id = repository.insertBusiness(Business(name = name))
             val newBiz = Business(id = id.toInt(), name = name)
             _activeBusiness.value = newBiz
-            val defaultBookId = repository.insertBook(Book(businessId = newBiz.id, name = "Daily Cashbook"))
-            _activeBook.value = Book(id = defaultBookId.toInt(), businessId = newBiz.id, name = "Daily Cashbook")
+            _activeBook.value = null
             triggerCloudSync()
         }
     }
@@ -322,13 +325,17 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun createBusinessAndBook(businessName: String, bookName: String) {
+    fun createBusinessAndBook(businessName: String, bookName: String = "") {
         viewModelScope.launch {
             val id = repository.insertBusiness(Business(name = businessName))
             val newBiz = Business(id = id.toInt(), name = businessName)
             _activeBusiness.value = newBiz
-            val bookId = repository.insertBook(Book(businessId = newBiz.id, name = bookName))
-            _activeBook.value = Book(id = bookId.toInt(), businessId = newBiz.id, name = bookName)
+            if (bookName.isNotBlank()) {
+                val bookId = repository.insertBook(Book(businessId = newBiz.id, name = bookName))
+                _activeBook.value = Book(id = bookId.toInt(), businessId = newBiz.id, name = bookName)
+            } else {
+                _activeBook.value = null
+            }
             triggerCloudSync()
         }
     }
@@ -352,11 +359,11 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         _activeBook.value = book
     }
 
-    fun createBook(name: String) {
+    fun createBook(name: String, phone: String = "") {
         val bizId = _activeBusiness.value?.id ?: 1
         viewModelScope.launch {
-            val id = repository.insertBook(Book(businessId = bizId, name = name))
-            val newBook = Book(id = id.toInt(), businessId = bizId, name = name)
+            val id = repository.insertBook(Book(businessId = bizId, name = name, phone = phone))
+            val newBook = Book(id = id.toInt(), businessId = bizId, name = name, phone = phone)
             _activeBook.value = newBook
             triggerCloudSync()
         }
@@ -389,13 +396,13 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         syncManager.registerCustomUser(name, email, username, pass)
         isSuperAdmin.value = true
         _simulatedRole.value = "Boss"
-        if (businesses.value.isEmpty()) {
-            val bizName = if (name.isNotBlank()) "${name.trim()}'s Business" else if (username.isNotBlank()) "${username.trim()}'s Business" else "My Business"
-            createBusinessAndBook(bizName, "Main CashBook")
-        }
         viewModelScope.launch {
             syncManager.registerUserCloud(name, email, username, pass)
             triggerCloudSync()
+            if (businesses.value.isEmpty()) {
+                val bizName = if (name.isNotBlank()) "${name.trim()}'s Business" else if (username.isNotBlank()) "${username.trim()}'s Business" else "My Business"
+                createBusinessAndBook(bizName, "Main CashBook")
+            }
         }
     }
 
@@ -404,13 +411,13 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         if (success) {
             isSuperAdmin.value = true
             _simulatedRole.value = "Boss"
-            if (businesses.value.isEmpty()) {
-                val bizName = if (user.isNotBlank()) "${user.trim()}'s Business" else "My Business"
-                createBusinessAndBook(bizName, "Main CashBook")
-            }
             viewModelScope.launch {
                 syncManager.loginUserCloud(user, pass)
                 triggerCloudSync()
+                if (businesses.value.isEmpty()) {
+                    val bizName = if (user.isNotBlank()) "${user.trim()}'s Business" else "My Business"
+                    createBusinessAndBook(bizName, "Main CashBook")
+                }
             }
         }
         return success
@@ -441,7 +448,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
     // --- Transactions Actions ---
 
-    fun addTransaction(amount: Double, type: String, category: String, paymentMethod: String, remarks: String, receiptUri: String? = null) {
+    fun addTransaction(amount: Double, type: String, category: String, paymentMethod: String, remarks: String, receiptUri: String? = null, timestamp: Long = System.currentTimeMillis()) {
         val bookId = _activeBook.value?.id ?: return
         viewModelScope.launch {
             repository.insertTransaction(
@@ -452,6 +459,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                     category = category,
                     paymentMethod = paymentMethod,
                     remarks = remarks,
+                    timestamp = timestamp,
                     isSynced = syncManager.isUserSignedIn(),
                     receiptUri = receiptUri
                 )

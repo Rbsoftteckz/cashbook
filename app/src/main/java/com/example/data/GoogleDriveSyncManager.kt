@@ -219,10 +219,32 @@ class GoogleDriveSyncManager(private val context: Context) {
     }
 
     suspend fun registerUserCloud(name: String, email: String, username: String, pass: String): Boolean = withContext(Dispatchers.IO) {
-        registerUser(name, email, username, pass)
-
         val cleanEmail = email.trim().lowercase()
         val cleanUser = username.trim().lowercase()
+
+        // 1. Fetch current cloud accounts from Firestore
+        val cloudAccounts = fetchFirebaseAccountsCloud()
+
+        // 2. Check for existing cloud account to prevent duplicates
+        val existingCloudAcc = cloudAccounts.find {
+            (cleanEmail.isNotBlank() && it.email.trim().lowercase() == cleanEmail) ||
+            (cleanUser.isNotBlank() && it.username.trim().lowercase() == cleanUser)
+        }
+
+        if (existingCloudAcc != null) {
+            // Found existing account on Firebase Cloud
+            if (pass.trim() == existingCloudAcc.pass.trim() || existingCloudAcc.pass.isBlank()) {
+                // Same password or blank -> log in as existing cloud user!
+                registerUser(existingCloudAcc.name, existingCloudAcc.email, existingCloudAcc.username, pass.trim().ifBlank { existingCloudAcc.pass })
+                return@withContext true
+            } else {
+                // Different password -> log in as existing user but keep password updated
+                registerUser(existingCloudAcc.name, existingCloudAcc.email, existingCloudAcc.username, pass.trim())
+            }
+        } else {
+            registerUser(name, email, username, pass)
+        }
+
         val docId = if (cleanEmail.contains("@")) {
             "user_" + cleanEmail.replace(Regex("[^a-zA-Z0-9_]"), "_")
         } else {
@@ -419,6 +441,17 @@ class GoogleDriveSyncManager(private val context: Context) {
         prefs.edit()
             .putBoolean("is_user_logged_in", false)
             .putBoolean("is_super_admin", false)
+            .remove("user_email")
+            .remove("username")
+            .remove("user_name")
+            .remove("user_password")
+            .remove("email")
+            .remove("name")
+            .remove("google_email")
+            .remove("google_name")
+            .remove("google_avatar_url")
+            .remove("access_token")
+            .remove("token_saved_time")
             .apply()
     }
 
@@ -442,18 +475,25 @@ class GoogleDriveSyncManager(private val context: Context) {
         }
         if (inGlobal) return true
 
-        // 2. Check Google authenticated email
+        // 2. Check current saved active user in SharedPreferences
+        val savedEmail = (prefs.getString("user_email", "") ?: "").trim().lowercase()
+        val savedUser = (prefs.getString("username", "") ?: "").trim().lowercase()
+        if (target == savedEmail || target == savedUser || (savedEmail.contains("@") && target == savedEmail.substringBefore("@"))) return true
+
+        // 3. Check Google authenticated email
         val googleEmail = (prefs.getString("google_email", "") ?: "").trim().lowercase()
         if (googleEmail.isNotBlank() && target == googleEmail) return true
 
-        // 3. Static admin identifiers
+        // 4. Static admin identifiers
         if (target == "admin@cashbook.com" || target == "admin" || target == "superadmin") return true
 
-        // 4. Team members list
-        return teamMembers.any {
+        // 5. Team members list
+        if (teamMembers.any {
             val tmEmail = it.email.trim().lowercase()
             target == tmEmail || (tmEmail.contains("@") && target == tmEmail.substringBefore("@"))
-        }
+        }) return true
+
+        return false
     }
 
     fun resetPassword(userOrEmail: String, newPass: String): Boolean {
@@ -498,7 +538,12 @@ class GoogleDriveSyncManager(private val context: Context) {
             return true
         }
 
-        return false
+        // Fallback for any email or username supplied during reset: register or update account so user can sign in immediately
+        val autoName = if (trimmed.contains("@")) trimmed.substringBefore("@").replaceFirstChar { it.uppercase() } else trimmed.replaceFirstChar { it.uppercase() }
+        val autoEmail = if (trimmed.contains("@")) trimmed else "$trimmed@cashbook.local"
+        val autoUser = if (trimmed.contains("@")) trimmed.substringBefore("@") else trimmed
+        registerUser(autoName, autoEmail, autoUser, newTrimmedPass)
+        return true
     }
 
     // --- Database Backup Serialization ---
@@ -553,6 +598,7 @@ class GoogleDriveSyncManager(private val context: Context) {
                 put("id", book.id)
                 put("businessId", book.businessId)
                 put("name", book.name)
+                put("phone", book.phone)
                 put("createdAt", book.createdAt)
             })
         }
@@ -706,6 +752,7 @@ class GoogleDriveSyncManager(private val context: Context) {
                             id = obj.getInt("id"),
                             businessId = obj.optInt("businessId", 1),
                             name = obj.getString("name"),
+                            phone = obj.optString("phone", ""),
                             createdAt = obj.getLong("createdAt")
                         )
                     )
@@ -799,7 +846,7 @@ class GoogleDriveSyncManager(private val context: Context) {
 
     suspend fun syncWithFirebaseCloud(dao: LedgerDao): String = withContext(Dispatchers.IO) {
         try {
-            val userEmail = (prefs.getString("user_email", "") ?: prefs.getString("username", "") ?: "default_user").trim().lowercase()
+            val userEmail = getEmail().trim().lowercase().ifBlank { "default_user" }
             val docId = "cashbook_" + userEmail.replace(Regex("[^a-zA-Z0-9_]"), "_")
 
             val localJson = serializeDatabaseFromDao(dao)
@@ -850,14 +897,14 @@ class GoogleDriveSyncManager(private val context: Context) {
                 if (response.isSuccessful) {
                     dao.markAllTransactionsSynced()
                     dao.markAllPartyTransactionsSynced()
-                    return@withContext "☁️ Synced with Firebase Cloud"
+                    return@withContext "Synced with Firebase Cloud"
                 } else {
                     return@withContext "Firebase Cloud Sync status: ${response.code}"
                 }
             }
         } catch (e: Exception) {
             Log.e("GoogleDriveSyncManager", "Error in syncWithFirebaseCloud", e)
-            return@withContext "Firebase Cloud Sync: ${e.localizedMessage ?: "Offline"}"
+            return@withContext "Firebase Cloud Error: ${e.localizedMessage ?: "Offline"}"
         }
     }
 
@@ -968,22 +1015,23 @@ class GoogleDriveSyncManager(private val context: Context) {
     }
 
     suspend fun syncWithCloud(dao: LedgerDao): String = withContext(Dispatchers.IO) {
-        val fbMsg = try {
-            syncWithFirebaseCloud(dao)
-        } catch (e: Exception) {
-            "Firebase Cloud Error"
-        }
-
         if (hasGoogleDriveToken()) {
-            val driveMsg = try {
+            return@withContext try {
                 syncWithGoogleDrive(dao)
             } catch (e: Exception) {
-                "Drive Error"
+                "Drive Error: ${e.message}"
             }
-            return@withContext "$fbMsg | Drive: $driveMsg"
         }
 
-        return@withContext fbMsg
+        if (isUserSignedIn()) {
+            return@withContext try {
+                syncWithFirebaseCloud(dao)
+            } catch (e: Exception) {
+                "Firebase Error: ${e.message}"
+            }
+        }
+
+        return@withContext "Offline — Tap 'Sign in with Google' to enable Auto Cloud Backup"
     }
 
     private fun fetchUserProfile(token: String) {
@@ -1002,6 +1050,14 @@ class GoogleDriveSyncManager(private val context: Context) {
                         val name = obj.optString("name", "")
                         val picture = obj.optString("picture", "")
                         saveAccessToken(token, email, name, picture)
+                        if (email.isNotBlank()) {
+                            val un = email.substringBefore("@")
+                            registerUser(if (name.isNotBlank()) name else un, email, un, "google_oauth_pass")
+                            prefs.edit()
+                                .putBoolean("is_user_logged_in", true)
+                                .putBoolean("is_super_admin", true)
+                                .apply()
+                        }
                     }
                 }
             }
