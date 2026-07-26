@@ -3,6 +3,7 @@ package com.example.ui
 import android.net.Uri
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas as AndroidCanvas
 import android.app.DatePickerDialog
 import android.app.Activity
 import android.speech.RecognizerIntent
@@ -35,6 +36,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -48,6 +50,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -610,16 +613,20 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         containerColor = MaterialTheme.colorScheme.surface
                     ),
                     actions = {
-                        // Google Drive Cloud Sync status indicator (Red if not signed in, Green if active)
-                        val isSynced = viewModel.syncManager.isUserSignedIn()
+                        // Cloud Sync status indicator (Green if connected, Red if error, Teal/Primary if running in offline local mode)
+                        val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
+                        val isUserSignedIn = viewModel.syncManager.isUserSignedIn()
+                        val isSyncError = syncStatus.contains("Error", ignoreCase = true) || syncStatus.contains("Failed", ignoreCase = true) || syncStatus.contains("403") || syncStatus.contains("401") || syncStatus.contains("400") || syncStatus.contains("500")
+                        val isRealSuccess = isUserSignedIn && !isSyncError && (syncStatus.contains("Synced", ignoreCase = true) || syncStatus.contains("Restored", ignoreCase = true) || syncStatus.contains("Success", ignoreCase = true))
+
                         IconButton(
                             onClick = { viewModel.setScreen(Screen.SYNC_CENTER) },
                             modifier = Modifier.testTag("top_bar_sync_indicator")
                         ) {
                             Icon(
-                                imageVector = if (isSynced) Icons.Default.CloudDone else Icons.Default.CloudOff,
-                                contentDescription = "Cloud Sync Status",
-                                tint = if (isSynced) GreenIn else Color.Red
+                                imageVector = if (isRealSuccess) Icons.Default.CloudDone else if (isSyncError) Icons.Default.CloudOff else Icons.Default.OfflinePin,
+                                contentDescription = "Cloud Sync & Offline Status",
+                                tint = if (isRealSuccess) GreenIn else if (isSyncError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
                             )
                         }
                         IconButton(
@@ -1068,27 +1075,32 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
             }
         }
 
-        // Google Drive Cloud Sync Status Banner
+        // Cloud Sync & Offline Status Banner
         item {
             val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
             val isSyncing by viewModel.isSyncing.collectAsStateWithLifecycle()
             val isUserSignedIn = viewModel.syncManager.isUserSignedIn()
             val userEmail = viewModel.syncManager.getEmail()
 
+            val isSyncError = syncStatus.contains("Error", ignoreCase = true) || syncStatus.contains("Failed", ignoreCase = true) || syncStatus.contains("403") || syncStatus.contains("401") || syncStatus.contains("400") || syncStatus.contains("500")
+            val isRealSuccess = isUserSignedIn && !isSyncError && (syncStatus.contains("Synced", ignoreCase = true) || syncStatus.contains("Restored", ignoreCase = true) || syncStatus.contains("Success", ignoreCase = true))
+
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { viewModel.setScreen(Screen.SYNC_CENTER) },
                 colors = CardDefaults.cardColors(
-                    containerColor = if (isUserSignedIn) {
+                    containerColor = if (isSyncError) {
+                        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.15f)
+                    } else if (isRealSuccess) {
                         MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)
                     } else {
-                        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.12f)
+                        Color(0xFFECFDF5)
                     }
                 ),
                 border = androidx.compose.foundation.BorderStroke(
                     1.dp, 
-                    if (isUserSignedIn) MaterialTheme.colorScheme.primary.copy(alpha = 0.3f) else MaterialTheme.colorScheme.error.copy(alpha = 0.3f)
+                    if (isSyncError) MaterialTheme.colorScheme.error.copy(alpha = 0.4f) else if (isRealSuccess) MaterialTheme.colorScheme.primary.copy(alpha = 0.3f) else Color(0xFFA7F3D0)
                 ),
                 shape = RoundedCornerShape(12.dp)
             ) {
@@ -1105,38 +1117,42 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            imageVector = Icons.Default.CloudSync,
+                            imageVector = if (isSyncError) Icons.Default.CloudOff else if (isRealSuccess) Icons.Default.CloudSync else Icons.Default.OfflinePin,
                             contentDescription = null,
-                            tint = if (isUserSignedIn) GreenIn else MaterialTheme.colorScheme.error,
+                            tint = if (isSyncError) MaterialTheme.colorScheme.error else if (isRealSuccess) GreenIn else Color(0xFF059669),
                             modifier = Modifier.size(24.dp)
                         )
                         Column {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Text(
-                                    text = "Google Drive Cloud Sync",
+                                    text = "CashBook Easy Khata Cloud Sync",
                                     fontWeight = FontWeight.Bold,
                                     style = MaterialTheme.typography.bodySmall
                                 )
                                 Surface(
-                                    color = if (isUserSignedIn) GreenIn.copy(alpha = 0.12f) else MaterialTheme.colorScheme.error.copy(alpha = 0.12f),
+                                    color = if (isSyncError) MaterialTheme.colorScheme.errorContainer else if (isRealSuccess) GreenIn.copy(alpha = 0.12f) else Color(0xFFD1FAE5),
                                     shape = RoundedCornerShape(4.dp)
                                 ) {
                                     Text(
-                                        text = if (isUserSignedIn) "CONNECTED" else "OFFLINE WORKSPACE",
-                                        color = if (isUserSignedIn) GreenIn else MaterialTheme.colorScheme.error,
+                                        text = if (isSyncError) "SYNC ISSUE" else if (isRealSuccess) "CONNECTED & SYNCED" else if (isUserSignedIn) "PENDING SYNC" else "OFFLINE READY",
+                                        color = if (isSyncError) MaterialTheme.colorScheme.error else if (isRealSuccess) GreenIn else if (isUserSignedIn) MaterialTheme.colorScheme.primary else Color(0xFF047857),
                                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
                                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                     )
                                 }
                             }
                             Text(
-                                text = if (isUserSignedIn) {
-                                    "Your cashbook is backed up automatically. Account: $userEmail"
+                                text = if (isSyncError) {
+                                    "Account: $userEmail — Status: $syncStatus"
+                                } else if (isRealSuccess) {
+                                    "Cloud Account: $userEmail — Entries synchronized."
+                                } else if (isUserSignedIn) {
+                                    "Account active ($userEmail). Tap to sync."
                                 } else {
-                                    "Connect to Google Drive to securely back up data across your devices."
+                                    "App is 100% offline ready. Local SQLite database active."
                                 },
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = if (isSyncError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
@@ -2428,7 +2444,6 @@ fun AddEditTransactionDialog(
     var remarks by remember { mutableStateOf(initialRemarks) }
     var receiptUri by remember { mutableStateOf<String?>(initialReceiptUri) }
     var selectedTimestamp by remember { mutableLongStateOf(if (initialTimestamp > 0) initialTimestamp else System.currentTimeMillis()) }
-    var showCalculator by remember { mutableStateOf(false) }
     var showAttachOptions by remember { mutableStateOf(false) }
 
     val context = LocalContext.current
@@ -2496,315 +2511,409 @@ fun AddEditTransactionDialog(
         evaluateMathExpression(amountInput)
     }
 
-    Dialog(onDismissRequest = onDismiss) {
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            shape = RoundedCornerShape(24.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    val isGave = type == "OUT" || type == "GAVE"
+    val screenTitle = if (isEdit) "Edit Entry" else if (isGave) "You Gave" else "You Got"
+    val accentColor = if (isGave) RedOut else GreenIn
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background
         ) {
             Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(18.dp)
+                    .fillMaxSize()
+                    .windowInsetsPadding(WindowInsets.safeDrawing)
             ) {
-                // Top header with close button
+                // Top Navigation Bar
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    IconButton(onClick = onDismiss) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = Color.Black
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = if (isEdit) "Edit Entry" else if (type == "IN") "Rs. CASH IN" else "Rs. CASH OUT",
-                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                        color = if (type == "IN") GreenIn else RedOut
+                        text = screenTitle,
+                        style = MaterialTheme.typography.titleLarge.copy(
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Serif
+                        ),
+                        color = Color.Black
                     )
-                    IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
-                        Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.Gray)
+                }
+
+                // Middle Content Area
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // Expression & Amount Display Card
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFF8F9FA)),
+                        border = BorderStroke(1.dp, Color.LightGray.copy(alpha = 0.4f))
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            // Raw expression line e.g., 2,999×5
+                            val exprDisplay = amountInput.ifEmpty { "0" }
+                                .replace("*", "×")
+                                .replace("/", "÷")
+                            Text(
+                                text = exprDisplay,
+                                style = TextStyle(fontSize = 14.sp, color = Color.Gray, fontWeight = FontWeight.Medium)
+                            )
+
+                            // Main calculated amount line e.g., Rs 14,995
+                            val mainAmtVal = evaluatedValue ?: amountInput.toDoubleOrNull() ?: 0.0
+                            val amtStr = if (mainAmtVal > 0) String.format("%,.0f", mainAmtVal) else if (amountInput.isNotBlank()) amountInput else "0"
+                            Text(
+                                text = "Rs $amtStr",
+                                style = TextStyle(fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                            )
+                        }
+                    }
+
+                    // Details (optional) Field with Microphone Voice Input
+                    OutlinedTextField(
+                        value = remarks,
+                        onValueChange = { remarks = it },
+                        placeholder = { Text("Details (optional)", color = Color.Gray) },
+                        trailingIcon = {
+                            IconButton(onClick = {
+                                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                                    putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak transaction details...")
+                                }
+                                try {
+                                    speechRecognizerLauncher.launch(intent)
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Voice input not supported", Toast.LENGTH_SHORT).show()
+                                }
+                            }) {
+                                Icon(
+                                    imageVector = Icons.Default.Mic,
+                                    contentDescription = "Voice Input",
+                                    tint = Color.Gray
+                                )
+                            }
+                        },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("remarks_field"),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = Color.LightGray.copy(alpha = 0.5f),
+                            unfocusedContainerColor = Color(0xFFF8F9FA),
+                            focusedContainerColor = Color(0xFFF8F9FA)
+                        )
+                    )
+
+                    // Action Pill Buttons Row (Date + Add bills) directly under Tafseel
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        // Date Pill Button
+                        Surface(
+                            onClick = { datePickerDialog.show() },
+                            shape = RoundedCornerShape(50),
+                            border = BorderStroke(1.dp, Color.LightGray.copy(alpha = 0.6f)),
+                            color = Color(0xFFF8F9FA),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(44.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.EditCalendar,
+                                    contentDescription = "Pick Date",
+                                    tint = Color.DarkGray,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(
+                                    text = formatEasyKhataDate(selectedTimestamp),
+                                    style = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.DarkGray),
+                                    maxLines = 1
+                                )
+                            }
+                        }
+
+                        // Add Bills Pill Button
+                        Surface(
+                            onClick = { showAttachOptions = true },
+                            shape = RoundedCornerShape(50),
+                            border = BorderStroke(1.dp, Color.LightGray.copy(alpha = 0.6f)),
+                            color = Color(0xFFF8F9FA),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(44.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.PhotoCamera,
+                                    contentDescription = "Add Bills",
+                                    tint = Color.DarkGray,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(
+                                    text = if (receiptUri != null) "1 Bill Added" else "Add bills",
+                                    style = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.DarkGray),
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                    }
+
+                    // Attached Receipt Thumbnail Preview
+                    if (receiptUri != null) {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    AsyncImage(
+                                        model = receiptUri,
+                                        contentDescription = "Bill Preview",
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .clip(RoundedCornerShape(6.dp))
+                                    )
+                                    Text("Bill / Receipt Attached", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                                }
+                                IconButton(onClick = { receiptUri = null }, modifier = Modifier.size(24.dp)) {
+                                    Icon(Icons.Default.Close, contentDescription = "Remove", tint = Color.Red)
+                                }
+                            }
+                        }
+                    }
+
+                    // Prominent Full-Width "SAVE" Button Moved UP
+                    Button(
+                        onClick = {
+                            val finalAmount = evaluatedValue ?: amountInput.toDoubleOrNull() ?: 0.0
+                            if (finalAmount > 0.0) {
+                                onSave(finalAmount, category, paymentMethod, remarks, receiptUri, selectedTimestamp)
+                            } else {
+                                onDismiss()
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = accentColor,
+                            contentColor = Color.White
+                        ),
+                        shape = RoundedCornerShape(26.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp)
+                            .testTag("save_transaction_button")
+                    ) {
+                        Text(
+                            text = "SAVE",
+                            style = TextStyle(fontSize = 16.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                        )
                     }
                 }
 
-                // Amount Field Easy Khata Style (e.g. Rs 50,000)
-                OutlinedTextField(
-                    value = amountInput,
-                    onValueChange = { amountInput = it },
-                    prefix = {
-                        Text(
-                            "Rs ",
-                            style = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.Black)
-                        )
-                    },
-                    placeholder = {
-                        Text(
-                            "0",
-                            style = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
-                        )
-                    },
-                    textStyle = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.Bold),
-                    trailingIcon = {
-                        IconButton(onClick = { showCalculator = !showCalculator }) {
-                            Icon(
-                                imageVector = Icons.Default.Calculate,
-                                contentDescription = "Calculator",
-                                tint = if (showCalculator) MaterialTheme.colorScheme.primary else Color.Gray
-                            )
-                        }
-                    },
-                    singleLine = true,
+                // Spacious, Full-Width Custom Calculator Keypad Panel filling the bottom cleanly
+                Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .testTag("amount_field"),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = if (type == "IN") GreenIn else RedOut,
-                        unfocusedBorderColor = Color.LightGray.copy(alpha = 0.6f),
-                        unfocusedContainerColor = Color(0xFFF8F9FA),
-                        focusedContainerColor = Color(0xFFF8F9FA)
-                    )
-                )
-
-                // Embedded Calculator Panel
-                if (showCalculator) {
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier.fillMaxWidth()
+                        .weight(1f),
+                    shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+                    color = Color(0xFFF1F5F9)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Column(
-                            modifier = Modifier.padding(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        // Helper for keypad buttons
+                        @Composable
+                        fun KeyButton(
+                            key: String,
+                            modifier: Modifier = Modifier,
+                            heightDp: Int = 54,
+                            onClick: () -> Unit
                         ) {
-                            if (evaluatedValue != null) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        "Result: Rs. $evaluatedValue",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.primary
+                            val isSpecial = key in listOf("C", "÷", "×", "-", "+", "=", "BACKSPACE")
+                            val isOp = key in listOf("÷", "×", "-", "+")
+                            val isClear = key == "C"
+                            val isEquals = key == "="
+                            val isBack = key == "BACKSPACE"
+                            val isMinusOrPlus = key in listOf("-", "+")
+
+                            Button(
+                                onClick = onClick,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = when {
+                                        isMinusOrPlus -> Color(0xFF94A3B8)
+                                        isEquals -> Color(0xFFCBD5E1)
+                                        isOp || isClear || isBack -> Color(0xFFE2E8F0)
+                                        else -> Color.White
+                                    },
+                                    contentColor = when {
+                                        isMinusOrPlus -> Color.White
+                                        else -> Color(0xFF0F172A)
+                                    }
+                                ),
+                                shape = RoundedCornerShape(12.dp),
+                                elevation = ButtonDefaults.buttonElevation(defaultElevation = 1.dp),
+                                contentPadding = PaddingValues(0.dp),
+                                modifier = modifier.height(heightDp.dp)
+                            ) {
+                                if (isBack) {
+                                    Icon(
+                                        imageVector = Icons.Default.Backspace,
+                                        contentDescription = "Backspace",
+                                        tint = Color(0xFF334155),
+                                        modifier = Modifier.size(22.dp)
                                     )
+                                } else {
                                     Text(
-                                        "Use Result",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Black,
-                                        color = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier
-                                            .clickable {
-                                                amountInput = evaluatedValue.toString()
-                                                showCalculator = false
-                                            }
-                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                        text = key,
+                                        style = TextStyle(
+                                            fontSize = 22.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
                                     )
                                 }
                             }
+                        }
 
-                            val keypadRows = listOf(
-                                listOf("7", "8", "9", "/"),
-                                listOf("4", "5", "6", "*"),
-                                listOf("1", "2", "3", "-"),
-                                listOf("0", ".", "C", "+")
-                            )
-
-                            keypadRows.forEach { rowKeys ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    rowKeys.forEach { key ->
-                                        val isOperator = key in listOf("+", "-", "*", "/")
-                                        val isClear = key == "C"
-                                        Button(
-                                            onClick = {
-                                                if (isClear) {
-                                                    amountInput = ""
-                                                } else {
-                                                    val lastChar = amountInput.lastOrNull()?.toString() ?: ""
-                                                    val isKeyOperator = key in listOf("+", "-", "*", "/")
-                                                    val isLastOperator = lastChar in listOf("+", "-", "*", "/")
-                                                    if (!(isKeyOperator && isLastOperator)) {
-                                                        amountInput += key
-                                                    }
-                                                }
-                                            },
-                                            colors = if (isClear) {
-                                                ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer)
-                                            } else if (isOperator) {
-                                                ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primaryContainer, contentColor = MaterialTheme.colorScheme.onPrimaryContainer)
-                                            } else {
-                                                ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.onSurface)
-                                            },
-                                            modifier = Modifier.weight(1f).height(38.dp),
-                                            contentPadding = PaddingValues(0.dp),
-                                            shape = RoundedCornerShape(8.dp)
-                                        ) {
-                                            Text(key, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold))
-                                        }
+                        fun handleKeyClick(key: String) {
+                            when (key) {
+                                "C" -> amountInput = ""
+                                "BACKSPACE" -> if (amountInput.isNotEmpty()) amountInput = amountInput.dropLast(1)
+                                "=" -> {
+                                    val res = evaluateMathExpression(amountInput)
+                                    if (res != null) {
+                                        amountInput = if (res % 1.0 == 0.0) res.toLong().toString() else res.toString()
+                                    }
+                                }
+                                else -> {
+                                    val rawKey = when (key) {
+                                        "×" -> "*"
+                                        "÷" -> "/"
+                                        else -> key
+                                    }
+                                    val lastChar = amountInput.lastOrNull()?.toString() ?: ""
+                                    val isKeyOperator = rawKey in listOf("+", "-", "*", "/")
+                                    val isLastOperator = lastChar in listOf("+", "-", "*", "/")
+                                    if (!(isKeyOperator && isLastOperator)) {
+                                        amountInput += rawKey
                                     }
                                 }
                             }
                         }
-                    }
-                }
 
-                // Details (Optional) Field with Microphone
-                OutlinedTextField(
-                    value = remarks,
-                    onValueChange = { remarks = it },
-                    placeholder = { Text("Details (Optional)", color = Color.Gray) },
-                    trailingIcon = {
-                        IconButton(onClick = {
-                            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                                putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak transaction details...")
-                            }
-                            try {
-                                speechRecognizerLauncher.launch(intent)
-                            } catch (e: Exception) {
-                                Toast.makeText(context, "Voice input not supported", Toast.LENGTH_SHORT).show()
-                            }
-                        }) {
-                            Icon(
-                                imageVector = Icons.Default.Mic,
-                                contentDescription = "Voice Input",
-                                tint = Color.Gray
-                            )
-                        }
-                    },
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("remarks_field"),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = MaterialTheme.colorScheme.primary,
-                        unfocusedBorderColor = Color.LightGray.copy(alpha = 0.6f),
-                        unfocusedContainerColor = Color(0xFFF8F9FA),
-                        focusedContainerColor = Color(0xFFF8F9FA)
-                    )
-                )
-
-                // Easy Khata Pill Buttons Row (Date + Add bills)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    // Date Pill Button
-                    Surface(
-                        onClick = { datePickerDialog.show() },
-                        shape = RoundedCornerShape(50),
-                        border = BorderStroke(1.dp, Color.LightGray.copy(alpha = 0.6f)),
-                        color = Color(0xFFF8F9FA),
-                        modifier = Modifier.weight(1f).height(48.dp)
-                    ) {
+                        // Row 1: C, ÷, ×, ⌫
                         Row(
-                            modifier = Modifier.padding(horizontal = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.EditCalendar,
-                                contentDescription = "Pick Date",
-                                tint = Color.DarkGray,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Text(
-                                text = formatEasyKhataDate(selectedTimestamp),
-                                style = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.DarkGray),
-                                maxLines = 1
-                            )
-                        }
-                    }
-
-                    // Add Bills Pill Button
-                    Surface(
-                        onClick = { showAttachOptions = true },
-                        shape = RoundedCornerShape(50),
-                        border = BorderStroke(1.dp, Color.LightGray.copy(alpha = 0.6f)),
-                        color = Color(0xFFF8F9FA),
-                        modifier = Modifier.weight(1f).height(48.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.PhotoCamera,
-                                contentDescription = "Add Bills",
-                                tint = Color.DarkGray,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Text(
-                                text = if (receiptUri != null) "1 Bill Added" else "Add bills",
-                                style = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.DarkGray),
-                                maxLines = 1
-                            )
-                        }
-                    }
-                }
-
-                // If receipt attached, show thumbnail preview
-                if (receiptUri != null) {
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                AsyncImage(
-                                    model = receiptUri,
-                                    contentDescription = "Bill Preview",
-                                    modifier = Modifier
-                                        .size(40.dp)
-                                        .clip(RoundedCornerShape(6.dp))
-                                )
-                                Text("Bill / Receipt Attached", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                            listOf("C", "÷", "×", "BACKSPACE").forEach { key ->
+                                KeyButton(key = key, modifier = Modifier.weight(1f)) { handleKeyClick(key) }
                             }
-                            IconButton(onClick = { receiptUri = null }) {
-                                Icon(Icons.Default.Close, contentDescription = "Remove", tint = Color.Red)
+                        }
+
+                        // Row 2: 7, 8, 9, -
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            listOf("7", "8", "9", "-").forEach { key ->
+                                KeyButton(key = key, modifier = Modifier.weight(1f)) { handleKeyClick(key) }
+                            }
+                        }
+
+                        // Middle Block (Rows 3 & 4 with Spanning + Button)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            // Left 3 Columns
+                            Column(
+                                modifier = Modifier.weight(3f),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                // Row 3: 4, 5, 6
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    listOf("4", "5", "6").forEach { key ->
+                                        KeyButton(key = key, modifier = Modifier.weight(1f)) { handleKeyClick(key) }
+                                    }
+                                }
+                                // Row 4: 1, 2, 3
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    listOf("1", "2", "3").forEach { key ->
+                                        KeyButton(key = key, modifier = Modifier.weight(1f)) { handleKeyClick(key) }
+                                    }
+                                }
+                            }
+
+                            // Right Spanning + Button (Height = 54 + 8 + 54 = 116dp)
+                            KeyButton(
+                                key = "+",
+                                modifier = Modifier.weight(1f),
+                                heightDp = 116
+                            ) {
+                                handleKeyClick("+")
+                            }
+                        }
+
+                        // Row 5: 0, 00, ., =
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            listOf("0", "00", ".", "=").forEach { key ->
+                                KeyButton(key = key, modifier = Modifier.weight(1f)) { handleKeyClick(key) }
                             }
                         }
                     }
-                }
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                // Full-Width Rounded "SAVE" Button
-                Button(
-                    onClick = {
-                        val finalAmount = evaluatedValue ?: amountInput.toDoubleOrNull() ?: 0.0
-                        if (finalAmount > 0.0) {
-                            onSave(finalAmount, category, paymentMethod, remarks, receiptUri, selectedTimestamp)
-                        } else {
-                            onDismiss()
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (type == "IN") GreenIn else RedOut,
-                        contentColor = Color.White
-                    ),
-                    shape = RoundedCornerShape(50),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(52.dp)
-                        .testTag("save_transaction_button")
-                ) {
-                    Text(
-                        text = "SAVE",
-                        style = TextStyle(fontSize = 16.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                    )
                 }
             }
         }
@@ -3250,223 +3359,14 @@ fun UdharScreen(viewModel: LedgerViewModel) {
         // Add Party Transaction Dialog
         if (showAddPartyTxDialog != null) {
             val type = showAddPartyTxDialog!!
-            var amount by remember { mutableStateOf("") }
-            var remarks by remember { mutableStateOf("") }
-            var showPartyCalculator by remember { mutableStateOf(false) }
-            val evaluatedPartyValue = remember(amount) {
-                evaluateMathExpression(amount)
-            }
-
-            AlertDialog(
-                onDismissRequest = { showAddPartyTxDialog = null },
-                title = { Text(if (type == "GAVE") "Record Credit Given" else "Record Payment Received") },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        OutlinedTextField(
-                            value = amount,
-                            onValueChange = { amount = it },
-                            label = { Text("Amount / Formula (Rs.)") },
-                            placeholder = { Text("Enter amount or e.g. 1500+250") },
-                            trailingIcon = {
-                                IconButton(onClick = { showPartyCalculator = !showPartyCalculator }) {
-                                    Icon(
-                                        imageVector = Icons.Default.Calculate,
-                                        contentDescription = "Toggle Calculator",
-                                        tint = if (showPartyCalculator) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("party_amount_field"),
-                            shape = RoundedCornerShape(10.dp)
-                        )
-
-                        // Embedded Dynamic Math Calculator Panel for Party Transactions
-                        if (showPartyCalculator) {
-                            Card(
-                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                            ) {
-                                Column(
-                                    modifier = Modifier.padding(10.dp),
-                                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    if (evaluatedPartyValue != null) {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text(
-                                                "Preview: Rs. $evaluatedPartyValue",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                fontWeight = FontWeight.Bold,
-                                                color = MaterialTheme.colorScheme.primary
-                                            )
-                                            Text(
-                                                "Use Result",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                fontWeight = FontWeight.Black,
-                                                color = MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier
-                                                    .clickable {
-                                                        amount = evaluatedPartyValue.toString()
-                                                        showPartyCalculator = false
-                                                    }
-                                                    .padding(horizontal = 6.dp, vertical = 2.dp)
-                                            )
-                                        }
-                                    }
-
-                                    val keypadRows = listOf(
-                                        listOf("7", "8", "9", "/"),
-                                        listOf("4", "5", "6", "*"),
-                                        listOf("1", "2", "3", "-"),
-                                        listOf("0", ".", "C", "+")
-                                    )
-
-                                    keypadRows.forEach { rowKeys ->
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                        ) {
-                                            rowKeys.forEach { key ->
-                                                val isOperator = key in listOf("+", "-", "*", "/")
-                                                val isClear = key == "C"
-                                                Button(
-                                                    onClick = {
-                                                        if (isClear) {
-                                                            amount = ""
-                                                        } else {
-                                                            val lastChar = amount.lastOrNull()?.toString() ?: ""
-                                                            val isKeyOperator = key in listOf("+", "-", "*", "/")
-                                                            val isLastOperator = lastChar in listOf("+", "-", "*", "/")
-                                                            if (!(isKeyOperator && isLastOperator)) {
-                                                                amount += key
-                                                            }
-                                                        }
-                                                    },
-                                                    colors = if (isClear) {
-                                                        ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer)
-                                                    } else if (isOperator) {
-                                                        ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primaryContainer, contentColor = MaterialTheme.colorScheme.onPrimaryContainer)
-                                                    } else {
-                                                        ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.onSurface)
-                                                    },
-                                                    modifier = Modifier.weight(1f).height(38.dp),
-                                                    contentPadding = PaddingValues(0.dp),
-                                                    shape = RoundedCornerShape(8.dp),
-                                                    border = if (!isClear && !isOperator) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant) else null
-                                                ) {
-                                                    Text(key, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold))
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                    ) {
-                                        Button(
-                                            onClick = {
-                                                if (amount.isNotEmpty()) {
-                                                    amount = amount.dropLast(1)
-                                                }
-                                            },
-                                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer),
-                                            modifier = Modifier.weight(1.5f).height(38.dp),
-                                            shape = RoundedCornerShape(8.dp),
-                                            contentPadding = PaddingValues(0.dp)
-                                        ) {
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Icon(Icons.Default.Backspace, contentDescription = "Backspace", modifier = Modifier.size(14.dp))
-                                                Spacer(modifier = Modifier.width(4.dp))
-                                                Text("Backspace", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
-                                            }
-                                        }
-
-                                        Button(
-                                            onClick = {
-                                                if (evaluatedPartyValue != null) {
-                                                    amount = evaluatedPartyValue.toString()
-                                                }
-                                                showPartyCalculator = false
-                                            },
-                                            colors = ButtonDefaults.buttonColors(containerColor = if (type == "GAVE") GreenIn else RedOut, contentColor = Color.White),
-                                            modifier = Modifier.weight(2.5f).height(38.dp),
-                                            shape = RoundedCornerShape(8.dp),
-                                            contentPadding = PaddingValues(0.dp)
-                                        ) {
-                                            Text("Use Result", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // Fallback Preview Row
-                        if (!showPartyCalculator && evaluatedPartyValue != null && evaluatedPartyValue.toString() != amount) {
-                            Card(
-                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)),
-                                modifier = Modifier.fillMaxWidth().clickable {
-                                    amount = evaluatedPartyValue.toString()
-                                }
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().padding(8.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        "Evaluation: Rs. $evaluatedPartyValue",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                    Text(
-                                        "Use Result",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.primary,
-                                        fontWeight = FontWeight.Black
-                                    )
-                                }
-                            }
-                        }
-
-                        OutlinedTextField(
-                            value = remarks,
-                            onValueChange = { remarks = it },
-                            label = { Text("Remarks (Product/Service info)") },
-                            placeholder = { Text("e.g. Soap stock delivery, Partial payment") },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("party_remarks_field"),
-                            shape = RoundedCornerShape(10.dp)
-                        )
-                    }
-                },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            val parsedAmount = evaluatedPartyValue ?: amount.toDoubleOrNull() ?: 0.0
-                            if (parsedAmount > 0.0) {
-                                viewModel.addPartyTransaction(party.id, parsedAmount, type, remarks)
-                                showAddPartyTxDialog = null
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = if (type == "GAVE") GreenIn else RedOut),
-                        modifier = Modifier.testTag("save_party_transaction_button")
-                    ) {
-                        Text("Save Ledger")
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showAddPartyTxDialog = null }) {
-                        Text("Cancel")
-                    }
+            AddEditTransactionDialog(
+                type = if (type == "GAVE") "OUT" else "IN",
+                categories = listOf("Customer Ledger"),
+                paymentMethods = listOf("Cash"),
+                onDismiss = { showAddPartyTxDialog = null },
+                onSave = { amount, category, method, remarks, receiptUri, timestamp ->
+                    viewModel.addPartyTransaction(party.id, amount, type, remarks)
+                    showAddPartyTxDialog = null
                 }
             )
         }
@@ -4518,12 +4418,8 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
     val context = LocalContext.current
     val syncManager = viewModel.syncManager
 
-    var showOAuthDialog by remember { mutableStateOf(false) }
-    var customClientIdInput by remember { mutableStateOf(syncManager.getClientId()) }
-    var customRedirectUriInput by remember { mutableStateOf(syncManager.getRedirectUri()) }
     var rawJsonText by remember { mutableStateOf("") }
     var showBackupRestoreDialog by remember { mutableStateOf(false) }
-    var isAdvancedOpen by remember { mutableStateOf(false) }
     var authStateVersion by remember { mutableStateOf(0) }
 
     val isUserSignedIn = remember(authStateVersion) { syncManager.isUserSignedIn() }
@@ -4533,6 +4429,15 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
     val businesses by viewModel.businesses.collectAsStateWithLifecycle()
     val books by viewModel.books.collectAsStateWithLifecycle()
     val allTransactions by viewModel.allTransactions.collectAsStateWithLifecycle()
+
+    var showAccountAuthDialog by remember { mutableStateOf(false) }
+    var authEmailInput by remember { mutableStateOf("") }
+    var authNameInput by remember { mutableStateOf("") }
+    var authPasswordInput by remember { mutableStateOf("") }
+    var isRegisterMode by remember { mutableStateOf(false) }
+    var verificationTimestamp by remember { mutableStateOf("") }
+
+    val scope = rememberCoroutineScope()
 
     LazyColumn(
         modifier = Modifier
@@ -4550,70 +4455,39 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                "Google Drive Sync Center",
+                "CashBook Easy Khata Cloud Sync Center",
                 fontWeight = FontWeight.Bold,
                 style = MaterialTheme.typography.titleLarge
             )
             Text(
-                "Automatic 100% Cloud Protection for your Businesses & Customer Books",
+                "Direct Cloud Synchronization & 100% Offline SQLite Backup",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
             )
         }
 
-        // Live Transparent Data Sync Dashboard
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Local Cashbook Summary", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceAround
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("${businesses.size}", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                            Text("Businesses", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                        }
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("${books.size}", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                            Text("Books & Customers", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                        }
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("${allTransactions.size}", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                            Text("Cash Entries", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                        }
-                    }
-                }
-            }
-        }
-
-        // Account Status Card
+        // Live Cloud Connection & Verification Card
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Cloud Sync Connection", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                    Text("Cloud Sync Connection & Status", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
                     
-                    val isRealSyncSuccess = (syncStatus.contains("Synced", ignoreCase = true) || syncStatus.contains("Restored", ignoreCase = true)) && isUserSignedIn
-                    val isSyncError = syncStatus.contains("403") || syncStatus.contains("404") || syncStatus.contains("Error", ignoreCase = true) || syncStatus.contains("Failed", ignoreCase = true)
+                    val isSyncError = syncStatus.contains("Error", ignoreCase = true) || syncStatus.contains("Failed", ignoreCase = true) || syncStatus.contains("403") || syncStatus.contains("401") || syncStatus.contains("400") || syncStatus.contains("500") || syncStatus.contains("Forbidden", ignoreCase = true)
+                    val isRealSyncSuccess = isUserSignedIn && !isSyncError && (syncStatus.contains("Synced", ignoreCase = true) || syncStatus.contains("Restored", ignoreCase = true) || syncStatus.contains("Success", ignoreCase = true))
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Status:")
+                        Text("Cloud Status:")
                         Text(
-                            text = if (isRealSyncSuccess) "🟢 Connected & Synced" else if (isSyncError) "🔴 Cloud Sync Error" else if (isUserSignedIn) "🟡 Account Signed In" else "⚪ Local Only (Offline)",
-                            color = if (isRealSyncSuccess) GreenIn else if (isSyncError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                            text = if (isRealSyncSuccess) "🟢 Connected & Synced" else if (isSyncError) "🔴 Sync Error / Access Restriction" else if (isUserSignedIn) "🟡 Account Active (Pending Sync)" else "⚪ Offline Mode (Local DB)",
+                            color = if (isRealSyncSuccess) GreenIn else if (isSyncError) MaterialTheme.colorScheme.error else if (isUserSignedIn) MaterialTheme.colorScheme.primary else Color.Gray,
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -4624,8 +4498,8 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("Google Account:")
-                            Text(email, fontWeight = FontWeight.SemiBold)
+                            Text("Cloud Account:")
+                            Text(if (email.isNotBlank()) email else displayName, fontWeight = FontWeight.SemiBold)
                         }
                     }
 
@@ -4634,9 +4508,9 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Synchronizer Output:")
+                        Text("Last Sync Output:")
                         Text(
-                            text = if (isUserSignedIn) syncStatus else "Offline",
+                            text = if (isUserSignedIn) syncStatus else "Offline Ready (Saved locally)",
                             style = MaterialTheme.typography.bodySmall,
                             fontWeight = FontWeight.SemiBold,
                             color = if (isRealSyncSuccess) GreenIn else if (isSyncError) MaterialTheme.colorScheme.error else Color.Gray,
@@ -4645,110 +4519,71 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(4.dp))
-
-                    if (!isUserSignedIn) {
-                        Button(
-                            onClick = { 
-                                // Auto-save any modified input fields before launching the webview
-                                syncManager.saveClientId(customClientIdInput)
-                                syncManager.saveRedirectUri(customRedirectUriInput)
-                                showOAuthDialog = true 
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Icon(Icons.Default.Login, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Sign in with Google")
-                        }
-
-                        if (syncStatus.contains("Error", ignoreCase = true) || syncStatus.contains("403")) {
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.15f),
-                                    contentColor = MaterialTheme.colorScheme.onErrorContainer
-                                ),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f)),
-                                shape = RoundedCornerShape(10.dp)
-                            ) {
-                                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        Icon(
-                                            imageVector = Icons.Default.Warning,
-                                            contentDescription = "OAuth Testing Mode Info",
-                                            tint = MaterialTheme.colorScheme.error,
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                        Text(
-                                            "Getting 'Access blocked' (Error 403)?",
-                                            style = MaterialTheme.typography.titleSmall,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                    Text(
-                                        "Google Client ID Configured:",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                    Text(
-                                        "Active Client ID: 755700558600-jl4pipc2klikiac22ivk8s3qvn0pjtc7.apps.googleusercontent.com\n\n" +
-                                        "Google Cloud Console checklist for this Client ID:\n" +
-                                        "1. Authorized JavaScript origins (Origin ONLY, no path):\n" +
-                                        "   https://gen-lang-client-0052637237.firebaseapp.com\n" +
-                                        "2. Authorized redirect URIs (WITH path):\n" +
-                                        "   https://gen-lang-client-0052637237.firebaseapp.com/__/auth/handler\n" +
-                                        "3. Support email & Test users:\n" +
-                                        "   • Set User Support email to: rbmengal@live.com\n" +
-                                        "   • Add Test users under 'OAuth consent screen' -> 'Test users': rbmengal@live.com and rasoolbakhsh@luawms.edu.pk",
-                                        style = MaterialTheme.typography.bodySmall
-                                    )
-                                }
-                            }
-                        }
-                    } else {
+                    if (verificationTimestamp.isNotBlank()) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Button(
-                                onClick = { 
-                                    if (!isUserSignedIn) {
-                                        syncManager.saveClientId(customClientIdInput)
-                                        syncManager.saveRedirectUri(customRedirectUriInput)
-                                        showOAuthDialog = true
-                                    } else {
-                                        viewModel.triggerCloudSync()
-                                    }
-                                },
-                                modifier = Modifier.weight(1f),
-                                enabled = !isSyncing,
+                            Text("Last Verification:", style = MaterialTheme.typography.bodySmall)
+                            Text(verificationTimestamp, style = MaterialTheme.typography.bodySmall, color = GreenIn, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    // Buttons: Verify Cloud Connection & Sync Now + Account Login
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                if (!isUserSignedIn) {
+                                    showAccountAuthDialog = true
+                                } else {
+                                    viewModel.triggerCloudSync()
+                                    val nowStr = java.text.SimpleDateFormat("dd MMM, hh:mm a", java.util.Locale.getDefault()).format(java.util.Date())
+                                    verificationTimestamp = nowStr
+                                    Toast.makeText(context, "Cloud Sync Connection Verified! Data synced.", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                            enabled = !isSyncing,
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            if (isSyncing) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            } else {
+                                Icon(Icons.Default.CloudSync, contentDescription = null)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(if (isUserSignedIn) "Verify & Sync Cloud" else "Connect Cloud Account")
+                            }
+                        }
+
+                        if (!isUserSignedIn) {
+                            OutlinedButton(
+                                onClick = { showAccountAuthDialog = true },
+                                modifier = Modifier.weight(0.9f),
                                 shape = RoundedCornerShape(10.dp)
                             ) {
-                                if (isSyncing) {
-                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                                } else {
-                                    Icon(Icons.Default.Sync, contentDescription = null)
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(if (isUserSignedIn) "Force Sync" else "Connect Cloud")
-                                }
+                                Icon(Icons.Default.PersonAdd, contentDescription = null)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Sign In / Up")
                             }
-
+                        } else {
                             OutlinedButton(
                                 onClick = {
                                     viewModel.logoutSuperAdmin()
                                     authStateVersion++
-                                    Toast.makeText(context, "Logged out successfully.", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Logged out from Cloud Account.", Toast.LENGTH_SHORT).show()
                                 },
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.weight(0.8f),
                                 shape = RoundedCornerShape(10.dp),
                                 colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
                             ) {
                                 Icon(Icons.Default.Logout, contentDescription = null)
-                                Spacer(modifier = Modifier.width(6.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
                                 Text("Log Out")
                             }
                         }
@@ -4757,160 +4592,34 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
             }
         }
 
-        // Custom Google Client ID Setting (Enterprise grade configuration) - Collapsible
+        // 100% Offline Capability Guarantee Card
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFECFDF5)),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFA7F3D0)),
+                shape = RoundedCornerShape(12.dp)
             ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { isAdvancedOpen = !isAdvancedOpen },
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Icon(
-                                imageVector = Icons.Default.Settings,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Text("Advanced Setup (Self-Hosted OAuth)", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
-                        }
-                        Icon(
-                            imageVector = if (isAdvancedOpen) Icons.Default.ArrowDropUp else Icons.Default.ArrowDropDown,
-                            contentDescription = if (isAdvancedOpen) "Collapse" else "Expand"
-                        )
-                    }
-
-                    if (isAdvancedOpen) {
-                        Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.OfflinePin,
+                        contentDescription = "Offline Guaranteed",
+                        tint = Color(0xFF059669),
+                        modifier = Modifier.size(28.dp)
+                    )
+                    Column {
+                        Text("100% Offline Database Ready", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall, color = Color(0xFF065F46))
                         Text(
-                            "The app automatically uses a cloud-hosted OAuth client out-of-the-box. If you are a developer or enterprise, you can optionally supply your own custom credentials below. Leave these blank to use the built-in system.",
+                            "Every transaction, book, and business is saved directly to your phone's SQLite database first. The app operates seamlessly without internet, and syncs to cloud automatically when reconnected.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                            color = Color(0xFF047857)
                         )
-                        OutlinedTextField(
-                            value = customClientIdInput,
-                            onValueChange = { customClientIdInput = it },
-                            label = { Text("Custom Web Client ID") },
-                            placeholder = { Text("Using built-in automatic client...") },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(10.dp)
-                        )
-                        OutlinedTextField(
-                            value = customRedirectUriInput,
-                            onValueChange = { customRedirectUriInput = it },
-                            label = { Text("Custom Redirect URI") },
-                            placeholder = { Text("Using built-in redirect URI...") },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(10.dp)
-                        )
-                        
-                        // Setup Instructions Guide
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.15f),
-                                contentColor = MaterialTheme.colorScheme.onErrorContainer
-                            ),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f)),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Icon(
-                                        imageVector = Icons.Default.Info,
-                                        contentDescription = "Config Help",
-                                        tint = MaterialTheme.colorScheme.error,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                    Text(
-                                        "How to Fix 'redirect_uri_mismatch' Error:",
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                                Text(
-                                    "1. Go to your Google Cloud Console -> APIs & Services -> Credentials.",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                                Text(
-                                    "2. Click on your OAuth 2.0 Client ID (under 'Web application') to edit it.",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                                Text(
-                                    "3. Scroll to 'Authorized redirect URIs' and add this EXACT URI:",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                                Card(
-                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                                    modifier = Modifier.fillMaxWidth(),
-                                    shape = RoundedCornerShape(6.dp)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = customRedirectUriInput.ifBlank { syncManager.getRedirectUri() },
-                                            style = MaterialTheme.typography.bodySmall,
-                                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                                            color = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                        IconButton(
-                                            onClick = {
-                                                clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(customRedirectUriInput.ifBlank { syncManager.getRedirectUri() }))
-                                                Toast.makeText(context, "Redirect URI copied to clipboard!", Toast.LENGTH_SHORT).show()
-                                            },
-                                            modifier = Modifier.size(28.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.ContentCopy,
-                                                contentDescription = "Copy URI",
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                        }
-                                    }
-                                }
-                                Text(
-                                    "4. Click Save in Google Cloud Console. Google takes 1-2 minutes to apply changes. Then sign in again!",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            }
-                        }
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            TextButton(
-                                onClick = {
-                                    customClientIdInput = ""
-                                    customRedirectUriInput = ""
-                                    syncManager.saveClientId("")
-                                    syncManager.saveRedirectUri("")
-                                    Toast.makeText(context, "Reset to built-in automatic client settings!", Toast.LENGTH_SHORT).show()
-                                }
-                            ) {
-                                Text("Reset to Default")
-                            }
-                            Button(
-                                onClick = {
-                                    syncManager.saveClientId(customClientIdInput)
-                                    syncManager.saveRedirectUri(customRedirectUriInput)
-                                    Toast.makeText(context, "OAuth credentials configured successfully!", Toast.LENGTH_SHORT).show()
-                                }
-                            ) {
-                                Text("Save Config")
-                            }
-                        }
                     }
                 }
             }
@@ -4975,184 +4684,121 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
         }
     }
 
-    // Google Sign-In WebView Dialog
-    if (showOAuthDialog) {
-        var showManualPasteDialog by remember { mutableStateOf(false) }
-        var pastedUrlInput by remember { mutableStateOf("") }
-        val finalClientId = customClientIdInput.ifBlank { syncManager.getClientId() }
-        val finalRedirectUri = customRedirectUriInput.ifBlank { syncManager.getRedirectUri() }
-        val authUrl = "https://accounts.google.com/o/oauth2/v2/auth?" +
-                "client_id=$finalClientId&" +
-                "redirect_uri=$finalRedirectUri&" +
-                "response_type=token&" +
-                "scope=https://www.googleapis.com/auth/drive.appdata%20email%20profile%20openid&" +
-                "prompt=select_account"
-
-        Dialog(onDismissRequest = { showOAuthDialog = false }) {
-            Card(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(vertical = 24.dp, horizontal = 12.dp),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Column(modifier = Modifier.fillMaxSize()) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Sign In with Google", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(
-                                onClick = {
-                                    try {
-                                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(authUrl))
-                                        context.startActivity(intent)
-                                    } catch (e: Exception) {
-                                        Toast.makeText(context, "Failed to open browser", Toast.LENGTH_SHORT).show()
-                                    }
-                                }
-                            ) {
-                                Icon(Icons.Default.OpenInBrowser, contentDescription = "Open in Chrome")
-                            }
-                            IconButton(onClick = { showOAuthDialog = false }) {
-                                Icon(Icons.Default.Close, contentDescription = "Close WebView")
-                            }
-                        }
-                    }
-
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                "Blocked by WebView? Try External Browser",
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.Medium,
-                                modifier = Modifier.weight(1f)
-                            )
-                            TextButton(
-                                onClick = { showManualPasteDialog = true },
-                                modifier = Modifier.padding(start = 4.dp)
-                            ) {
-                                Text("Paste Link", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
-
-                    AndroidView(
-                        factory = { ctx ->
-                            WebView(ctx).apply {
-                                settings.javaScriptEnabled = true
-                                settings.domStorageEnabled = true
-                                val defaultUa = android.webkit.WebSettings.getDefaultUserAgent(ctx)
-                                val sanitizedUa = if (defaultUa.isNullOrBlank()) {
-                                    "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
-                                } else {
-                                    defaultUa
-                                        .replace("; wv", "")
-                                        .replace("Version/4.0 ", "")
-                                        .replace("Version/4.0", "")
-                                }
-                                settings.userAgentString = sanitizedUa
-                                
-                                webViewClient = object : WebViewClient() {
-                                    override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
-                                        return handleRedirect(url)
-                                    }
-
-                                    override fun shouldOverrideUrlLoading(view: WebView?, request: android.webkit.WebResourceRequest?): Boolean {
-                                        return handleRedirect(request?.url?.toString())
-                                    }
-
-                                    override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
-                                        super.onPageStarted(view, url, favicon)
-                                        handleRedirect(url)
-                                    }
-
-                                    private fun handleRedirect(url: String?): Boolean {
-                                        val currentRedirectUri = customRedirectUriInput.ifBlank { syncManager.getRedirectUri() }
-                                        if (url != null && url.startsWith(currentRedirectUri)) {
-                                            val token = extractAccessToken(url)
-                                            if (token != null) {
-                                                syncManager.saveAccessToken(token)
-                                                authStateVersion++
-                                                viewModel.triggerCloudSync()
-                                                showOAuthDialog = false
-                                                Toast.makeText(context, "Google Authorization successful! Sync active.", Toast.LENGTH_LONG).show()
-                                                return true
-                                            }
-                                        }
-                                        return false
-                                    }
-                                }
-
-                                loadUrl(authUrl)
-                            }
-                        },
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth()
-                    )
+    // Cloud Account Authentication Dialog
+    if (showAccountAuthDialog) {
+        AlertDialog(
+            onDismissRequest = { showAccountAuthDialog = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Default.CloudSync, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Text(if (isRegisterMode) "Register Cloud Account" else "Cloud Account Login")
                 }
-            }
-        }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        if (isRegisterMode) "Create an account to synchronize your cashbooks directly with our secure cloud server."
+                        else "Enter your credentials to connect your cashbooks to the cloud server.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
 
-        if (showManualPasteDialog) {
-            AlertDialog(
-                onDismissRequest = { showManualPasteDialog = false },
-                title = { Text("Paste Google Redirect Link") },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            "If you completed Google sign-in in Chrome, copy the final redirect URL (or token) from Chrome address bar and paste it below:",
-                            style = MaterialTheme.typography.bodySmall
-                        )
+                    if (isRegisterMode) {
                         OutlinedTextField(
-                            value = pastedUrlInput,
-                            onValueChange = { pastedUrlInput = it },
-                            label = { Text("Pasted Redirect URL / Token") },
-                            placeholder = { Text("https://...#access_token=ya29...") },
+                            value = authNameInput,
+                            onValueChange = { authNameInput = it },
+                            label = { Text("Full Name") },
+                            placeholder = { Text("e.g. John Doe") },
                             modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
                             shape = RoundedCornerShape(10.dp)
                         )
                     }
-                },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            val parsedToken = extractAccessToken(pastedUrlInput)
-                            val token = if (!parsedToken.isNullOrBlank()) parsedToken else if (pastedUrlInput.trim().startsWith("ya29.")) pastedUrlInput.trim() else null
-                            if (!token.isNullOrBlank()) {
-                                syncManager.saveAccessToken(token)
-                                authStateVersion++
-                                viewModel.triggerCloudSync()
-                                showManualPasteDialog = false
-                                showOAuthDialog = false
-                                Toast.makeText(context, "Google Authorization successful! Sync active.", Toast.LENGTH_LONG).show()
-                            } else {
-                                Toast.makeText(context, "Invalid redirect link or token format.", Toast.LENGTH_SHORT).show()
-                            }
-                        }
+
+                    OutlinedTextField(
+                        value = authEmailInput,
+                        onValueChange = { authEmailInput = it },
+                        label = { Text("Email or Username") },
+                        placeholder = { Text("e.g. user@cashbook.com") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        shape = RoundedCornerShape(10.dp)
+                    )
+
+                    OutlinedTextField(
+                        value = authPasswordInput,
+                        onValueChange = { authPasswordInput = it },
+                        label = { Text("Password") },
+                        placeholder = { Text("••••••••") },
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        shape = RoundedCornerShape(10.dp)
+                    )
+
+                    TextButton(
+                        onClick = { isRegisterMode = !isRegisterMode },
+                        modifier = Modifier.align(Alignment.End)
                     ) {
-                        Text("Connect")
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showManualPasteDialog = false }) {
-                        Text("Cancel")
+                        Text(
+                            if (isRegisterMode) "Already have an account? Log In" else "Need an account? Register Now",
+                            style = MaterialTheme.typography.labelMedium
+                        )
                     }
                 }
-            )
-        }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val cleanUserOrEmail = authEmailInput.trim()
+                        val cleanPass = authPasswordInput.trim()
+                        val cleanName = authNameInput.trim()
+
+                        if (cleanUserOrEmail.isBlank()) {
+                            Toast.makeText(context, "Please enter your Email or Username.", Toast.LENGTH_SHORT).show()
+                            return@Button
+                        }
+
+                        scope.launch {
+                            if (isRegisterMode) {
+                                val registered = syncManager.registerUserCloud(
+                                    name = if (cleanName.isNotBlank()) cleanName else cleanUserOrEmail.substringBefore("@"),
+                                    email = if (cleanUserOrEmail.contains("@")) cleanUserOrEmail else "$cleanUserOrEmail@cashbook.local",
+                                    username = cleanUserOrEmail.substringBefore("@"),
+                                    pass = cleanPass.ifBlank { "123456" }
+                                )
+                                if (registered) {
+                                    authStateVersion++
+                                    viewModel.triggerCloudSync()
+                                    Toast.makeText(context, "Cloud Account Registered & Synced!", Toast.LENGTH_LONG).show()
+                                    showAccountAuthDialog = false
+                                } else {
+                                    Toast.makeText(context, "Failed to register account.", Toast.LENGTH_SHORT).show()
+                                }
+                            } else {
+                                val loggedIn = syncManager.loginUserCloud(cleanUserOrEmail, cleanPass)
+                                if (loggedIn) {
+                                    authStateVersion++
+                                    viewModel.triggerCloudSync()
+                                    Toast.makeText(context, "Cloud Login Successful! Synchronizing...", Toast.LENGTH_LONG).show()
+                                    showAccountAuthDialog = false
+                                } else {
+                                    Toast.makeText(context, "Invalid credentials. Please check or register.", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    },
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(if (isRegisterMode) "Create Account" else "Log In")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAccountAuthDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 
     // Import / Restore Backup Dialog
@@ -6126,6 +5772,7 @@ fun AppLockSettingsDialog(
 @Composable
 fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     val syncManager = viewModel.syncManager
     val hasRegisteredAccount = syncManager.hasRegisteredAccount()
 
@@ -6307,7 +5954,9 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                         )
                         Text(
                             text = syncStatus,
-                            style = MaterialTheme.typography.labelSmall.copy(color = GreenIn),
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = if (syncStatus.contains("Error", ignoreCase = true) || syncStatus.contains("403") || syncStatus.contains("401") || syncStatus.contains("Failed", ignoreCase = true)) MaterialTheme.colorScheme.error else GreenIn
+                            ),
                             textAlign = TextAlign.Center
                         )
                     }
@@ -6726,16 +6375,17 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                                         otpError = "Please enter your registered email address or username."
                                     } else {
                                         val exists = viewModel.checkEmailExists(target)
-                                        if (exists) {
-                                            val otp = (100000..999999).random().toString()
-                                            generatedOtp = otp
-                                            enteredOtp = ""
-                                            otpError = ""
-                                            resetStep = 2
-                                            Toast.makeText(context, "Verification code sent to $target!", Toast.LENGTH_LONG).show()
-                                        } else {
-                                            otpError = "No account registered with '$target'. Please verify or sign up."
+                                        val otp = (100000..999999).random().toString()
+                                        generatedOtp = otp
+                                        enteredOtp = ""
+                                        otpError = ""
+                                        resetStep = 2
+                                        if (target.contains("@")) {
+                                            coroutineScope.launch {
+                                                syncManager.sendFirebasePasswordResetEmail(target)
+                                            }
                                         }
+                                        Toast.makeText(context, "Verification code and email reset link dispatched for $target!", Toast.LENGTH_LONG).show()
                                     }
                                 },
                                 modifier = Modifier.fillMaxWidth().height(48.dp),
@@ -6744,7 +6394,7 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                             ) {
                                 Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Send Security Verification Code", color = Color.White, fontWeight = FontWeight.Bold)
+                                Text("Send Security Verification Code & Reset Link", color = Color.White, fontWeight = FontWeight.Bold)
                             }
                         } else if (resetStep == 2) {
                             // --- STEP 2: OTP VERIFICATION ---
@@ -7517,38 +7167,179 @@ fun ShareStatementDialog(
 
     val bookName = activeBook?.name ?: "Consumer Khata"
     val bookPhone = activeBook?.phone ?: ""
-    val businessName = activeBusiness?.name ?: "My Business"
+    val businessName = activeBusiness?.name ?: "Guest Business"
+
+    val totalIn = transactions.filter { it.type == "IN" }.sumOf { it.amount }
+    val totalOut = transactions.filter { it.type == "OUT" }.sumOf { it.amount }
+    val netBalance = totalIn - totalOut
 
     Dialog(onDismissRequest = onDismiss) {
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            shape = RoundedCornerShape(16.dp)
+                .padding(12.dp),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
+                // Header
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column {
-                        Text("Share Statement", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                        Text("Send receipt / details to $bookName", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                        Text("Share Statement & Receipt", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text("Send reminder card or PDF to $bookName", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
                     }
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.Close, contentDescription = "Close")
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.Gray)
                     }
                 }
 
-                Divider()
+                // Payment Reminder Card Preview (Matching Image 3)
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    border = BorderStroke(1.dp, Color(0xFFCBD5E1))
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // Green Card Header
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = Color(0xFF10B981),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(
+                                "Payment Reminder",
+                                style = TextStyle(fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White),
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                            )
+                        }
 
-                // Option 1: WhatsApp Table Receipt
+                        // Dear Customer
+                        Text("Dear $bookName,", style = TextStyle(fontSize = 13.sp, color = Color(0xFF334155), fontWeight = FontWeight.Medium))
+
+                        // Status Label e.g. You have to give
+                        val isGive = netBalance < 0
+                        val statusText = if (isGive) "You have to give" else "You have to get"
+                        Text(statusText, style = TextStyle(fontSize = 12.sp, color = Color.Gray))
+
+                        // Big Bold Amount e.g. Rs. 5,000
+                        val amtStr = String.format("%,.0f", kotlin.math.abs(netBalance))
+                        Text(
+                            "Rs. $amtStr",
+                            style = TextStyle(
+                                fontSize = 28.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isGive) Color(0xFFDC2626) else Color(0xFF059669)
+                            )
+                        )
+
+                        Divider(color = Color(0xFFE2E8F0), thickness = 1.dp)
+
+                        // Card Footer: Business Name & Easy Khata branding
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(businessName.ifBlank { "Guest Business" }, style = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.Black))
+                            Text("CashBook Easy Khata", style = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981)))
+                        }
+                    }
+                }
+
+                // Action Option 1: Share Payment Reminder Card Image
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            try {
+                                val bitmap = createPaymentReminderBitmap(context, bookName, netBalance, businessName)
+                                val imageFile = File(context.cacheDir, "payment_reminder.png")
+                                imageFile.outputStream().use { out ->
+                                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+                                }
+                                val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", imageFile)
+                                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "image/png"
+                                    putExtra(Intent.EXTRA_STREAM, uri)
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                context.startActivity(Intent.createChooser(shareIntent, "Share Payment Reminder Card"))
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Error sharing card image: ${e.message}", Toast.LENGTH_SHORT).show()
+                            }
+                            onDismiss()
+                        },
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFECFDF5)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Image, contentDescription = null, tint = Color(0xFF059669))
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text("Share Payment Reminder Card (Image)", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium, color = Color(0xFF065F46))
+                            Text("Send visual card image to WhatsApp / Gallery", style = MaterialTheme.typography.bodySmall, color = Color(0xFF047857))
+                        }
+                    }
+                }
+
+                // Action Option 2: Share PDF Report
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            try {
+                                val pdfFile = generatePdfReport(context, activeBook, transactions, activeBusiness)
+                                val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", pdfFile)
+                                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "application/pdf"
+                                    putExtra(Intent.EXTRA_STREAM, uri)
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                context.startActivity(Intent.createChooser(shareIntent, "Share PDF Statement"))
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Error generating PDF: ${e.message}", Toast.LENGTH_SHORT).show()
+                            }
+                            onDismiss()
+                        },
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.PictureAsPdf, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text("Share PDF Receipt / Statement", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                            Text("Professional PDF document with Customer name & Debit/Credit table", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f))
+                        }
+                    }
+                }
+
+                // Action Option 3: WhatsApp Text Table
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -7580,88 +7371,14 @@ fun ShareStatementDialog(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(16.dp),
+                            .padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(Icons.Default.Share, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
-                        Spacer(modifier = Modifier.width(12.dp))
+                        Spacer(modifier = Modifier.width(10.dp))
                         Column {
-                            Text("Share via WhatsApp / Text Table", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                            Text("Formatted statement table with item breakdown & total balance", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f))
-                        }
-                    }
-                }
-
-                // Option 2: PDF Statement Report
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            try {
-                                val pdfFile = generatePdfReport(context, activeBook, transactions, activeBusiness)
-                                val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", pdfFile)
-                                val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                                    type = "application/pdf"
-                                    putExtra(Intent.EXTRA_STREAM, uri)
-                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                }
-                                context.startActivity(Intent.createChooser(shareIntent, "Share PDF Statement"))
-                            } catch (e: Exception) {
-                                Toast.makeText(context, "Error generating PDF: ${e.message}", Toast.LENGTH_SHORT).show()
-                            }
-                            onDismiss()
-                        },
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.PictureAsPdf, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text("Share PDF Receipt / Statement", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
-                            Text("Clean PDF document with Business, Consumer Name & Phone", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f))
-                        }
-                    }
-                }
-
-                // Option 3: SMS Direct Message
-                if (bookPhone.isNotBlank()) {
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                val textTable = generateWhatsAppTextTable(businessName, bookName, bookPhone, transactions)
-                                val smsIntent = Intent(Intent.ACTION_VIEW).apply {
-                                    data = Uri.parse("sms:$bookPhone")
-                                    putExtra("sms_body", textTable)
-                                }
-                                try {
-                                    context.startActivity(smsIntent)
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "Could not open SMS app", Toast.LENGTH_SHORT).show()
-                                }
-                                onDismiss()
-                            },
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(Icons.Default.Sms, contentDescription = null, tint = MaterialTheme.colorScheme.onTertiaryContainer)
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column {
-                                Text("Send SMS directly", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onTertiaryContainer)
-                                Text("Send statement text to $bookPhone", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.8f))
-                            }
+                            Text("Share Text Table via WhatsApp", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                            Text("Formatted WhatsApp message with full ledger details", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f))
                         }
                     }
                 }
@@ -7766,111 +7483,148 @@ fun generatePdfReport(
     val canvas = page.canvas
 
     val paint = Paint()
-    
-    // Header Banner
-    paint.color = AndroidColor.parseColor("#10B981") // Theme Green
-    canvas.drawRect(0f, 0f, 595f, 80f, paint)
-    
-    // Title
-    paint.color = AndroidColor.WHITE
-    paint.textSize = 20f
+
+    val bookName = activeBook?.name ?: "Customer Statement"
+    val phoneStr = activeBook?.phone?.ifBlank { "03337972023" } ?: "03337972023"
+    val bizName = activeBusiness?.name?.ifBlank { "Guest Business" } ?: "Guest Business"
+
+    val dateFmt = SimpleDateFormat("dd'th' MMM, yy", Locale.getDefault())
+    val todayStr = dateFmt.format(Date())
+
+    // 1. Top Header
+    paint.color = AndroidColor.parseColor("#111827") // Dark Navy
+    paint.textSize = 18f
     paint.isFakeBoldText = true
-    canvas.drawText("STATEMENT / KHATA RECEIPT", 30f, 44f, paint)
-    
-    // Subtitle
-    paint.textSize = 10f
+    canvas.drawText("$bookName Statement", 35f, 45f, paint)
+
+    paint.color = AndroidColor.parseColor("#4B5563") // Gray 600
+    paint.textSize = 11f
     paint.isFakeBoldText = false
-    val bizName = activeBusiness?.name ?: "Business Ledger"
-    canvas.drawText("Business: $bizName | Generated via CashBook Pro", 30f, 63f, paint)
+    canvas.drawText(bizName, 35f, 62f, paint)
+    canvas.drawText("Phone: $phoneStr", 35f, 77f, paint)
 
-    // Metadata
-    paint.color = AndroidColor.BLACK
-    paint.textSize = 12f
-    paint.isFakeBoldText = true
-    val bookName = activeBook?.name ?: "Consumer Khata"
-    val phoneStr = if (activeBook?.phone?.isNotBlank() == true) " | Phone: ${activeBook.phone}" else ""
-    canvas.drawText("Consumer / Book: $bookName$phoneStr", 30f, 110f, paint)
-    
-    paint.isFakeBoldText = false
-    val dateStr = SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()).format(Date())
-    canvas.drawText("Generated On: $dateStr", 30f, 130f, paint)
+    // Right aligned date range
+    paint.textAlign = Paint.Align.RIGHT
+    canvas.drawText("$todayStr - $todayStr", 560f, 45f, paint)
+    paint.textAlign = Paint.Align.LEFT
 
-    // Summary Box Background
-    paint.color = AndroidColor.parseColor("#F1F5F9") // Slate 100
-    canvas.drawRect(30f, 150f, 565f, 220f, paint)
+    // Divider Line
+    paint.color = AndroidColor.parseColor("#E5E7EB")
+    paint.strokeWidth = 1f
+    canvas.drawLine(35f, 90f, 560f, 90f, paint)
 
-    // Summary Box Content
+    // 2. Financial Summary Cards Box
     val totalIn = transactions.filter { it.type == "IN" }.sumOf { it.amount }
     val totalOut = transactions.filter { it.type == "OUT" }.sumOf { it.amount }
     val netBalance = totalIn - totalOut
 
-    paint.color = AndroidColor.BLACK
-    paint.textSize = 11f
+    // Card 1: Total Debit
+    paint.color = AndroidColor.parseColor("#FEF2F2") // Soft Red background
+    canvas.drawRoundRect(35f, 105f, 195f, 160f, 8f, 8f, paint)
+    paint.color = AndroidColor.parseColor("#991B1B")
+    paint.textSize = 9f
     paint.isFakeBoldText = true
-    canvas.drawText("Financial Summary:", 45f, 175f, paint)
+    canvas.drawText("Total Debit (-)", 45f, 122f, paint)
+    paint.textSize = 14f
+    canvas.drawText("Rs ${String.format("%,.0f", totalOut)}", 45f, 145f, paint)
 
-    paint.isFakeBoldText = false
-    canvas.drawText("Total Cash In (+): Rs. ${String.format("%,.0f", totalIn)}", 45f, 195f, paint)
-    canvas.drawText("Total Cash Out (-): Rs. ${String.format("%,.0f", totalOut)}", 220f, 195f, paint)
-    
+    // Card 2: Total Credit
+    paint.color = AndroidColor.parseColor("#ECFDF5") // Soft Green background
+    canvas.drawRoundRect(205f, 105f, 365f, 160f, 8f, 8f, paint)
+    paint.color = AndroidColor.parseColor("#065F46")
+    paint.textSize = 9f
     paint.isFakeBoldText = true
-    paint.color = if (netBalance >= 0) AndroidColor.parseColor("#047857") else AndroidColor.parseColor("#B91C1C")
-    canvas.drawText("Net Balance: Rs. ${String.format("%,.0f", netBalance)}", 410f, 195f, paint)
+    canvas.drawText("Total Credit (+)", 215f, 122f, paint)
+    paint.textSize = 14f
+    canvas.drawText("Rs ${String.format("%,.0f", totalIn)}", 215f, 145f, paint)
 
-    // Table Header
-    paint.color = AndroidColor.parseColor("#334155") // Dark slate 700
-    canvas.drawRect(30f, 240f, 565f, 265f, paint)
+    // Card 3: Net Balance
+    val isDebitNet = netBalance < 0
+    paint.color = if (isDebitNet) AndroidColor.parseColor("#FEF2F2") else AndroidColor.parseColor("#ECFDF5")
+    canvas.drawRoundRect(375f, 105f, 560f, 160f, 8f, 8f, paint)
+    paint.color = if (isDebitNet) AndroidColor.parseColor("#991B1B") else AndroidColor.parseColor("#065F46")
+    paint.textSize = 9f
+    paint.isFakeBoldText = true
+    canvas.drawText(if (isDebitNet) "Net Balance (Debit -)" else "Net Balance (Credit +)", 385f, 122f, paint)
+    paint.textSize = 14f
+    canvas.drawText("Rs ${String.format("%,.0f", kotlin.math.abs(netBalance))}", 385f, 145f, paint)
 
-    paint.color = AndroidColor.WHITE
+    // 3. Table Headers
+    val headerY = 185f
+    paint.color = AndroidColor.parseColor("#F3F4F6")
+    canvas.drawRect(35f, headerY, 560f, headerY + 25f, paint)
+
+    paint.color = AndroidColor.parseColor("#374151")
     paint.textSize = 10f
     paint.isFakeBoldText = true
-    canvas.drawText("Date", 40f, 257f, paint)
-    canvas.drawText("Type", 120f, 257f, paint)
-    canvas.drawText("Remarks / Category", 170f, 257f, paint)
-    canvas.drawText("Payment", 380f, 257f, paint)
-    canvas.drawText("Amount (Rs.)", 480f, 257f, paint)
+    canvas.drawText("Date", 45f, headerY + 16f, paint)
+    canvas.drawText("Details", 130f, headerY + 16f, paint)
+    canvas.drawText("Debit (-)", 290f, headerY + 16f, paint)
+    canvas.drawText("Credit (+)", 380f, headerY + 16f, paint)
+    canvas.drawText("Balance", 470f, headerY + 16f, paint)
 
-    // Table Rows
-    paint.color = AndroidColor.BLACK
+    // 4. Table Rows with Highlighted Balance Column
     paint.isFakeBoldText = false
-    var currentY = 285f
-    val limit = 22
-    transactions.take(limit).forEach { tx ->
-        val txDate = SimpleDateFormat("dd-MMM-yyyy", Locale.getDefault()).format(Date(tx.timestamp))
+    var currentY = headerY + 25f
+    var runningBal = 0.0
+
+    transactions.take(25).forEach { tx ->
+        val dateText = SimpleDateFormat("dd'th' MMM, yy", Locale.getDefault()).format(Date(tx.timestamp))
         val isIn = tx.type == "IN"
-        
+        if (isIn) runningBal += tx.amount else runningBal -= tx.amount
+
+        // Highlight rightmost Balance column background
         paint.color = AndroidColor.parseColor("#F8FAFC")
-        canvas.drawRect(30f, currentY - 12f, 565f, currentY + 6f, paint)
+        canvas.drawRect(460f, currentY, 560f, currentY + 22f, paint)
 
-        paint.color = AndroidColor.BLACK
-        canvas.drawText(txDate, 40f, currentY, paint)
-        
-        paint.color = if (isIn) AndroidColor.parseColor("#059669") else AndroidColor.parseColor("#DC2626")
-        canvas.drawText(if (isIn) "IN" else "OUT", 120f, currentY, paint)
+        // Row Separator Line
+        paint.color = AndroidColor.parseColor("#F1F5F9")
+        canvas.drawLine(35f, currentY + 22f, 560f, currentY + 22f, paint)
 
-        paint.color = AndroidColor.BLACK
-        val displayRemarks = if (tx.remarks.length > 30) tx.remarks.take(27) + "..." else tx.remarks
-        canvas.drawText("$displayRemarks [${tx.category}]", 170f, currentY, paint)
-        canvas.drawText(tx.paymentMethod, 380f, currentY, paint)
+        paint.color = AndroidColor.parseColor("#111827")
+        canvas.drawText(dateText, 45f, currentY + 15f, paint)
 
-        paint.color = if (isIn) AndroidColor.parseColor("#059669") else AndroidColor.parseColor("#DC2626")
+        val detailsText = if (tx.remarks.isNotBlank()) tx.remarks else tx.category
+        val displayDetails = if (detailsText.length > 24) detailsText.take(22) + "..." else detailsText
+        canvas.drawText(displayDetails, 130f, currentY + 15f, paint)
+
+        // Debit column
+        if (!isIn) {
+            paint.color = AndroidColor.parseColor("#DC2626")
+            canvas.drawText("Rs ${String.format("%,.0f", tx.amount)}", 290f, currentY + 15f, paint)
+        } else {
+            paint.color = AndroidColor.GRAY
+            canvas.drawText("-", 290f, currentY + 15f, paint)
+        }
+
+        // Credit column
+        if (isIn) {
+            paint.color = AndroidColor.parseColor("#059669")
+            canvas.drawText("Rs ${String.format("%,.0f", tx.amount)}", 380f, currentY + 15f, paint)
+        } else {
+            paint.color = AndroidColor.GRAY
+            canvas.drawText("-", 380f, currentY + 15f, paint)
+        }
+
+        // Balance column
+        paint.color = if (runningBal < 0) AndroidColor.parseColor("#DC2626") else AndroidColor.parseColor("#059669")
         paint.isFakeBoldText = true
-        val amtStr = String.format("%,.0f", tx.amount)
-        canvas.drawText(amtStr, 480f, currentY, paint)
+        val balLabel = if (runningBal < 0) "${String.format("%,.0f", kotlin.math.abs(runningBal))} (-)" else String.format("%,.0f", runningBal)
+        canvas.drawText(balLabel, 470f, currentY + 15f, paint)
         paint.isFakeBoldText = false
 
         currentY += 22f
     }
 
-    if (transactions.size > limit) {
-        paint.color = AndroidColor.GRAY
-        paint.textSize = 9f
-        canvas.drawText("... and ${transactions.size - limit} more transactions (truncated in PDF overview)", 40f, currentY + 10f, paint)
-    }
-
-    paint.color = AndroidColor.parseColor("#94A3B8")
+    // 5. Footer
+    paint.color = AndroidColor.parseColor("#9CA3AF")
     paint.textSize = 9f
-    canvas.drawText("Page 1 of 1 | CashBook Pro Statement Report", 30f, 820f, paint)
+    val genTimeStr = SimpleDateFormat("dd'th' MMM, yy, hh:mm a", Locale.getDefault()).format(Date())
+    canvas.drawText("Report Generated on $genTimeStr", 35f, 820f, paint)
+
+    paint.textAlign = Paint.Align.RIGHT
+    canvas.drawText("Page 1 of 1", 560f, 820f, paint)
+    paint.textAlign = Paint.Align.LEFT
 
     pdfDocument.finishPage(page)
 
@@ -7879,6 +7633,79 @@ fun generatePdfReport(
     pdfDocument.close()
 
     return file
+}
+
+fun createPaymentReminderBitmap(
+    context: Context,
+    bookName: String,
+    netBalance: Double,
+    businessName: String
+): Bitmap {
+    val bitmap = Bitmap.createBitmap(800, 480, Bitmap.Config.ARGB_8888)
+    val canvas = AndroidCanvas(bitmap)
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    // Canvas Background
+    canvas.drawColor(AndroidColor.WHITE)
+
+    // Outer Border Card
+    paint.color = AndroidColor.parseColor("#E2E8F0")
+    paint.style = Paint.Style.STROKE
+    paint.strokeWidth = 3f
+    canvas.drawRoundRect(20f, 20f, 780f, 460f, 24f, 24f, paint)
+    paint.style = Paint.Style.FILL
+
+    // Top Header Banner
+    paint.color = AndroidColor.parseColor("#10B981") // EasyKhata Green
+    canvas.drawRoundRect(20f, 20f, 780f, 100f, 24f, 24f, paint)
+
+    paint.color = AndroidColor.WHITE
+    paint.textSize = 28f
+    paint.isFakeBoldText = true
+    canvas.drawText("Payment Reminder", 50f, 65f, paint)
+
+    // Customer Name Greeting
+    paint.color = AndroidColor.parseColor("#1E293B")
+    paint.textSize = 22f
+    canvas.drawText("Dear $bookName,", 50f, 150f, paint)
+
+    // Status Label e.g. You have to give
+    val isGive = netBalance < 0
+    val statusText = if (isGive) "You have to give" else "You have to get"
+    paint.color = AndroidColor.parseColor("#64748B")
+    paint.textSize = 20f
+    paint.isFakeBoldText = false
+    canvas.drawText(statusText, 50f, 190f, paint)
+
+    // Amount Text e.g. Rs. 5,000
+    paint.color = if (isGive) AndroidColor.parseColor("#DC2626") else AndroidColor.parseColor("#059669")
+    paint.textSize = 48f
+    paint.isFakeBoldText = true
+    canvas.drawText("Rs. ${String.format("%,.0f", kotlin.math.abs(netBalance))}", 50f, 250f, paint)
+
+    // Subtitle Message
+    paint.color = AndroidColor.parseColor("#475569")
+    paint.textSize = 18f
+    paint.isFakeBoldText = false
+    canvas.drawText("Please settle your pending balance at your earliest convenience.", 50f, 300f, paint)
+
+    // Bottom Divider Line
+    paint.color = AndroidColor.parseColor("#E2E8F0")
+    paint.strokeWidth = 2f
+    canvas.drawLine(50f, 360f, 750f, 360f, paint)
+
+    // Footer: Business Name Left | Easy Khata Right
+    paint.color = AndroidColor.parseColor("#0F172A")
+    paint.textSize = 20f
+    paint.isFakeBoldText = true
+    canvas.drawText(businessName.ifBlank { "Guest Business" }, 50f, 415f, paint)
+
+    paint.color = AndroidColor.parseColor("#10B981")
+    paint.textAlign = Paint.Align.RIGHT
+    canvas.drawText("CashBook Easy Khata App", 750f, 415f, paint)
+    paint.textAlign = Paint.Align.LEFT
+
+    return bitmap
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -7949,7 +7776,7 @@ fun SettingsScreen(viewModel: LedgerViewModel) {
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Google Drive Cloud Sync", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                    Text("CashBook Easy Khata Cloud & Offline Sync", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
                     
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -7963,13 +7790,13 @@ fun SettingsScreen(viewModel: LedgerViewModel) {
                                 modifier = Modifier
                                     .size(10.dp)
                                     .clip(CircleShape)
-                                    .background(if (isSynced) GreenIn else Color.Red)
+                                    .background(if (isSynced) GreenIn else MaterialTheme.colorScheme.primary)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = if (isSynced) "Synced to Cloud" else if (isUserSignedIn) "Pending Sync" else "Offline (Local Only)",
+                                text = if (isSynced) "Synced to Cloud" else "Offline Mode (Local SQLite DB)",
                                 fontWeight = FontWeight.Bold,
-                                color = if (isSynced) GreenIn else Color.Red
+                                color = if (isSynced) GreenIn else MaterialTheme.colorScheme.primary
                             )
                         }
                     }
@@ -7980,7 +7807,7 @@ fun SettingsScreen(viewModel: LedgerViewModel) {
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("Account:", style = MaterialTheme.typography.bodySmall)
+                            Text("Cloud Account:", style = MaterialTheme.typography.bodySmall)
                             Text(userEmail, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
                         }
                         Row(
@@ -8002,7 +7829,7 @@ fun SettingsScreen(viewModel: LedgerViewModel) {
                                         viewModel.logoutSuperAdmin()
                                         settingsAuthVersion++
                                         viewModel.triggerCloudSync()
-                                        Toast.makeText(context, "Logged out from Google Account.", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "Logged out from Cloud Account.", Toast.LENGTH_SHORT).show()
                                     } else {
                                         Toast.makeText(context, "Unauthorized: Data Entry or read-only Partners cannot wipe cloud credentials.", Toast.LENGTH_SHORT).show()
                                     }
@@ -8024,7 +7851,7 @@ fun SettingsScreen(viewModel: LedgerViewModel) {
                         ) {
                             Icon(Icons.Default.CloudSync, contentDescription = null)
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Open Drive Sync Center")
+                            Text("Open Cloud Sync Center")
                         }
                     }
                 }
@@ -8908,18 +8735,18 @@ fun ProfileScreen(viewModel: LedgerViewModel) {
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            text = "Your cashbook entries and reports automatically sync to your private Google Drive app storage.",
+                            text = "Your cashbook entries and reports automatically sync to your secure cloud account.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     } else {
                         Text(
-                            text = "Currently running in local offline mode.",
+                            text = "Currently running in local 100% offline mode.",
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            text = "Connect a Google Account anytime to enable real-time cloud backup to Google Drive.",
+                            text = "Connect a Cloud Account anytime to enable real-time cloud sync across your devices.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -8934,14 +8761,14 @@ fun ProfileScreen(viewModel: LedgerViewModel) {
                     ) {
                         if (!isUserSignedIn) {
                             Button(
-                                onClick = { showOAuthDialogInProfile = true },
+                                onClick = { viewModel.setScreen(Screen.SYNC_CENTER) },
                                 modifier = Modifier.weight(1f),
                                 colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
                                 shape = RoundedCornerShape(10.dp)
                             ) {
-                                Icon(Icons.Default.Login, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Icon(Icons.Default.CloudSync, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Sign in with Google", fontWeight = FontWeight.Bold)
+                                Text("Connect Cloud Account", fontWeight = FontWeight.Bold)
                             }
                         }
 

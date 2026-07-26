@@ -1,5 +1,5 @@
 {
-  "name": "CashBook Pro",
+  "name": "CashBook Easy Khata",
   "description": "A smart offline-first digital ledger to track multi-book business income, expenses, and cashflow with Gemini AI assistance.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
