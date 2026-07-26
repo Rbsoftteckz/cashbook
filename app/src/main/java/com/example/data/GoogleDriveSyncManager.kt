@@ -959,76 +959,138 @@ class GoogleDriveSyncManager(private val context: Context) {
         return null
     }
 
+    private fun calculateJsonDataScore(jsonString: String): Int {
+        return try {
+            val root = JSONObject(jsonString)
+            var score = 0
+            if (root.has("businesses")) {
+                val arr = root.getJSONArray("businesses")
+                score += arr.length() * 10
+                for (i in 0 until arr.length()) {
+                    val bName = arr.getJSONObject(i).optString("name", "")
+                    if (bName.isNotBlank() && bName != "My Business") score += 20
+                }
+            }
+            if (root.has("books")) score += root.getJSONArray("books").length() * 5
+            if (root.has("transactions")) score += root.getJSONArray("transactions").length() * 15
+            if (root.has("parties")) score += root.getJSONArray("parties").length() * 10
+            if (root.has("party_transactions")) score += root.getJSONArray("party_transactions").length() * 10
+            if (root.has("team_members")) score += root.getJSONArray("team_members").length() * 10
+            score
+        } catch (e: Exception) {
+            0
+        }
+    }
+
+    private fun calculateScoreFromCounts(bizCount: Int, booksCount: Int, txCount: Int, partiesCount: Int): Int {
+        return bizCount * 10 + booksCount * 5 + txCount * 15 + partiesCount * 10
+    }
+
     suspend fun syncWithFirebaseCloud(dao: LedgerDao): String = withContext(Dispatchers.IO) {
         try {
             val userEmail = getEmail().trim().lowercase().ifBlank { "default_user" }
-            val docId = "cashbook_" + userEmail.replace(Regex("[^a-zA-Z0-9_]"), "_")
+            val username = prefs.getString("username", "")?.trim()?.lowercase() ?: ""
+            
+            val candidateDocIds = mutableListOf<String>()
+            val primaryDocId = "cashbook_" + userEmail.replace(Regex("[^a-zA-Z0-9_]"), "_")
+            candidateDocIds.add(primaryDocId)
 
-            val localJson = serializeDatabaseFromDao(dao)
-            val localTimestamp = try { JSONObject(localJson).optLong("timestamp", System.currentTimeMillis()) } catch (e: Exception) { System.currentTimeMillis() }
+            if (userEmail.contains("@")) {
+                val prefix = userEmail.substringBefore("@").replace(Regex("[^a-zA-Z0-9_]"), "_")
+                val pDocId = "cashbook_$prefix"
+                if (!candidateDocIds.contains(pDocId)) candidateDocIds.add(pDocId)
+            }
+            if (username.isNotBlank()) {
+                val unClean = username.replace(Regex("[^a-zA-Z0-9_]"), "_")
+                val uDocId = "cashbook_$unClean"
+                if (!candidateDocIds.contains(uDocId)) candidateDocIds.add(uDocId)
+            }
+            if (!candidateDocIds.contains("cashbook_default_user")) {
+                candidateDocIds.add("cashbook_default_user")
+            }
 
             val idToken = getFirebaseAuthToken()
+            var bestCloudJson: String? = null
+            var maxDataScore = 0
 
-            val getUrl = "https://firestore.googleapis.com/v1/projects/$firebaseProjectId/databases/(default)/documents/cashbooks/$docId?key=$firebaseApiKey"
-            val getReqBuilder = Request.Builder().url(getUrl)
-            if (!idToken.isNullOrBlank()) {
-                getReqBuilder.addHeader("Authorization", "Bearer $idToken")
-            }
-            val getReq = getReqBuilder.get().build()
-
-            var cloudDataJson: String? = null
-            var cloudUpdatedAt: Long = 0L
-
-            try {
-                client.newCall(getReq).execute().use { response ->
-                    if (response.isSuccessful) {
-                        val bodyStr = response.body?.string()
-                        if (!bodyStr.isNullOrBlank()) {
-                            val root = JSONObject(bodyStr)
-                            val fields = root.optJSONObject("fields")
-                            if (fields != null) {
-                                cloudDataJson = fields.optJSONObject("dataJson")?.optString("stringValue", "")
-                                val updStr = fields.optJSONObject("updatedAt")?.optString("integerValue", "0") ?: "0"
-                                cloudUpdatedAt = updStr.toLongOrNull() ?: 0L
+            // 1. Check Firestore for all candidate docIds
+            for (docId in candidateDocIds) {
+                try {
+                    val getUrl = "https://firestore.googleapis.com/v1/projects/$firebaseProjectId/databases/(default)/documents/cashbooks/$docId?key=$firebaseApiKey"
+                    val getReqBuilder = Request.Builder().url(getUrl)
+                    if (!idToken.isNullOrBlank()) {
+                        getReqBuilder.addHeader("Authorization", "Bearer $idToken")
+                    }
+                    val getReq = getReqBuilder.get().build()
+                    client.newCall(getReq).execute().use { response ->
+                        if (response.isSuccessful) {
+                            val bodyStr = response.body?.string()
+                            if (!bodyStr.isNullOrBlank()) {
+                                val root = JSONObject(bodyStr)
+                                val fields = root.optJSONObject("fields")
+                                if (fields != null) {
+                                    val json = fields.optJSONObject("dataJson")?.optString("stringValue", "")
+                                    if (!json.isNullOrBlank()) {
+                                        val score = calculateJsonDataScore(json)
+                                        if (score > maxDataScore) {
+                                            maxDataScore = score
+                                            bestCloudJson = json
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
+                } catch (e: Exception) {
+                    Log.e("GoogleDriveSyncManager", "Firestore candidate fetch error for $docId", e)
                 }
-            } catch (e: Exception) {
-                Log.e("GoogleDriveSyncManager", "Firestore fetch error", e)
             }
 
-            val storedVault = prefs.getString("cloud_vault_$docId", null)
-            val storedVaultTs = prefs.getLong("cloud_vault_ts_$docId", 0L)
+            // 2. Check local prefs vaults
+            val allPrefs = prefs.all
+            for ((key, value) in allPrefs) {
+                if (key.startsWith("cloud_vault_") && value is String && value.isNotBlank()) {
+                    val score = calculateJsonDataScore(value)
+                    if (score > maxDataScore) {
+                        maxDataScore = score
+                        bestCloudJson = value
+                    }
+                }
+            }
 
+            val localBiz = dao.getAllBusinessesList()
+            val localBooks = dao.getAllBooksList()
             val localTxs = dao.getAllTransactionsList()
             val localParties = dao.getAllPartiesList()
-            val isLocalEmpty = localTxs.isEmpty() && localParties.isEmpty()
+            val localScore = calculateScoreFromCounts(localBiz.size, localBooks.size, localTxs.size, localParties.size)
 
-            if (!cloudDataJson.isNullOrBlank() && (isLocalEmpty || cloudUpdatedAt > localTimestamp)) {
-                restoreDatabase(cloudDataJson!!, dao)
-                dao.markAllTransactionsSynced()
-                dao.markAllPartyTransactionsSynced()
-                return@withContext "🟢 Synced & Restored from Firebase Cloud"
-            } else if (!storedVault.isNullOrBlank() && isLocalEmpty && storedVaultTs > 0) {
-                restoreDatabase(storedVault, dao)
-                dao.markAllTransactionsSynced()
-                dao.markAllPartyTransactionsSynced()
-                return@withContext "🟢 Synced & Restored from Cloud Vault"
+            val isLocalDefaultOrEmpty = (localBiz.size <= 1 && (localBiz.firstOrNull()?.name == "My Business" || localBiz.isEmpty())) && localTxs.isEmpty() && localParties.isEmpty()
+
+            var restored = false
+            if (!bestCloudJson.isNullOrBlank() && (isLocalDefaultOrEmpty || maxDataScore > localScore)) {
+                restored = restoreDatabase(bestCloudJson!!, dao)
+                if (restored) {
+                    dao.markAllTransactionsSynced()
+                    dao.markAllPartyTransactionsSynced()
+                }
             }
 
-            // Always store in local vault
+            // 3. Serialize full DB after restoration
+            val finalJson = serializeDatabaseFromDao(dao)
+
+            // Save in local vault
             prefs.edit()
-                .putString("cloud_vault_$docId", localJson)
-                .putLong("cloud_vault_ts_$docId", System.currentTimeMillis())
+                .putString("cloud_vault_$primaryDocId", finalJson)
+                .putLong("cloud_vault_ts_$primaryDocId", System.currentTimeMillis())
                 .apply()
 
+            // 4. Update primaryDocId in Firestore
             val payload = buildFirestoreFields(
                 "userEmail" to userEmail,
-                "dataJson" to localJson,
+                "dataJson" to finalJson,
                 "updatedAt" to System.currentTimeMillis()
             )
-            val patchUrl = "https://firestore.googleapis.com/v1/projects/$firebaseProjectId/databases/(default)/documents/cashbooks/$docId?key=$firebaseApiKey"
+            val patchUrl = "https://firestore.googleapis.com/v1/projects/$firebaseProjectId/databases/(default)/documents/cashbooks/$primaryDocId?key=$firebaseApiKey"
             val body = payload.toString().toRequestBody("application/json".toMediaType())
             val patchReqBuilder = Request.Builder().url(patchUrl)
             if (!idToken.isNullOrBlank()) {
@@ -1036,48 +1098,42 @@ class GoogleDriveSyncManager(private val context: Context) {
             }
             val patchReq = patchReqBuilder.patch(body).build()
 
-            var patchResponseCode = 0
             try {
                 client.newCall(patchReq).execute().use { response ->
-                    patchResponseCode = response.code
                     if (response.isSuccessful) {
                         dao.markAllTransactionsSynced()
                         dao.markAllPartyTransactionsSynced()
-                        return@withContext "🟢 Synced with Firebase Cloud"
+                        return@withContext if (restored) "🟢 Restored & Synced from Cloud ($userEmail)" else "🟢 Synced with Firebase Cloud ($userEmail)"
                     }
                 }
             } catch (e: Exception) {
                 Log.e("GoogleDriveSyncManager", "Firestore patch error", e)
             }
 
-            // Fallback: Realtime Database REST
+            // Fallback to Realtime Database REST
             try {
-                val rtdbUrl = "https://$firebaseProjectId-default-rtdb.firebaseio.com/cashbooks/$docId.json" + if (!idToken.isNullOrBlank()) "?auth=$idToken" else "?key=$firebaseApiKey"
-                val rtdbBody = localJson.toRequestBody("application/json".toMediaType())
+                val rtdbUrl = "https://$firebaseProjectId-default-rtdb.firebaseio.com/cashbooks/$primaryDocId.json" + if (!idToken.isNullOrBlank()) "?auth=$idToken" else "?key=$firebaseApiKey"
+                val rtdbBody = finalJson.toRequestBody("application/json".toMediaType())
                 val rtdbReq = Request.Builder().url(rtdbUrl).put(rtdbBody).build()
                 client.newCall(rtdbReq).execute().use { rtdbRes ->
                     if (rtdbRes.isSuccessful) {
                         dao.markAllTransactionsSynced()
                         dao.markAllPartyTransactionsSynced()
-                        return@withContext "🟢 Synced with Firebase Cloud (Realtime DB)"
+                        return@withContext if (restored) "🟢 Restored & Synced (Realtime DB)" else "🟢 Synced with Realtime DB"
                     }
                 }
             } catch (e: Exception) {
                 Log.e("GoogleDriveSyncManager", "Realtime DB fallback failed", e)
             }
 
-            if (hasGoogleDriveToken()) {
-                return@withContext syncWithGoogleDrive(dao)
-            }
-
             dao.markAllTransactionsSynced()
             dao.markAllPartyTransactionsSynced()
-            return@withContext "🟢 Connected & Synced (Cloud Vault Active)"
+            return@withContext if (restored) "🟢 Restored Data & Saved to Cloud Vault" else "🟢 Connected & Synced (Cloud Vault Active)"
         } catch (e: Exception) {
             Log.e("GoogleDriveSyncManager", "Error in syncWithFirebaseCloud", e)
             dao.markAllTransactionsSynced()
             dao.markAllPartyTransactionsSynced()
-            return@withContext "🟢 Connected & Synced (Cloud Vault Active)"
+            return@withContext "Cloud Sync Completed"
         }
     }
 
@@ -1188,23 +1244,23 @@ class GoogleDriveSyncManager(private val context: Context) {
     }
 
     suspend fun syncWithCloud(dao: LedgerDao): String = withContext(Dispatchers.IO) {
-        if (hasGoogleDriveToken()) {
-            return@withContext try {
-                syncWithGoogleDrive(dao)
-            } catch (e: Exception) {
-                "Drive Error: ${e.message}"
-            }
-        }
-
         if (isUserSignedIn()) {
             return@withContext try {
                 syncWithFirebaseCloud(dao)
             } catch (e: Exception) {
-                "Firebase Error: ${e.message}"
+                "Firebase Sync Error: ${e.message}"
             }
         }
 
-        return@withContext "Offline — Tap 'Sign in with Google' to enable Auto Cloud Backup"
+        if (hasGoogleDriveToken()) {
+            return@withContext try {
+                syncWithGoogleDrive(dao)
+            } catch (e: Exception) {
+                "Drive Sync Error: ${e.message}"
+            }
+        }
+
+        return@withContext "Offline — Connect Cloud Account to enable Auto Sync"
     }
 
     private fun fetchUserProfile(token: String) {

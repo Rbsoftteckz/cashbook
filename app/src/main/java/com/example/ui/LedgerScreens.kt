@@ -3948,156 +3948,62 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
             }
         }
 
-        // Super Admin / Boss: APK Download Link Settings Card
-        var showApkGuideDialog by remember { mutableStateOf(false) }
-
-        Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.35f)),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { showApkUrlConfigCard = !showApkUrlConfigCard },
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Icon(Icons.Default.Download, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                        Column {
-                            Text(
-                                "Universal APK Download Link for All Users",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                "Share standalone install link with any person or device",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                    Icon(
-                        imageVector = if (showApkUrlConfigCard) Icons.Default.ArrowDropUp else Icons.Default.ArrowDropDown,
-                        contentDescription = null
-                    )
-                }
-
-                if (showApkUrlConfigCard) {
-                    OutlinedTextField(
-                        value = configuredApkUrl,
-                        onValueChange = { newVal ->
-                            configuredApkUrl = newVal
-                            syncManager.saveApkDownloadUrl(newVal)
-                        },
-                        label = { Text("Public APK Download Link") },
-                        placeholder = { Text("https://...") },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp),
-                        textStyle = TextStyle(fontSize = 11.sp, fontFamily = FontFamily.Monospace),
-                        trailingIcon = {
-                            IconButton(onClick = {
-                                clipboardManager.setText(AnnotatedString(configuredApkUrl))
-                                Toast.makeText(context, "Copied public APK link!", Toast.LENGTH_SHORT).show()
-                            }) {
-                                Icon(Icons.Default.ContentCopy, contentDescription = "Copy Link")
-                            }
-                        }
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Button(
-                            onClick = {
-                                try {
-                                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                                        type = "text/plain"
-                                        putExtra(Intent.EXTRA_SUBJECT, "Download CashBook Ledger App APK")
-                                        putExtra(
-                                            Intent.EXTRA_TEXT,
-                                            "📲 Download & Install CashBook Ledger App for All Android Devices:\n\n" +
-                                            "1️⃣ Public App Preview & Web App:\nhttps://ais-pre-da4saffzzctvdmze42ct3v-707128247986.asia-east1.run.app\n\n" +
-                                            "2️⃣ Direct APK Download Link:\n$configuredApkUrl\n\n" +
-                                            "Compatible with all Android phones and devices!"
-                                        )
-                                    }
-                                    context.startActivity(Intent.createChooser(shareIntent, "Share APK Download Link"))
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "Sharing link...", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Share Link to All", fontSize = 11.sp)
-                        }
-
-                        OutlinedButton(
-                            onClick = { showApkGuideDialog = true },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("APK Export Guide", fontSize = 11.sp)
-                        }
-                    }
-                }
-            }
-        }
-
-        if (showApkGuideDialog) {
-            AlertDialog(
-                onDismissRequest = { showApkGuideDialog = false },
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("📦", fontSize = 22.sp)
-                        Text("How to Download APK for Everyone")
-                    }
-                },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text(
-                            "To get the official standalone APK file for all Android phones:",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            "1. Look at the top right panel shown in your screenshot (with Chat, Share, Publish, GitHub).\n" +
-                            "2. Click the 'GitHub' button to connect & push your project to a GitHub repository.\n" +
-                            "3. From your GitHub repo, you can build/download the standalone APK or release it to everyone.\n" +
-                            "4. You can also click 'Share' or 'Publish' at the top to grant instant access to your app!",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                },
-                confirmButton = {
-                    Button(onClick = { showApkGuideDialog = false }) {
-                        Text("Got it")
-                    }
-                }
-            )
-        }
-
-        // Team members lazy column
+        // Team members lazy column or empty state
         if (activeTeamMembers.isEmpty()) {
-            Box(
+            Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f),
-                contentAlignment = Alignment.Center
+                    .padding(vertical = 12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
             ) {
-                Text(
-                    "No personnel added to this business. Add staff to delegate entries.",
-                    textAlign = TextAlign.Center,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                )
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(64.dp)
+                            .background(GreenIn.copy(alpha = 0.15f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("👥", fontSize = 32.sp)
+                    }
+                    
+                    Text(
+                        "No Personnel Added Yet",
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    
+                    Text(
+                        "Boss / Admin can add team members or staff so they can record Cash In / Cash Out entries for '${activeBusiness?.name ?: "this business"}'.",
+                        textAlign = TextAlign.Center,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Button(
+                        onClick = {
+                            if (hasPermission(simulatedRole, "add_team_member")) {
+                                showAddStaffDialog = true
+                            } else {
+                                Toast.makeText(context, "Unauthorized: Only Boss/Admin can recruit team members.", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.padding(top = 8.dp)
+                    ) {
+                        Icon(Icons.Default.PersonAddAlt, contentDescription = null, tint = Color.White)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(" Add First Team Member", color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                }
             }
         } else {
             LazyColumn(
@@ -4434,7 +4340,8 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
 
     var rawJsonText by remember { mutableStateOf("") }
     var showBackupRestoreDialog by remember { mutableStateOf(false) }
-    var authStateVersion by remember { mutableStateOf(0) }
+    var authStateVersion by remember { mutableIntStateOf(0) }
+    var activeSyncTab by remember { mutableIntStateOf(0) } // 0: Cloud Sync, 1: Google Drive Backup
 
     val isUserSignedIn = remember(authStateVersion) { syncManager.isUserSignedIn() }
     val email = remember(authStateVersion) { syncManager.getEmail() }
@@ -4469,228 +4376,608 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                "CashBook Easy Khata Cloud Sync Center",
+                "CashBook Easy Khata Sync & Backup Vault",
                 fontWeight = FontWeight.Bold,
                 style = MaterialTheme.typography.titleLarge
             )
             Text(
-                "Direct Cloud Synchronization & 100% Offline SQLite Backup",
+                "Real-time Cloud Database Sync & Optional Personal Google Drive Backup",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
             )
         }
 
-        // Live Cloud Connection & Verification Card
+        // Top Segmented Tab Switcher (Cloud Database vs Google Drive Vault)
         item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Cloud Sync Connection & Status", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                    
-                    val isSyncError = syncStatus.contains("Error", ignoreCase = true) || syncStatus.contains("Failed", ignoreCase = true) || syncStatus.contains("403") || syncStatus.contains("401") || syncStatus.contains("400") || syncStatus.contains("500") || syncStatus.contains("Forbidden", ignoreCase = true)
-                    val isRealSyncSuccess = isUserSignedIn && !isSyncError && (syncStatus.contains("Synced", ignoreCase = true) || syncStatus.contains("Restored", ignoreCase = true) || syncStatus.contains("Success", ignoreCase = true))
-
+                Surface(
+                    onClick = { activeSyncTab = 0 },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (activeSyncTab == 0) Color.White else Color.Transparent,
+                    shadowElevation = if (activeSyncTab == 0) 2.dp else 0.dp
+                ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.padding(vertical = 10.dp),
+                        horizontalArrangement = Arrangement.Center,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Cloud Status:")
+                        Icon(
+                            Icons.Default.CloudSync,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                            tint = if (activeSyncTab == 0) GreenIn else Color.Gray
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = if (isRealSyncSuccess) "🟢 Connected & Synced" else if (isSyncError) "🔴 Sync Error / Access Restriction" else if (isUserSignedIn) "🟡 Account Active (Pending Sync)" else "⚪ Offline Mode (Local DB)",
-                            color = if (isRealSyncSuccess) GreenIn else if (isSyncError) MaterialTheme.colorScheme.error else if (isUserSignedIn) MaterialTheme.colorScheme.primary else Color.Gray,
-                            fontWeight = FontWeight.Bold
+                            "Cloud Sync",
+                            fontWeight = if (activeSyncTab == 0) FontWeight.Bold else FontWeight.Medium,
+                            color = if (activeSyncTab == 0) GreenIn else Color.Gray,
+                            style = MaterialTheme.typography.labelLarge
                         )
                     }
+                }
 
-                    if (isUserSignedIn) {
+                Surface(
+                    onClick = { activeSyncTab = 1 },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (activeSyncTab == 1) Color.White else Color.Transparent,
+                    shadowElevation = if (activeSyncTab == 1) 2.dp else 0.dp
+                ) {
+                    Row(
+                        modifier = Modifier.padding(vertical = 10.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.CloudQueue,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                            tint = if (activeSyncTab == 1) GreenIn else Color.Gray
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            "Google Drive",
+                            fontWeight = if (activeSyncTab == 1) FontWeight.Bold else FontWeight.Medium,
+                            color = if (activeSyncTab == 1) GreenIn else Color.Gray,
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                    }
+                }
+            }
+        }
+
+        if (activeSyncTab == 0) {
+            // --- TAB 0: REAL-TIME CLOUD DATABASE SYNC ---
+            // Live Cloud Connection & Verification Card
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("Cloud Sync Connection & Status", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                        
+                        val isSyncError = syncStatus.contains("Error", ignoreCase = true) || syncStatus.contains("Failed", ignoreCase = true) || syncStatus.contains("403") || syncStatus.contains("401") || syncStatus.contains("400") || syncStatus.contains("500") || syncStatus.contains("Forbidden", ignoreCase = true)
+                        val isRealSyncSuccess = isUserSignedIn && !isSyncError && (syncStatus.contains("Synced", ignoreCase = true) || syncStatus.contains("Restored", ignoreCase = true) || syncStatus.contains("Success", ignoreCase = true))
+
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("Cloud Account:")
-                            Text(if (email.isNotBlank()) email else displayName, fontWeight = FontWeight.SemiBold)
+                            Text("Cloud Status:")
+                            Text(
+                                text = if (isRealSyncSuccess) "🟢 Connected & Synced" else if (isSyncError) "🔴 Sync Error / Access Restriction" else if (isUserSignedIn) "🟡 Account Active (Pending Sync)" else "⚪ Offline Mode (Local DB)",
+                                color = if (isRealSyncSuccess) GreenIn else if (isSyncError) MaterialTheme.colorScheme.error else if (isUserSignedIn) MaterialTheme.colorScheme.primary else Color.Gray,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
-                    }
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Last Sync Output:")
-                        Text(
-                            text = if (isUserSignedIn) syncStatus else "Offline Ready (Saved locally)",
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.SemiBold,
-                            color = if (isRealSyncSuccess) GreenIn else if (isSyncError) MaterialTheme.colorScheme.error else Color.Gray,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-
-                    if (verificationTimestamp.isNotBlank()) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("Last Verification:", style = MaterialTheme.typography.bodySmall)
-                            Text(verificationTimestamp, style = MaterialTheme.typography.bodySmall, color = GreenIn, fontWeight = FontWeight.Bold)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(4.dp))
-
-                    // Buttons: Verify Cloud Connection & Sync Now + Account Login
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Button(
-                            onClick = {
-                                if (!isUserSignedIn) {
-                                    showAccountAuthDialog = true
-                                } else {
-                                    viewModel.triggerCloudSync()
-                                    val nowStr = java.text.SimpleDateFormat("dd MMM, hh:mm a", java.util.Locale.getDefault()).format(java.util.Date())
-                                    verificationTimestamp = nowStr
-                                    Toast.makeText(context, "Cloud Sync Connection Verified! Data synced.", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            modifier = Modifier.weight(1f),
-                            enabled = !isSyncing,
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            if (isSyncing) {
-                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                            } else {
-                                Icon(Icons.Default.CloudSync, contentDescription = null)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(if (isUserSignedIn) "Verify & Sync Cloud" else "Connect Cloud Account")
+                        if (isUserSignedIn) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Cloud Account:")
+                                Text(if (email.isNotBlank()) email else displayName, fontWeight = FontWeight.SemiBold)
                             }
                         }
 
-                        if (!isUserSignedIn) {
-                            OutlinedButton(
-                                onClick = { showAccountAuthDialog = true },
-                                modifier = Modifier.weight(0.9f),
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Last Sync Output:")
+                            Text(
+                                text = if (isUserSignedIn) syncStatus else "Offline Ready (Saved locally)",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (isRealSyncSuccess) GreenIn else if (isSyncError) MaterialTheme.colorScheme.error else Color.Gray,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        if (verificationTimestamp.isNotBlank()) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Last Verification:", style = MaterialTheme.typography.bodySmall)
+                                Text(verificationTimestamp, style = MaterialTheme.typography.bodySmall, color = GreenIn, fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        // Buttons: Verify Cloud Connection & Sync Now + Account Login
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    if (!isUserSignedIn) {
+                                        showAccountAuthDialog = true
+                                    } else {
+                                        viewModel.triggerCloudSync()
+                                        val nowStr = java.text.SimpleDateFormat("dd MMM, hh:mm a", java.util.Locale.getDefault()).format(java.util.Date())
+                                        verificationTimestamp = nowStr
+                                        Toast.makeText(context, "Cloud Sync Connection Verified! Data synced.", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                modifier = Modifier.weight(1f),
+                                enabled = !isSyncing,
                                 shape = RoundedCornerShape(10.dp)
                             ) {
-                                Icon(Icons.Default.PersonAdd, contentDescription = null)
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Sign In / Up")
+                                if (isSyncing) {
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                } else {
+                                    Icon(Icons.Default.CloudSync, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(if (isUserSignedIn) "Verify & Sync Cloud" else "Connect Cloud Account")
+                                }
                             }
-                        } else {
-                            OutlinedButton(
-                                onClick = {
-                                    viewModel.logoutSuperAdmin()
-                                    authStateVersion++
-                                    Toast.makeText(context, "Logged out from Cloud Account.", Toast.LENGTH_SHORT).show()
-                                },
-                                modifier = Modifier.weight(0.8f),
-                                shape = RoundedCornerShape(10.dp),
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                            ) {
-                                Icon(Icons.Default.Logout, contentDescription = null)
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Log Out")
+
+                            if (!isUserSignedIn) {
+                                OutlinedButton(
+                                    onClick = { showAccountAuthDialog = true },
+                                    modifier = Modifier.weight(0.9f),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Icon(Icons.Default.PersonAdd, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Sign In / Up")
+                                }
+                            } else {
+                                OutlinedButton(
+                                    onClick = {
+                                        viewModel.logoutSuperAdmin()
+                                        authStateVersion++
+                                        Toast.makeText(context, "Logged out from Cloud Account.", Toast.LENGTH_SHORT).show()
+                                    },
+                                    modifier = Modifier.weight(0.8f),
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                                ) {
+                                    Icon(Icons.Default.Logout, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Log Out")
+                                }
                             }
                         }
                     }
                 }
             }
-        }
 
-        // 100% Offline Capability Guarantee Card
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFFECFDF5)),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFA7F3D0)),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
+            // 100% Offline Capability Guarantee Card
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFECFDF5)),
+                    border = BorderStroke(1.dp, Color(0xFFA7F3D0)),
+                    shape = RoundedCornerShape(12.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.OfflinePin,
-                        contentDescription = "Offline Guaranteed",
-                        tint = Color(0xFF059669),
-                        modifier = Modifier.size(28.dp)
-                    )
-                    Column {
-                        Text("100% Offline Database Ready", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall, color = Color(0xFF065F46))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.OfflinePin,
+                            contentDescription = "Offline Guaranteed",
+                            tint = Color(0xFF059669),
+                            modifier = Modifier.size(28.dp)
+                        )
+                        Column {
+                            Text("100% Offline Database Ready", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall, color = Color(0xFF065F46))
+                            Text(
+                                "Every transaction, book, and business is saved directly to your phone's SQLite database first. The app operates seamlessly without internet, and syncs to cloud automatically when reconnected.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFF047857)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Manual Backup and JSON Restore Tools
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("Manual SQLite Backups", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "Every transaction, book, and business is saved directly to your phone's SQLite database first. The app operates seamlessly without internet, and syncs to cloud automatically when reconnected.",
+                            "Generate completely portable, fully offline-restorable database backups as simple raw JSON text files.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFF047857)
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    val bizList = viewModel.businesses.value
+                                    val bookList = viewModel.books.value
+                                    val txList = viewModel.allTransactions.value
+                                    val partyList = viewModel.parties.value
+                                    val pTxList = viewModel.allPartyTransactions.value
+                                    val teamList = viewModel.allTeamMembers.value
+
+                                    val backupJsonStr = syncManager.serializeDatabase(
+                                        businesses = bizList,
+                                        books = bookList,
+                                        transactions = txList,
+                                        parties = partyList,
+                                        partyTransactions = pTxList,
+                                        teamMembers = teamList
+                                    )
+                                    clipboardManager.setText(AnnotatedString(backupJsonStr))
+                                    Toast.makeText(context, "Complete backup JSON copied to clipboard!", Toast.LENGTH_LONG).show()
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.ContentCopy, contentDescription = null)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Export JSON")
+                            }
+
+                            OutlinedButton(
+                                onClick = { showBackupRestoreDialog = true },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.FileUpload, contentDescription = null)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Import JSON")
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // --- TAB 1: DEDICATED GOOGLE DRIVE BACKUP VAULT ---
+            item {
+                var driveAuthVersion by remember { mutableIntStateOf(0) }
+                val isDriveConnected = remember(driveAuthVersion) { syncManager.isGoogleDriveConnected() }
+                val driveEmail = remember(driveAuthVersion) { syncManager.getGoogleEmail() }
+                val driveName = remember(driveAuthVersion) { syncManager.getGoogleName() }
+                var showDriveOAuthDialog by remember { mutableStateOf(false) }
+                var driveLastBackupTime by remember { mutableStateOf("") }
+                var driveStatusMessage by remember { mutableStateOf("") }
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                if (isDriveConnected) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(48.dp)
+                                            .background(GreenIn.copy(alpha = 0.15f), CircleShape),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            Icons.Default.CloudDone,
+                                            contentDescription = "Drive Connected",
+                                            tint = GreenIn,
+                                            modifier = Modifier.size(32.dp)
+                                        )
+                                    }
+                                } else {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(48.dp)
+                                            .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f), CircleShape),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            Icons.Default.CloudOff,
+                                            contentDescription = "Drive Disconnected",
+                                            tint = MaterialTheme.colorScheme.error,
+                                            modifier = Modifier.size(32.dp)
+                                        )
+                                    }
+                                }
+
+                                Column {
+                                    Text(
+                                        "Google Drive Backup Vault",
+                                        fontWeight = FontWeight.Bold,
+                                        style = MaterialTheme.typography.titleMedium
+                                    )
+                                    Text(
+                                        if (isDriveConnected) "Connected Account" else "Not Linked to Google Drive",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+
+                            Surface(
+                                color = if (isDriveConnected) GreenIn.copy(alpha = 0.15f) else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text(
+                                    if (isDriveConnected) "🟢 Drive Linked" else "🔴 Drive Offline",
+                                    color = if (isDriveConnected) GreenIn else MaterialTheme.colorScheme.error,
+                                    fontWeight = FontWeight.Bold,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+
+                        Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                        if (isDriveConnected) {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text("Connected Email:", style = MaterialTheme.typography.bodySmall)
+                                    Text(
+                                        driveEmail.ifBlank { driveName.ifBlank { "Google Drive Account" } },
+                                        fontWeight = FontWeight.Bold,
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+
+                                if (driveLastBackupTime.isNotBlank()) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text("Last Drive Sync:", style = MaterialTheme.typography.bodySmall)
+                                        Text(driveLastBackupTime, color = GreenIn, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
+                                    }
+                                }
+
+                                if (driveStatusMessage.isNotBlank()) {
+                                    Text(
+                                        "Drive Output: $driveStatusMessage",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Button(
+                                    onClick = {
+                                        viewModel.triggerDriveSync { res ->
+                                            driveStatusMessage = res
+                                            val nowStr = java.text.SimpleDateFormat("dd MMM, hh:mm a", java.util.Locale.getDefault()).format(java.util.Date())
+                                            driveLastBackupTime = nowStr
+                                            Toast.makeText(context, res, Toast.LENGTH_LONG).show()
+                                        }
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                                    shape = RoundedCornerShape(10.dp),
+                                    enabled = !isSyncing
+                                ) {
+                                    if (isSyncing) {
+                                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
+                                    } else {
+                                        Icon(Icons.Default.CloudUpload, contentDescription = null, tint = Color.White)
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Backup Now", color = Color.White, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+
+                                OutlinedButton(
+                                    onClick = {
+                                        viewModel.triggerDriveSync { res ->
+                                            driveStatusMessage = res
+                                            Toast.makeText(context, "Restore: $res", Toast.LENGTH_LONG).show()
+                                        }
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(10.dp),
+                                    enabled = !isSyncing
+                                ) {
+                                    Icon(Icons.Default.CloudDownload, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Restore Data")
+                                }
+                            }
+
+                            TextButton(
+                                onClick = {
+                                    syncManager.clearGoogleAuth()
+                                    driveAuthVersion++
+                                    Toast.makeText(context, "Google Drive disconnected.", Toast.LENGTH_SHORT).show()
+                                },
+                                modifier = Modifier.align(Alignment.CenterHorizontally)
+                            ) {
+                                Icon(Icons.Default.LinkOff, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Disconnect Google Drive", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                            }
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Text(
+                                    "Google Drive Backup is completely separate from Cloud Sync. Click below to sign into your Google account and authorize private cashbook backups in Google Drive.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+
+                                Button(
+                                    onClick = { showDriveOAuthDialog = true },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Icon(Icons.Default.Login, contentDescription = null, tint = Color.White)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Connect Google Drive Account", color = Color.White, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Security & Privacy Info Card
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF8FAFC)),
+                    border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("🛡️", fontSize = 18.sp)
+                            Text("Google Drive Private Vault", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
+                        }
+                        Text(
+                            "• Backups are stored in your personal Google Drive appDataFolder.\n" +
+                            "• Easy restore when installing CashBook on any device.\n" +
+                            "• Entirely separate and distinct from multi-user Cloud Sync.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF64748B)
                         )
                     }
                 }
-            }
-        }
 
-        // Manual Backup and JSON Restore Tools
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Manual SQLite Backups", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "Generate completely portable, fully offline-restorable database backups as simple raw JSON text files.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-                    )
+                // OAuth WebView Dialog for Google Drive Connect
+                if (showDriveOAuthDialog) {
+                    Dialog(onDismissRequest = { showDriveOAuthDialog = false }) {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(vertical = 24.dp, horizontal = 12.dp),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Column(modifier = Modifier.fillMaxSize()) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(16.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Authorize Google Drive Backup", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                                    IconButton(onClick = { showDriveOAuthDialog = false }) {
+                                        Icon(Icons.Default.Close, contentDescription = "Close WebView")
+                                    }
+                                }
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Button(
-                            onClick = {
-                                val bizList = viewModel.businesses.value
-                                val bookList = viewModel.books.value
-                                val txList = viewModel.allTransactions.value
-                                val partyList = viewModel.parties.value
-                                val pTxList = viewModel.allPartyTransactions.value
-                                val teamList = viewModel.allTeamMembers.value
+                                AndroidView(
+                                    factory = { ctx ->
+                                        WebView(ctx).apply {
+                                            settings.javaScriptEnabled = true
+                                            settings.domStorageEnabled = true
+                                            val defaultUa = android.webkit.WebSettings.getDefaultUserAgent(ctx)
+                                            val sanitizedUa = if (defaultUa.isNullOrBlank()) {
+                                                "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+                                            } else {
+                                                defaultUa.replace("; wv", "").replace("Version/4.0 ", "").replace("Version/4.0", "")
+                                            }
+                                            settings.userAgentString = sanitizedUa
 
-                                val backupJsonStr = syncManager.serializeDatabase(
-                                    businesses = bizList,
-                                    books = bookList,
-                                    transactions = txList,
-                                    parties = partyList,
-                                    partyTransactions = pTxList,
-                                    teamMembers = teamList
+                                            webViewClient = object : WebViewClient() {
+                                                override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+                                                    return handleRedirect(url)
+                                                }
+
+                                                override fun shouldOverrideUrlLoading(view: WebView?, request: android.webkit.WebResourceRequest?): Boolean {
+                                                    return handleRedirect(request?.url?.toString())
+                                                }
+
+                                                override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                                                    super.onPageStarted(view, url, favicon)
+                                                    handleRedirect(url)
+                                                }
+
+                                                private fun handleRedirect(url: String?): Boolean {
+                                                    val currentRedirectUri = syncManager.getRedirectUri()
+                                                    if (url != null && url.startsWith(currentRedirectUri)) {
+                                                        val token = extractAccessToken(url)
+                                                        if (token != null) {
+                                                            syncManager.saveAccessToken(token)
+                                                            driveAuthVersion++
+                                                            showDriveOAuthDialog = false
+                                                            viewModel.triggerDriveSync {
+                                                                Toast.makeText(context, "Google Drive Connected & Synced!", Toast.LENGTH_LONG).show()
+                                                            }
+                                                            return true
+                                                        }
+                                                    }
+                                                    return false
+                                                }
+                                            }
+
+                                            val finalClientId = syncManager.getClientId()
+                                            val finalRedirectUri = syncManager.getRedirectUri()
+                                            val authUrl = "https://accounts.google.com/o/oauth2/v2/auth?" +
+                                                    "client_id=$finalClientId&" +
+                                                    "redirect_uri=$finalRedirectUri&" +
+                                                    "response_type=token&" +
+                                                    "scope=https://www.googleapis.com/auth/drive.appdata%20email%20profile"
+                                            loadUrl(authUrl)
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxWidth()
                                 )
-                                clipboardManager.setText(AnnotatedString(backupJsonStr))
-                                Toast.makeText(context, "Complete backup JSON copied to clipboard!", Toast.LENGTH_LONG).show()
-                            },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Default.ContentCopy, contentDescription = null)
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Export JSON")
-                        }
-
-                        OutlinedButton(
-                            onClick = { showBackupRestoreDialog = true },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Default.FileUpload, contentDescription = null)
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Import JSON")
+                            }
                         }
                     }
                 }
@@ -5990,7 +6277,7 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                         textAlign = TextAlign.Center
                     )
                     Text(
-                        text = "Enter your credentials or sync with Google Drive.",
+                        text = "Enter your credentials to manage your cashbooks.",
                         style = MaterialTheme.typography.bodyMedium.copy(
                             color = Color(0xFF64748B)
                         ),
@@ -6622,121 +6909,6 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                             Text("Back to Sign In", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
                         }
                     }
-                }
-            }
-
-            // Cloud Sync Option Card
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFFF1F5F9)),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Icon(Icons.Default.CloudSync, contentDescription = null, tint = GreenIn)
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Google Drive Auto-Sync", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            if (isUserSignedIn) "Connected (${syncManager.getEmail()}) — Account & Books auto-synced to Drive!" else "Sync offline accounts & books with Google Drive",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFF64748B)
-                        )
-                    }
-                    if (!isUserSignedIn) {
-                        TextButton(onClick = { showOAuthDialogInWelcome = true }) {
-                            Text("Connect", fontWeight = FontWeight.Bold, color = GreenIn)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // WebView Login Dialog
-    if (showOAuthDialogInWelcome) {
-        Dialog(onDismissRequest = { showOAuthDialogInWelcome = false }) {
-            Card(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(vertical = 24.dp, horizontal = 12.dp),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Column(modifier = Modifier.fillMaxSize()) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Sign In with Google", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                        IconButton(onClick = { showOAuthDialogInWelcome = false }) {
-                            Icon(Icons.Default.Close, contentDescription = "Close WebView")
-                        }
-                    }
-
-                    AndroidView(
-                        factory = { ctx ->
-                            WebView(ctx).apply {
-                                settings.javaScriptEnabled = true
-                                settings.domStorageEnabled = true
-                                val defaultUa = android.webkit.WebSettings.getDefaultUserAgent(ctx)
-                                val sanitizedUa = if (defaultUa.isNullOrBlank()) {
-                                    "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
-                                } else {
-                                    defaultUa.replace("; wv", "").replace("Version/4.0 ", "").replace("Version/4.0", "")
-                                }
-                                settings.userAgentString = sanitizedUa
-                                
-                                webViewClient = object : WebViewClient() {
-                                    override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
-                                        return handleRedirect(url)
-                                    }
-
-                                    override fun shouldOverrideUrlLoading(view: WebView?, request: android.webkit.WebResourceRequest?): Boolean {
-                                        return handleRedirect(request?.url?.toString())
-                                    }
-
-                                    override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
-                                        super.onPageStarted(view, url, favicon)
-                                        handleRedirect(url)
-                                    }
-
-                                    private fun handleRedirect(url: String?): Boolean {
-                                        val currentRedirectUri = syncManager.getRedirectUri()
-                                        if (url != null && url.startsWith(currentRedirectUri)) {
-                                            val token = extractAccessToken(url)
-                                            if (token != null) {
-                                                syncManager.saveAccessToken(token)
-                                                viewModel.isSuperAdmin.value = true
-                                                viewModel.triggerCloudSync()
-                                                showOAuthDialogInWelcome = false
-                                                authStateVersion++
-                                                Toast.makeText(context, "Google Authorization successful! Syncing cloud data...", Toast.LENGTH_LONG).show()
-                                                return true
-                                            }
-                                        }
-                                        return false
-                                    }
-                                }
-
-                                val finalClientId = syncManager.getClientId()
-                                val finalRedirectUri = syncManager.getRedirectUri()
-                                val authUrl = "https://accounts.google.com/o/oauth2/v2/auth?" +
-                                        "client_id=$finalClientId&" +
-                                        "redirect_uri=$finalRedirectUri&" +
-                                        "response_type=token&" +
-                                        "scope=https://www.googleapis.com/auth/drive.appdata%20email%20profile"
-                                loadUrl(authUrl)
-                            }
-                        },
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth()
-                    )
                 }
             }
         }

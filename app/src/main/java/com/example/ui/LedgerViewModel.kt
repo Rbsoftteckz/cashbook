@@ -277,20 +277,15 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                 val message = syncManager.syncWithCloud(database.ledgerDao())
                 _syncStatus.value = message
 
-                // After sync, ensure active business & active book are selected from restored list if needed
+                // After sync, ensure active business & active book are updated to restored list
                 val currentBizList = repository.allBusinesses.first()
                 if (currentBizList.isNotEmpty()) {
-                    if (_activeBusiness.value == null || _activeBusiness.value?.name == "My Business") {
-                        // Prefer non-default business if available
-                        val restoredBiz = currentBizList.find { it.name != "My Business" } ?: currentBizList.first()
-                        _activeBusiness.value = restoredBiz
-                    }
-                    val activeBizId = _activeBusiness.value?.id ?: 1
+                    val nonDefaultBiz = currentBizList.find { it.name != "My Business" } ?: currentBizList.last()
+                    _activeBusiness.value = nonDefaultBiz
+                    val activeBizId = nonDefaultBiz.id
                     val currentBooksList = repository.getBooksForBusiness(activeBizId).first()
                     if (currentBooksList.isNotEmpty()) {
-                        if (_activeBook.value == null || !currentBooksList.any { it.id == _activeBook.value?.id }) {
-                            _activeBook.value = currentBooksList.first()
-                        }
+                        _activeBook.value = currentBooksList.firstOrNull { it.businessId == activeBizId } ?: currentBooksList.last()
                     }
                 } else if (syncManager.isUserSignedIn()) {
                     val email = syncManager.getEmail()
@@ -299,6 +294,28 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                 }
             } catch (e: Exception) {
                 _syncStatus.value = "Sync Interrupted: ${e.message}"
+            } finally {
+                _isSyncing.value = false
+            }
+        }
+    }
+
+    fun triggerDriveSync(onResult: (String) -> Unit = {}) {
+        if (!syncManager.hasGoogleDriveToken()) {
+            onResult("Google Drive not connected")
+            return
+        }
+        viewModelScope.launch {
+            _isSyncing.value = true
+            _syncStatus.value = "Google Drive Syncing..."
+            try {
+                val message = syncManager.syncWithGoogleDrive(database.ledgerDao())
+                _syncStatus.value = message
+                onResult(message)
+            } catch (e: Exception) {
+                val errMessage = "Drive Sync Error: ${e.message}"
+                _syncStatus.value = errMessage
+                onResult(errMessage)
             } finally {
                 _isSyncing.value = false
             }
