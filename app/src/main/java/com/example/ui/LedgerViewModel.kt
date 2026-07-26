@@ -11,6 +11,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.*
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -246,6 +247,16 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             }
         } catch (e: Exception) {
             Log.e("LedgerViewModel", "Failed to register network callback", e)
+        }
+
+        // Real-time periodic cloud polling (every 10 seconds) so team members and transactions auto-update live across all devices
+        viewModelScope.launch {
+            while (isActive) {
+                kotlinx.coroutines.delay(10000L)
+                if (syncManager.isUserSignedIn() && !_isSyncing.value) {
+                    triggerCloudSync()
+                }
+            }
         }
     }
 
