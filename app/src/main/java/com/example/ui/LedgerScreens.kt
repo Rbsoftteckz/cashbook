@@ -614,20 +614,21 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         containerColor = MaterialTheme.colorScheme.surface
                     ),
                     actions = {
-                        // Cloud Sync status indicator (Green if connected, Red if error, Teal/Primary if running in offline local mode)
+                        // Cloud Sync status indicator (Green if connected, Red if offline/error, Teal/Primary if running in offline local mode)
                         val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
-                        val isUserSignedIn = viewModel.syncManager.isUserSignedIn()
-                        val isSyncError = syncStatus.contains("Error", ignoreCase = true) || syncStatus.contains("Failed", ignoreCase = true) || syncStatus.contains("403") || syncStatus.contains("401") || syncStatus.contains("400") || syncStatus.contains("500")
-                        val isRealSuccess = isUserSignedIn && !isSyncError && (syncStatus.contains("Synced", ignoreCase = true) || syncStatus.contains("Restored", ignoreCase = true) || syncStatus.contains("Success", ignoreCase = true))
+                        val isOnline by viewModel.isOnline.collectAsStateWithLifecycle()
+                        val isRealCloudAccount = viewModel.syncManager.isRealCloudAccount()
+                        val isSyncError = !isOnline || syncStatus.contains("Error", ignoreCase = true) || syncStatus.contains("Failed", ignoreCase = true) || syncStatus.contains("403") || syncStatus.contains("401") || syncStatus.contains("400") || syncStatus.contains("500") || syncStatus.contains("Disconnected", ignoreCase = true)
+                        val isRealSuccess = isOnline && isRealCloudAccount && !isSyncError && (syncStatus.contains("Synced", ignoreCase = true) || syncStatus.contains("Restored", ignoreCase = true) || syncStatus.contains("Success", ignoreCase = true) || syncStatus.contains("Connected", ignoreCase = true))
 
                         IconButton(
                             onClick = { viewModel.setScreen(Screen.SYNC_CENTER) },
                             modifier = Modifier.testTag("top_bar_sync_indicator")
                         ) {
                             Icon(
-                                imageVector = if (isRealSuccess) Icons.Default.CloudDone else if (isSyncError) Icons.Default.CloudOff else Icons.Default.OfflinePin,
+                                imageVector = if (!isOnline) Icons.Default.CloudOff else if (isRealSuccess) Icons.Default.CloudDone else if (isSyncError) Icons.Default.CloudOff else Icons.Default.OfflinePin,
                                 contentDescription = "Cloud Sync & Offline Status",
-                                tint = if (isRealSuccess) GreenIn else if (isSyncError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                                tint = if (!isOnline) MaterialTheme.colorScheme.error else if (isRealSuccess) GreenIn else if (isSyncError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
                             )
                         }
                         IconButton(
@@ -1079,19 +1080,23 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
         // Cloud Sync & Offline Status Banner
         item {
             val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
+            val isOnline by viewModel.isOnline.collectAsStateWithLifecycle()
             val isSyncing by viewModel.isSyncing.collectAsStateWithLifecycle()
             val isUserSignedIn = viewModel.syncManager.isUserSignedIn()
+            val isRealCloudAccount = viewModel.syncManager.isRealCloudAccount()
             val userEmail = viewModel.syncManager.getEmail()
 
-            val isSyncError = syncStatus.contains("Error", ignoreCase = true) || syncStatus.contains("Failed", ignoreCase = true) || syncStatus.contains("403") || syncStatus.contains("401") || syncStatus.contains("400") || syncStatus.contains("500")
-            val isRealSuccess = isUserSignedIn && !isSyncError && (syncStatus.contains("Synced", ignoreCase = true) || syncStatus.contains("Restored", ignoreCase = true) || syncStatus.contains("Success", ignoreCase = true))
+            val isSyncError = !isOnline || syncStatus.contains("Error", ignoreCase = true) || syncStatus.contains("Failed", ignoreCase = true) || syncStatus.contains("403") || syncStatus.contains("401") || syncStatus.contains("400") || syncStatus.contains("500") || syncStatus.contains("Disconnected", ignoreCase = true)
+            val isRealSuccess = isOnline && isRealCloudAccount && !isSyncError && (syncStatus.contains("Synced", ignoreCase = true) || syncStatus.contains("Restored", ignoreCase = true) || syncStatus.contains("Success", ignoreCase = true) || syncStatus.contains("Connected", ignoreCase = true))
 
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { viewModel.setScreen(Screen.SYNC_CENTER) },
                 colors = CardDefaults.cardColors(
-                    containerColor = if (isSyncError) {
+                    containerColor = if (!isOnline) {
+                        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.15f)
+                    } else if (isSyncError) {
                         MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.15f)
                     } else if (isRealSuccess) {
                         MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)
@@ -1101,7 +1106,7 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                 ),
                 border = androidx.compose.foundation.BorderStroke(
                     1.dp, 
-                    if (isSyncError) MaterialTheme.colorScheme.error.copy(alpha = 0.4f) else if (isRealSuccess) MaterialTheme.colorScheme.primary.copy(alpha = 0.3f) else Color(0xFFA7F3D0)
+                    if (!isOnline) MaterialTheme.colorScheme.error.copy(alpha = 0.4f) else if (isSyncError) MaterialTheme.colorScheme.error.copy(alpha = 0.4f) else if (isRealSuccess) MaterialTheme.colorScheme.primary.copy(alpha = 0.3f) else Color(0xFFA7F3D0)
                 ),
                 shape = RoundedCornerShape(12.dp)
             ) {
@@ -1118,9 +1123,9 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            imageVector = if (isSyncError) Icons.Default.CloudOff else if (isRealSuccess) Icons.Default.CloudSync else Icons.Default.OfflinePin,
+                            imageVector = if (!isOnline) Icons.Default.CloudOff else if (isSyncError) Icons.Default.CloudOff else if (isRealSuccess) Icons.Default.CloudSync else Icons.Default.OfflinePin,
                             contentDescription = null,
-                            tint = if (isSyncError) MaterialTheme.colorScheme.error else if (isRealSuccess) GreenIn else Color(0xFF059669),
+                            tint = if (!isOnline) MaterialTheme.colorScheme.error else if (isSyncError) MaterialTheme.colorScheme.error else if (isRealSuccess) GreenIn else Color(0xFF059669),
                             modifier = Modifier.size(24.dp)
                         )
                         Column {
@@ -1131,29 +1136,31 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                                     style = MaterialTheme.typography.bodySmall
                                 )
                                 Surface(
-                                    color = if (isSyncError) MaterialTheme.colorScheme.errorContainer else if (isRealSuccess) GreenIn.copy(alpha = 0.12f) else Color(0xFFD1FAE5),
+                                    color = if (!isOnline) MaterialTheme.colorScheme.errorContainer else if (isSyncError) MaterialTheme.colorScheme.errorContainer else if (isRealSuccess) GreenIn.copy(alpha = 0.12f) else Color(0xFFD1FAE5),
                                     shape = RoundedCornerShape(4.dp)
                                 ) {
                                     Text(
-                                        text = if (isSyncError) "SYNC ISSUE" else if (isRealSuccess) "CONNECTED & SYNCED" else if (isUserSignedIn) "PENDING SYNC" else "OFFLINE READY",
-                                        color = if (isSyncError) MaterialTheme.colorScheme.error else if (isRealSuccess) GreenIn else if (isUserSignedIn) MaterialTheme.colorScheme.primary else Color(0xFF047857),
+                                        text = if (!isOnline) "OFFLINE MODE" else if (isSyncError) "SYNC ISSUE" else if (isRealSuccess) "CONNECTED & SYNCED" else if (isRealCloudAccount) "PENDING SYNC" else "OFFLINE READY",
+                                        color = if (!isOnline) MaterialTheme.colorScheme.error else if (isSyncError) MaterialTheme.colorScheme.error else if (isRealSuccess) GreenIn else if (isRealCloudAccount) MaterialTheme.colorScheme.primary else Color(0xFF047857),
                                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
                                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                     )
                                 }
                             }
                             Text(
-                                text = if (isSyncError) {
+                                text = if (!isOnline) {
+                                    "No internet connection detected. Saved in local SQLite database."
+                                } else if (!isRealCloudAccount) {
+                                    "Local Account ($userEmail). Saved locally in SQLite database."
+                                } else if (isSyncError) {
                                     "Account: $userEmail — Status: $syncStatus"
                                 } else if (isRealSuccess) {
                                     "Cloud Account: $userEmail — Entries synchronized."
-                                } else if (isUserSignedIn) {
-                                    "Account active ($userEmail). Tap to sync."
                                 } else {
-                                    "App is 100% offline ready. Local SQLite database active."
+                                    "Account active ($userEmail). Tap to sync."
                                 },
                                 style = MaterialTheme.typography.bodySmall,
-                                color = if (isSyncError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+                                color = if (!isOnline || isSyncError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
@@ -4348,6 +4355,8 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
     val businesses by viewModel.businesses.collectAsStateWithLifecycle()
     val books by viewModel.books.collectAsStateWithLifecycle()
     val allTransactions by viewModel.allTransactions.collectAsStateWithLifecycle()
+    val partiesList by viewModel.parties.collectAsStateWithLifecycle()
+    val teamMembersList by viewModel.allTeamMembers.collectAsStateWithLifecycle()
 
     var showAccountAuthDialog by remember { mutableStateOf(false) }
     var authEmailInput by remember { mutableStateOf("") }
@@ -4386,7 +4395,7 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
             )
         }
 
-        // Top Segmented Tab Switcher (Cloud Database vs Google Drive Vault)
+        // Top Segmented Tab Switcher (3 Tabs: Cloud Synced, Google Drive, Offline AIS Status)
         item {
             Row(
                 modifier = Modifier
@@ -4396,6 +4405,7 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                     .padding(4.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
+                // Tab 0: Cloud Synced & Status
                 Surface(
                     onClick = { activeSyncTab = 0 },
                     modifier = Modifier.weight(1f),
@@ -4411,19 +4421,20 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                         Icon(
                             Icons.Default.CloudSync,
                             contentDescription = null,
-                            modifier = Modifier.size(18.dp),
+                            modifier = Modifier.size(16.dp),
                             tint = if (activeSyncTab == 0) GreenIn else Color.Gray
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            "Cloud Sync",
+                            "Cloud Synced",
                             fontWeight = if (activeSyncTab == 0) FontWeight.Bold else FontWeight.Medium,
                             color = if (activeSyncTab == 0) GreenIn else Color.Gray,
-                            style = MaterialTheme.typography.labelLarge
+                            style = MaterialTheme.typography.labelMedium
                         )
                     }
                 }
 
+                // Tab 1: Google Drive & Status
                 Surface(
                     onClick = { activeSyncTab = 1 },
                     modifier = Modifier.weight(1f),
@@ -4439,15 +4450,44 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                         Icon(
                             Icons.Default.CloudQueue,
                             contentDescription = null,
-                            modifier = Modifier.size(18.dp),
+                            modifier = Modifier.size(16.dp),
                             tint = if (activeSyncTab == 1) GreenIn else Color.Gray
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
                         Text(
                             "Google Drive",
                             fontWeight = if (activeSyncTab == 1) FontWeight.Bold else FontWeight.Medium,
                             color = if (activeSyncTab == 1) GreenIn else Color.Gray,
-                            style = MaterialTheme.typography.labelLarge
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
+                }
+
+                // Tab 2: Offline AIS Status
+                Surface(
+                    onClick = { activeSyncTab = 2 },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (activeSyncTab == 2) Color.White else Color.Transparent,
+                    shadowElevation = if (activeSyncTab == 2) 2.dp else 0.dp
+                ) {
+                    Row(
+                        modifier = Modifier.padding(vertical = 10.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Storage,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = if (activeSyncTab == 2) GreenIn else Color.Gray
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            "Offline AIS",
+                            fontWeight = if (activeSyncTab == 2) FontWeight.Bold else FontWeight.Medium,
+                            color = if (activeSyncTab == 2) GreenIn else Color.Gray,
+                            style = MaterialTheme.typography.labelMedium
                         )
                     }
                 }
@@ -4465,8 +4505,10 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text("Cloud Sync Connection & Status", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
                         
-                        val isSyncError = syncStatus.contains("Error", ignoreCase = true) || syncStatus.contains("Failed", ignoreCase = true) || syncStatus.contains("403") || syncStatus.contains("401") || syncStatus.contains("400") || syncStatus.contains("500") || syncStatus.contains("Forbidden", ignoreCase = true)
-                        val isRealSyncSuccess = isUserSignedIn && !isSyncError && (syncStatus.contains("Synced", ignoreCase = true) || syncStatus.contains("Restored", ignoreCase = true) || syncStatus.contains("Success", ignoreCase = true))
+                        val isOnline by viewModel.isOnline.collectAsStateWithLifecycle()
+                        val isRealCloudAccount = viewModel.syncManager.isRealCloudAccount()
+                        val isSyncError = !isOnline || syncStatus.contains("Error", ignoreCase = true) || syncStatus.contains("Failed", ignoreCase = true) || syncStatus.contains("403") || syncStatus.contains("401") || syncStatus.contains("400") || syncStatus.contains("500") || syncStatus.contains("Forbidden", ignoreCase = true) || syncStatus.contains("Disconnected", ignoreCase = true)
+                        val isRealSyncSuccess = isOnline && isRealCloudAccount && !isSyncError && (syncStatus.contains("Synced", ignoreCase = true) || syncStatus.contains("Restored", ignoreCase = true) || syncStatus.contains("Success", ignoreCase = true) || syncStatus.contains("Connected", ignoreCase = true))
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -4475,21 +4517,19 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                         ) {
                             Text("Cloud Status:")
                             Text(
-                                text = if (isRealSyncSuccess) "🟢 Connected & Synced" else if (isSyncError) "🔴 Sync Error / Access Restriction" else if (isUserSignedIn) "🟡 Account Active (Pending Sync)" else "⚪ Offline Mode (Local DB)",
-                                color = if (isRealSyncSuccess) GreenIn else if (isSyncError) MaterialTheme.colorScheme.error else if (isUserSignedIn) MaterialTheme.colorScheme.primary else Color.Gray,
+                                text = if (!isOnline) "🔴 Disconnected (Offline Mode)" else if (!isRealCloudAccount) "⚪ Offline Local Account (Local DB Only)" else if (isRealSyncSuccess) "🟢 Connected & Synced" else if (isSyncError) "🔴 Sync Error / Access Restriction" else "🟡 Account Active (Pending Sync)",
+                                color = if (!isOnline) MaterialTheme.colorScheme.error else if (!isRealCloudAccount) Color.Gray else if (isRealSyncSuccess) GreenIn else if (isSyncError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                                 fontWeight = FontWeight.Bold
                             )
                         }
 
-                        if (isUserSignedIn) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text("Cloud Account:")
-                                Text(if (email.isNotBlank()) email else displayName, fontWeight = FontWeight.SemiBold)
-                            }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Cloud Account:")
+                            Text(if (isRealCloudAccount) (if (email.isNotBlank()) email else displayName) else "${if (email.isNotBlank()) email else displayName} (Local Account)", fontWeight = FontWeight.SemiBold)
                         }
 
                         Row(
@@ -4499,10 +4539,10 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                         ) {
                             Text("Last Sync Output:")
                             Text(
-                                text = if (isUserSignedIn) syncStatus else "Offline Ready (Saved locally)",
+                                text = if (!isOnline) "Device is offline. Data saved in local SQLite database." else if (!isRealCloudAccount) "Running in local offline mode. Saved in SQLite DB." else syncStatus,
                                 style = MaterialTheme.typography.bodySmall,
                                 fontWeight = FontWeight.SemiBold,
-                                color = if (isRealSyncSuccess) GreenIn else if (isSyncError) MaterialTheme.colorScheme.error else Color.Gray,
+                                color = if (!isOnline) MaterialTheme.colorScheme.error else if (!isRealCloudAccount) Color.Gray else if (isRealSyncSuccess) GreenIn else if (isSyncError) MaterialTheme.colorScheme.error else Color.Gray,
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -4515,7 +4555,7 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text("Last Verification:", style = MaterialTheme.typography.bodySmall)
-                                Text(verificationTimestamp, style = MaterialTheme.typography.bodySmall, color = GreenIn, fontWeight = FontWeight.Bold)
+                                Text(verificationTimestamp, style = MaterialTheme.typography.bodySmall, color = if (isOnline) GreenIn else MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
                             }
                         }
 
@@ -4528,13 +4568,19 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                         ) {
                             Button(
                                 onClick = {
-                                    if (!isUserSignedIn) {
+                                    if (!isRealCloudAccount) {
                                         showAccountAuthDialog = true
                                     } else {
-                                        viewModel.triggerCloudSync()
-                                        val nowStr = java.text.SimpleDateFormat("dd MMM, hh:mm a", java.util.Locale.getDefault()).format(java.util.Date())
-                                        verificationTimestamp = nowStr
-                                        Toast.makeText(context, "Cloud Sync Connection Verified! Data synced.", Toast.LENGTH_SHORT).show()
+                                        viewModel.verifyRealCloudConnection { online, msg ->
+                                            val nowStr = java.text.SimpleDateFormat("dd MMM, hh:mm a", java.util.Locale.getDefault()).format(java.util.Date())
+                                            verificationTimestamp = nowStr
+                                            if (online) {
+                                                Toast.makeText(context, "🟢 Real Cloud Connection Confirmed!\n$msg", Toast.LENGTH_SHORT).show()
+                                                viewModel.triggerCloudSync()
+                                            } else {
+                                                Toast.makeText(context, "🔴 Device Disconnected / Network Offline:\n$msg", Toast.LENGTH_LONG).show()
+                                            }
+                                        }
                                     }
                                 },
                                 modifier = Modifier.weight(1f),
@@ -4544,13 +4590,13 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                                 if (isSyncing) {
                                     CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                                 } else {
-                                    Icon(Icons.Default.CloudSync, contentDescription = null)
+                                    Icon(if (isRealCloudAccount) Icons.Default.CloudSync else Icons.Default.CloudUpload, contentDescription = null)
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text(if (isUserSignedIn) "Verify & Sync Cloud" else "Connect Cloud Account")
+                                    Text(if (isRealCloudAccount) "Verify & Sync Cloud" else "Connect Real Cloud Account")
                                 }
                             }
 
-                            if (!isUserSignedIn) {
+                            if (!isRealCloudAccount) {
                                 OutlinedButton(
                                     onClick = { showAccountAuthDialog = true },
                                     modifier = Modifier.weight(0.9f),
@@ -4581,97 +4627,33 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                 }
             }
 
-            // 100% Offline Capability Guarantee Card
+            // Cloud Architecture & Services Info Card
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFFECFDF5)),
-                    border = BorderStroke(1.dp, Color(0xFFA7F3D0)),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF0F9FF)),
+                    border = BorderStroke(1.dp, Color(0xFFBAE6FD)),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(14.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.OfflinePin,
-                            contentDescription = "Offline Guaranteed",
-                            tint = Color(0xFF059669),
-                            modifier = Modifier.size(28.dp)
-                        )
-                        Column {
-                            Text("100% Offline Database Ready", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall, color = Color(0xFF065F46))
-                            Text(
-                                "Every transaction, book, and business is saved directly to your phone's SQLite database first. The app operates seamlessly without internet, and syncs to cloud automatically when reconnected.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color(0xFF047857)
-                            )
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(Icons.Default.CloudDone, contentDescription = null, tint = Color(0xFF0284C7), modifier = Modifier.size(22.dp))
+                            Text("Multi-Cloud Network Infrastructure", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall, color = Color(0xFF0369A1))
                         }
-                    }
-                }
-            }
-
-            // Manual Backup and JSON Restore Tools
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
-                ) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("Manual SQLite Backups", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "Generate completely portable, fully offline-restorable database backups as simple raw JSON text files.",
+                            "• Real-Time Synchronized Cloud Ledger Engine with active REST master registry.\n" +
+                            "• Multi-Device Account Persistence across device reinstalls and clear storage.\n" +
+                            "• Automatic Background Sync on transaction edits, cashbook creations, and role updates.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                            color = Color(0xFF0284C7)
                         )
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Button(
-                                onClick = {
-                                    val bizList = viewModel.businesses.value
-                                    val bookList = viewModel.books.value
-                                    val txList = viewModel.allTransactions.value
-                                    val partyList = viewModel.parties.value
-                                    val pTxList = viewModel.allPartyTransactions.value
-                                    val teamList = viewModel.allTeamMembers.value
-
-                                    val backupJsonStr = syncManager.serializeDatabase(
-                                        businesses = bizList,
-                                        books = bookList,
-                                        transactions = txList,
-                                        parties = partyList,
-                                        partyTransactions = pTxList,
-                                        teamMembers = teamList
-                                    )
-                                    clipboardManager.setText(AnnotatedString(backupJsonStr))
-                                    Toast.makeText(context, "Complete backup JSON copied to clipboard!", Toast.LENGTH_LONG).show()
-                                },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Icon(Icons.Default.ContentCopy, contentDescription = null)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Export JSON")
-                            }
-
-                            OutlinedButton(
-                                onClick = { showBackupRestoreDialog = true },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Icon(Icons.Default.FileUpload, contentDescription = null)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Import JSON")
-                            }
-                        }
                     }
                 }
             }
-        } else {
+        } else if (activeSyncTab == 1) {
             // --- TAB 1: DEDICATED GOOGLE DRIVE BACKUP VAULT ---
             item {
                 var driveAuthVersion by remember { mutableIntStateOf(0) }
@@ -4934,7 +4916,7 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                                                     return handleRedirect(url)
                                                 }
 
-                                                override fun shouldOverrideUrlLoading(view: WebView?, request: android.webkit.WebResourceRequest?): Boolean {
+                                                 override fun shouldOverrideUrlLoading(view: WebView?, request: android.webkit.WebResourceRequest?): Boolean {
                                                     return handleRedirect(request?.url?.toString())
                                                 }
 
@@ -4975,6 +4957,228 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                                         .weight(1f)
                                         .fillMaxWidth()
                                 )
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // --- TAB 2: OFFLINE AIS & LOCAL STORAGE STATUS ---
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .background(Color(0xFF059669).copy(alpha = 0.15f), CircleShape),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        Icons.Default.Storage,
+                                        contentDescription = "Offline AIS Active",
+                                        tint = Color(0xFF059669),
+                                        modifier = Modifier.size(32.dp)
+                                    )
+                                }
+
+                                Column {
+                                    Text(
+                                        "Offline AIS Storage Engine",
+                                        fontWeight = FontWeight.Bold,
+                                        style = MaterialTheme.typography.titleMedium
+                                    )
+                                    Text(
+                                        "SQLite Local Database Engine",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+
+                            Surface(
+                                color = Color(0xFFECFDF5),
+                                border = BorderStroke(1.dp, Color(0xFFA7F3D0)),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text(
+                                    "🟢 100% Offline Ready",
+                                    color = Color(0xFF047857),
+                                    fontWeight = FontWeight.Bold,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+
+                        Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                        Text("Local Database Statistics & Telemetry", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Card(
+                                modifier = Modifier.weight(1f),
+                                colors = CardDefaults.cardColors(containerColor = Color.White),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("${businesses.size}", fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
+                                    Text("Businesses", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                }
+                            }
+
+                            Card(
+                                modifier = Modifier.weight(1f),
+                                colors = CardDefaults.cardColors(containerColor = Color.White),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("${books.size}", fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.titleLarge, color = GreenIn)
+                                    Text("Cashbooks", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                }
+                            }
+
+                            Card(
+                                modifier = Modifier.weight(1f),
+                                colors = CardDefaults.cardColors(containerColor = Color.White),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("${allTransactions.size}", fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.titleLarge, color = Color(0xFF7C3AED))
+                                    Text("Transactions", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                }
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Card(
+                                modifier = Modifier.weight(1f),
+                                colors = CardDefaults.cardColors(containerColor = Color.White),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("${partiesList.size}", fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.titleLarge, color = Color(0xFFD97706))
+                                    Text("Parties / Khata", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                }
+                            }
+
+                            Card(
+                                modifier = Modifier.weight(1f),
+                                colors = CardDefaults.cardColors(containerColor = Color.White),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("${teamMembersList.size}", fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.titleLarge, color = Color(0xFF2563EB))
+                                    Text("Team Members", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 100% Offline Capability Guarantee Card
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFECFDF5)),
+                    border = BorderStroke(1.dp, Color(0xFFA7F3D0)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.OfflinePin,
+                            contentDescription = "Offline Guaranteed",
+                            tint = Color(0xFF059669),
+                            modifier = Modifier.size(28.dp)
+                        )
+                        Column {
+                            Text("100% Offline AIS Guarantee", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall, color = Color(0xFF065F46))
+                            Text(
+                                "Every transaction, book, and business is saved directly to your phone's SQLite database first. The app operates seamlessly without internet, and syncs to cloud automatically when reconnected.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFF047857)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Manual Backup and JSON Restore Tools
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("Manual SQLite Backups & Portable Export", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Generate completely portable, fully offline-restorable database backups as simple raw JSON text files.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    val bizList = viewModel.businesses.value
+                                    val bookList = viewModel.books.value
+                                    val txList = viewModel.allTransactions.value
+                                    val partyList = viewModel.parties.value
+                                    val pTxList = viewModel.allPartyTransactions.value
+                                    val teamList = viewModel.allTeamMembers.value
+
+                                    val backupJsonStr = syncManager.serializeDatabase(
+                                        businesses = bizList,
+                                        books = bookList,
+                                        transactions = txList,
+                                        parties = partyList,
+                                        partyTransactions = pTxList,
+                                        teamMembers = teamList
+                                    )
+                                    clipboardManager.setText(AnnotatedString(backupJsonStr))
+                                    Toast.makeText(context, "Complete backup JSON copied to clipboard!", Toast.LENGTH_LONG).show()
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.ContentCopy, contentDescription = null)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Export JSON")
+                            }
+
+                            OutlinedButton(
+                                onClick = { showBackupRestoreDialog = true },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.FileUpload, contentDescription = null)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Import JSON")
                             }
                         }
                     }
@@ -8964,6 +9168,8 @@ fun ProfileScreen(viewModel: LedgerViewModel) {
     
     var profileAuthVersion by remember { mutableStateOf(0) }
     val isUserSignedIn = remember(profileAuthVersion) { syncManager.isUserSignedIn() }
+    val isRealCloudAccount = syncManager.isRealCloudAccount()
+    val isOnline by viewModel.isOnline.collectAsStateWithLifecycle()
     val userEmail = remember(profileAuthVersion) { syncManager.getEmail() }
     val userName = remember(profileAuthVersion) { syncManager.getName() }
     val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
@@ -8992,7 +9198,7 @@ fun ProfileScreen(viewModel: LedgerViewModel) {
                     modifier = Modifier
                         .size(64.dp)
                         .clip(CircleShape)
-                        .background(if (isUserSignedIn) GreenIn else MaterialTheme.colorScheme.primary),
+                        .background(if (isRealCloudAccount && isOnline) GreenIn else MaterialTheme.colorScheme.primary),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
@@ -9010,7 +9216,7 @@ fun ProfileScreen(viewModel: LedgerViewModel) {
                         style = MaterialTheme.typography.titleLarge
                     )
                     Text(
-                        text = if (isUserSignedIn) userEmail else "Offline Mode (Local Account)",
+                        text = if (isRealCloudAccount) userEmail else "$userEmail (Local Offline Account)",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -9023,11 +9229,11 @@ fun ProfileScreen(viewModel: LedgerViewModel) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(
-                    containerColor = if (isUserSignedIn) GreenIn.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                    containerColor = if (isRealCloudAccount && isOnline) GreenIn.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
                 ),
                 border = androidx.compose.foundation.BorderStroke(
                     1.dp,
-                    if (isUserSignedIn) GreenIn.copy(alpha = 0.3f) else MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                    if (isRealCloudAccount && isOnline) GreenIn.copy(alpha = 0.3f) else MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
                 ),
                 shape = RoundedCornerShape(16.dp)
             ) {
@@ -9042,9 +9248,9 @@ fun ProfileScreen(viewModel: LedgerViewModel) {
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Icon(
-                                imageVector = if (isUserSignedIn) Icons.Default.VerifiedUser else Icons.Default.CloudOff,
+                                imageVector = if (!isOnline) Icons.Default.CloudOff else if (isRealCloudAccount) Icons.Default.VerifiedUser else Icons.Default.OfflinePin,
                                 contentDescription = null,
-                                tint = if (isUserSignedIn) GreenIn else MaterialTheme.colorScheme.primary
+                                tint = if (!isOnline) MaterialTheme.colorScheme.error else if (isRealCloudAccount) GreenIn else MaterialTheme.colorScheme.primary
                             )
                             Text(
                                 text = "Account & Cloud Sync State",
@@ -9054,11 +9260,11 @@ fun ProfileScreen(viewModel: LedgerViewModel) {
                         }
 
                         Surface(
-                            color = if (isUserSignedIn) GreenIn else Color(0xFF64748B),
+                            color = if (!isOnline) MaterialTheme.colorScheme.error else if (isRealCloudAccount) GreenIn else Color(0xFF64748B),
                             shape = RoundedCornerShape(12.dp)
                         ) {
                             Text(
-                                text = if (isUserSignedIn) "ONLINE" else "OFFLINE",
+                                text = if (!isOnline) "OFFLINE" else if (isRealCloudAccount) "ONLINE CLOUD" else "LOCAL OFFLINE",
                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                                 color = Color.White,
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)

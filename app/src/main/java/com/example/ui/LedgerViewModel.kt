@@ -50,6 +50,53 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     private val _isSyncing = MutableStateFlow(false)
     val isSyncing: StateFlow<Boolean> = _isSyncing.asStateFlow()
 
+    private val _isOnline = MutableStateFlow(true)
+    val isOnline: StateFlow<Boolean> = _isOnline.asStateFlow()
+
+    fun checkIsOnline(): Boolean {
+        return try {
+            val connectivityManager = getApplication<Application>().getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            if (connectivityManager == null) {
+                _isOnline.value = false
+                return false
+            }
+            val activeNetwork = connectivityManager.activeNetwork
+            if (activeNetwork == null) {
+                _isOnline.value = false
+                return false
+            }
+            val capabilities = connectivityManager.getNetworkCapabilities(activeNetwork)
+            if (capabilities == null) {
+                _isOnline.value = false
+                return false
+            }
+            val hasInternet = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            _isOnline.value = hasInternet
+            hasInternet
+        } catch (e: Exception) {
+            _isOnline.value = false
+            false
+        }
+    }
+
+    fun verifyRealCloudConnection(onResult: (Boolean, String) -> Unit = { _, _ -> }) {
+        if (!checkIsOnline()) {
+            _syncStatus.value = "Offline Mode - No Network Connection"
+            onResult(false, "Device is Offline: No Internet Connection")
+            return
+        }
+
+        viewModelScope.launch {
+            _isSyncing.value = true
+            _syncStatus.value = "Pinging Cloud Server..."
+            val (online, msg) = syncManager.pingCloudConnection()
+            _isOnline.value = online
+            _syncStatus.value = msg
+            _isSyncing.value = false
+            onResult(online, msg)
+        }
+    }
+
     // Simulated Active Role (for granular testing of team permissions)
     private val _simulatedRole = MutableStateFlow("Boss") // "Boss", "Admin", "Partner", "Data Entry"
     val simulatedRole: StateFlow<String> = _simulatedRole.asStateFlow()
@@ -230,9 +277,12 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             triggerCloudSync()
         }
 
+        // Initial network check
+        checkIsOnline()
+
         // Observe network state to trigger auto-sync when back online
         try {
-            val connectivityManager = application.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            val connectivityManager = getApplication<Application>().getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
             if (connectivityManager != null) {
                 val networkRequest = NetworkRequest.Builder()
                     .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
@@ -240,8 +290,22 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                 connectivityManager.registerNetworkCallback(networkRequest, object : ConnectivityManager.NetworkCallback() {
                     override fun onAvailable(network: Network) {
                         super.onAvailable(network)
+                        _isOnline.value = true
                         Log.d("LedgerViewModel", "Network available - triggering auto-sync")
                         triggerCloudSync()
+                    }
+
+                    override fun onLost(network: Network) {
+                        super.onLost(network)
+                        _isOnline.value = false
+                        _syncStatus.value = "Offline Mode - No Network Connection"
+                        Log.d("LedgerViewModel", "Network lost - switched to Offline Mode")
+                    }
+
+                    override fun onUnavailable() {
+                        super.onUnavailable()
+                        _isOnline.value = false
+                        _syncStatus.value = "Offline Mode - Network Unavailable"
                     }
                 })
             }
@@ -253,7 +317,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             while (isActive) {
                 kotlinx.coroutines.delay(30000L)
-                if (syncManager.isUserSignedIn() && !_isSyncing.value) {
+                if (checkIsOnline() && syncManager.isUserSignedIn() && !_isSyncing.value) {
                     try {
                         syncManager.syncWithCloud(database.ledgerDao())
                     } catch (e: Exception) {
@@ -267,6 +331,10 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     // --- Core Cloud Sync Mechanism ---
 
     fun triggerCloudSync() {
+        if (!checkIsOnline()) {
+            _syncStatus.value = "Offline Mode - No Network Connection"
+            return
+        }
         if (!syncManager.isUserSignedIn()) {
             _syncStatus.value = "Sign in to synchronize automatically"
             return
@@ -279,7 +347,11 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             try {
                 val message = syncManager.syncWithCloud(database.ledgerDao())
-                _syncStatus.value = message
+                if (checkIsOnline()) {
+                    _syncStatus.value = message
+                } else {
+                    _syncStatus.value = "Offline Mode - No Network Connection"
+                }
 
                 // After sync, preserve current active business & active book if valid
                 val currentBizList = repository.allBusinesses.first()
