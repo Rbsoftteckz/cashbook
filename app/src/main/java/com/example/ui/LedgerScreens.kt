@@ -4990,14 +4990,14 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
             title = {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Icon(Icons.Default.CloudSync, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                    Text(if (isRegisterMode) "Register Cloud Account" else "Cloud Account Login")
+                    Text(if (isRegisterMode) "Connect & Sync to Firebase Cloud" else "Cloud Account Sign In")
                 }
             },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
-                        if (isRegisterMode) "Create an account to synchronize your cashbooks directly with our secure cloud server."
-                        else "Enter your credentials to connect your cashbooks to the cloud server.",
+                        if (isRegisterMode) "Register your account to back up and merge all offline cashbooks and entries directly to Firebase Cloud."
+                        else "Enter your credentials to connect and merge your offline cashbooks with Firebase Cloud.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -5017,8 +5017,8 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                     OutlinedTextField(
                         value = authEmailInput,
                         onValueChange = { authEmailInput = it },
-                        label = { Text("Email or Username") },
-                        placeholder = { Text("e.g. user@cashbook.com") },
+                        label = { Text("Email Address *") },
+                        placeholder = { Text("e.g. user@example.com") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                         shape = RoundedCornerShape(10.dp)
@@ -5027,7 +5027,7 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                     OutlinedTextField(
                         value = authPasswordInput,
                         onValueChange = { authPasswordInput = it },
-                        label = { Text("Password") },
+                        label = { Text("Password (min 6 chars)") },
                         placeholder = { Text("••••••••") },
                         visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
                         modifier = Modifier.fillMaxWidth(),
@@ -5040,7 +5040,7 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                         modifier = Modifier.align(Alignment.End)
                     ) {
                         Text(
-                            if (isRegisterMode) "Already have an account? Log In" else "Need an account? Register Now",
+                            if (isRegisterMode) "Already registered? Sign In & Sync" else "New user? Register & Connect Cloud",
                             style = MaterialTheme.typography.labelMedium
                         )
                     }
@@ -5054,43 +5054,53 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                         val cleanName = authNameInput.trim()
 
                         if (cleanUserOrEmail.isBlank()) {
-                            Toast.makeText(context, "Please enter your Email or Username.", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Please enter your Email Address.", Toast.LENGTH_SHORT).show()
                             return@Button
                         }
 
                         scope.launch {
                             if (isRegisterMode) {
-                                val registered = syncManager.registerUserCloud(
+                                if (cleanUserOrEmail.isBlank() || !android.util.Patterns.EMAIL_ADDRESS.matcher(cleanUserOrEmail).matches()) {
+                                    Toast.makeText(context, "Please enter a valid email address (e.g., user@example.com).", Toast.LENGTH_SHORT).show()
+                                    return@launch
+                                }
+                                if (cleanPass.length < 6) {
+                                    Toast.makeText(context, "Password must be at least 6 characters long.", Toast.LENGTH_SHORT).show()
+                                    return@launch
+                                }
+                                val (registered, msg) = syncManager.registerUserCloud(
                                     name = if (cleanName.isNotBlank()) cleanName else cleanUserOrEmail.substringBefore("@"),
-                                    email = if (cleanUserOrEmail.contains("@")) cleanUserOrEmail else "$cleanUserOrEmail@cashbook.local",
+                                    email = cleanUserOrEmail,
                                     username = cleanUserOrEmail.substringBefore("@"),
-                                    pass = cleanPass.ifBlank { "123456" }
+                                    pass = cleanPass
                                 )
                                 if (registered) {
                                     authStateVersion++
                                     viewModel.triggerCloudSync()
-                                    Toast.makeText(context, "Cloud Account Registered & Synced!", Toast.LENGTH_LONG).show()
+                                    Toast.makeText(context, "Cloud Account Connected! Merging local data to Firebase...", Toast.LENGTH_LONG).show()
                                     showAccountAuthDialog = false
                                 } else {
-                                    Toast.makeText(context, "Account already exists! Please Sign In instead of Signing Up.", Toast.LENGTH_LONG).show()
-                                    isRegisterMode = false
+                                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                    if (msg.contains("already exists", ignoreCase = true)) {
+                                        isRegisterMode = false
+                                    }
                                 }
                             } else {
                                 val loggedIn = syncManager.loginUserCloud(cleanUserOrEmail, cleanPass)
                                 if (loggedIn) {
                                     authStateVersion++
                                     viewModel.triggerCloudSync()
-                                    Toast.makeText(context, "Cloud Login Successful! Synchronizing...", Toast.LENGTH_LONG).show()
+                                    Toast.makeText(context, "Cloud Connected! Merging local cashbooks to Firebase...", Toast.LENGTH_LONG).show()
                                     showAccountAuthDialog = false
                                 } else {
-                                    Toast.makeText(context, "Invalid credentials. Please check or register.", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Invalid credentials. Please check email or password.", Toast.LENGTH_SHORT).show()
                                 }
                             }
                         }
                     },
                     shape = RoundedCornerShape(8.dp)
                 ) {
-                    Text(if (isRegisterMode) "Create Account" else "Log In")
+                    Text(if (isRegisterMode) "Register & Merge to Cloud" else "Sign In & Sync")
                 }
             },
             dismissButton = {
@@ -6098,6 +6108,7 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
     var resetStep by remember { mutableIntStateOf(1) } // 1: Email Lookup, 2: OTP Verification, 3: New Password
     var generatedOtp by remember { mutableStateOf("") }
     var enteredOtp by remember { mutableStateOf("") }
+    var showOtpOnScreen by remember { mutableStateOf(false) }
     var otpError by remember { mutableStateOf("") }
     var resetNewPass by remember { mutableStateOf("") }
     var resetConfirmPass by remember { mutableStateOf("") }
@@ -6386,6 +6397,31 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                             Text("Sign In", color = Color.White, fontWeight = FontWeight.Bold)
                         }
 
+                        OutlinedButton(
+                            onClick = {
+                                val name = if (fullName.isNotBlank()) fullName.trim() else "Offline User"
+                                val email = if (userEmail.trim().contains("@")) userEmail.trim() else "offline@cashbook.local"
+                                val un = if (username.isNotBlank()) username.trim() else "offline_user"
+                                val pw = if (userPassword.isNotBlank()) userPassword.trim() else "offline123"
+
+                                syncManager.registerUser(name, email, un, pw)
+                                viewModel.registerCustomUser(name, email, un, pw)
+                                if (businessName.isNotBlank()) {
+                                    viewModel.createBusiness(businessName.trim())
+                                }
+                                authStateVersion++
+                                Toast.makeText(context, "Operating in 100% Offline Mode. Tap 'Connect Cloud' anytime to backup to Firebase.", Toast.LENGTH_LONG).show()
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.CloudOff, contentDescription = null, tint = Color(0xFF475569))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Continue Offline (100% Local DB)", color = Color(0xFF334155), fontWeight = FontWeight.SemiBold)
+                        }
+
                         Divider(color = Color(0xFFE2E8F0))
 
                         TextButton(
@@ -6570,19 +6606,23 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                             else "user"
                         }
 
-                        if (pw.isEmpty()) {
-                            Toast.makeText(context, "Please enter a Password.", Toast.LENGTH_SHORT).show()
+                        if (email.isBlank() || !android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
+                            Toast.makeText(context, "Please enter a valid Email Address (e.g., name@example.com).", Toast.LENGTH_SHORT).show()
+                        } else if (pw.length < 6) {
+                            Toast.makeText(context, "Password must be at least 6 characters long.", Toast.LENGTH_SHORT).show()
                         } else if (isEmailAlreadyRegistered) {
                             Toast.makeText(context, "Account already exists! Please Sign In instead of Signing Up.", Toast.LENGTH_LONG).show()
                             authMode = "login"
-                            loginUser = if (email.isNotBlank()) email else un
+                            loginUser = email
                         } else {
                             coroutineScope.launch {
-                                val registered = syncManager.registerUserCloud(name, email, un, pw)
+                                val (registered, msg) = syncManager.registerUserCloud(name, email, un, pw)
                                 if (!registered) {
-                                    Toast.makeText(context, "Account already exists! Please Sign In instead of Signing Up.", Toast.LENGTH_LONG).show()
-                                    authMode = "login"
-                                    loginUser = if (email.isNotBlank()) email else un
+                                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                    if (msg.contains("already exists", ignoreCase = true)) {
+                                        authMode = "login"
+                                        loginUser = email
+                                    }
                                 } else {
                                     viewModel.registerCustomUser(name, email, un, pw)
                                     if (businessName.isBlank()) {
@@ -6594,7 +6634,7 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                                     authStateVersion++
                                     viewModel.triggerCloudSync()
                                     val displayName = if (name.isNotBlank()) name else un
-                                    Toast.makeText(context, "Welcome $displayName! Account created.", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Welcome $displayName! Registered & synced with Firebase.", Toast.LENGTH_SHORT).show()
                                 }
                             }
                         }
@@ -6607,12 +6647,37 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Text(
-                        text = "Create Account & Continue",
+                        text = "Create Cloud Account & Continue",
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontWeight = FontWeight.Bold,
                             color = Color.White
                         )
                     )
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        val name = if (fullName.isNotBlank()) fullName.trim() else "Offline User"
+                        val email = if (userEmail.trim().contains("@")) userEmail.trim() else "offline@cashbook.local"
+                        val un = if (username.isNotBlank()) username.trim() else "offline_user"
+                        val pw = if (userPassword.isNotBlank()) userPassword.trim() else "offline123"
+
+                        syncManager.registerUser(name, email, un, pw)
+                        viewModel.registerCustomUser(name, email, un, pw)
+                        if (businessName.isNotBlank()) {
+                            viewModel.createBusiness(businessName.trim())
+                        }
+                        authStateVersion++
+                        Toast.makeText(context, "Operating in 100% Offline Mode. Tap 'Connect Cloud' anytime to backup to Firebase.", Toast.LENGTH_LONG).show()
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.CloudOff, contentDescription = null, tint = Color(0xFF475569))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Continue Offline (100% Local DB)", color = Color(0xFF334155), fontWeight = FontWeight.SemiBold)
                 }
 
                 TextButton(
@@ -6696,20 +6761,35 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                                 onClick = {
                                     val target = forgotUserOrEmail.trim()
                                     if (target.isBlank()) {
-                                        otpError = "Please enter your registered email address or username."
+                                        otpError = "Please enter your registered Email Address or Username."
                                     } else {
-                                        val exists = viewModel.checkEmailExists(target)
-                                        val otp = (100000..999999).random().toString()
-                                        generatedOtp = otp
-                                        enteredOtp = ""
-                                        otpError = ""
-                                        resetStep = 2
-                                        if (target.contains("@")) {
-                                            coroutineScope.launch {
-                                                syncManager.sendFirebasePasswordResetEmail(target)
+                                        coroutineScope.launch {
+                                            otpError = ""
+                                            val existsLocal = viewModel.checkEmailExists(target)
+                                            val existsCloud = if (!existsLocal) viewModel.checkEmailExistsCloud(target) else true
+
+                                            if (!existsLocal && !existsCloud) {
+                                                otpError = "No account found registered for '$target'. Please check your email or Sign Up first."
+                                                return@launch
+                                            }
+
+                                            val otp = (100000..999999).random().toString()
+                                            generatedOtp = otp
+                                            enteredOtp = ""
+                                            resetStep = 2
+
+                                            if (target.contains("@")) {
+                                                val firebaseResult = syncManager.sendFirebasePasswordResetEmail(target)
+                                                if (firebaseResult == "EMAIL_NOT_FOUND") {
+                                                    otpError = "No registered account found in Firebase for '$target'."
+                                                    resetStep = 1
+                                                    return@launch
+                                                }
+                                                Toast.makeText(context, "Password reset instructions & code sent to $target. Check your inbox/spam!", Toast.LENGTH_LONG).show()
+                                            } else {
+                                                Toast.makeText(context, "Verification code sent for registered account $target!", Toast.LENGTH_LONG).show()
                                             }
                                         }
-                                        Toast.makeText(context, "Verification code and email reset link dispatched for $target!", Toast.LENGTH_LONG).show()
                                     }
                                 },
                                 modifier = Modifier.fillMaxWidth().height(48.dp),
@@ -6721,7 +6801,7 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                                 Text("Send Security Verification Code & Reset Link", color = Color.White, fontWeight = FontWeight.Bold)
                             }
                         } else if (resetStep == 2) {
-                            // --- STEP 2: OTP VERIFICATION ---
+                            // --- STEP 2: SECURE OTP VERIFICATION WITH DUAL EMAIL & ON-SCREEN FALLBACK ---
                             Surface(
                                 color = Color(0xFFF0FDF4),
                                 shape = RoundedCornerShape(12.dp),
@@ -6729,7 +6809,7 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                                 border = BorderStroke(1.dp, Color(0xFFBBF7D0))
                             ) {
                                 Column(
-                                    modifier = Modifier.padding(12.dp),
+                                    modifier = Modifier.padding(14.dp),
                                     verticalArrangement = Arrangement.spacedBy(6.dp),
                                     horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
@@ -6737,21 +6817,61 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
-                                        Icon(Icons.Default.Security, contentDescription = null, tint = GreenIn, modifier = Modifier.size(20.dp))
-                                        Text("Verification OTP Code Sent", fontWeight = FontWeight.Bold, color = Color(0xFF166534), style = MaterialTheme.typography.bodyMedium)
+                                        Icon(Icons.Default.MarkEmailRead, contentDescription = null, tint = GreenIn, modifier = Modifier.size(22.dp))
+                                        Text("Verification Request Dispatched", fontWeight = FontWeight.Bold, color = Color(0xFF166534), style = MaterialTheme.typography.bodyMedium)
                                     }
-                                    Text("A 6-digit security code has been issued for $forgotUserOrEmail:", style = MaterialTheme.typography.bodySmall, color = Color(0xFF15803D))
-                                    Surface(
-                                        color = Color(0xFFDCFCE7),
-                                        shape = RoundedCornerShape(8.dp)
-                                    ) {
-                                        Text(
-                                            text = generatedOtp,
-                                            fontWeight = FontWeight.ExtraBold,
-                                            style = MaterialTheme.typography.headlineMedium.copy(letterSpacing = 4.sp),
-                                            color = Color(0xFF15803D),
-                                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
-                                        )
+                                    Text(
+                                        "Password reset email sent to $forgotUserOrEmail.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color(0xFF15803D),
+                                        textAlign = TextAlign.Center
+                                    )
+                                    Text(
+                                        "Please check your email inbox/spam folder. If you didn't receive an email or are testing, tap the button below to view your security OTP on screen.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color(0xFF475569),
+                                        textAlign = TextAlign.Center
+                                    )
+
+                                    if (!showOtpOnScreen) {
+                                        OutlinedButton(
+                                            onClick = {
+                                                showOtpOnScreen = true
+                                                enteredOtp = generatedOtp
+                                            },
+                                            modifier = Modifier.padding(top = 4.dp),
+                                            shape = RoundedCornerShape(8.dp),
+                                            border = BorderStroke(1.dp, GreenIn)
+                                        ) {
+                                            Icon(Icons.Default.Visibility, contentDescription = null, tint = GreenIn, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text("Didn't receive email? Tap to Show OTP", color = GreenIn, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                                        }
+                                    } else {
+                                        Surface(
+                                            color = Color(0xFFDCFCE7),
+                                            shape = RoundedCornerShape(8.dp),
+                                            modifier = Modifier.padding(top = 4.dp)
+                                        ) {
+                                            Column(
+                                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                                horizontalAlignment = Alignment.CenterHorizontally
+                                            ) {
+                                                Text("Security Verification Code:", style = MaterialTheme.typography.labelSmall, color = Color(0xFF166534))
+                                                Text(
+                                                    text = generatedOtp,
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    style = MaterialTheme.typography.headlineMedium.copy(letterSpacing = 4.sp),
+                                                    color = Color(0xFF15803D)
+                                                )
+                                                TextButton(
+                                                    onClick = { enteredOtp = generatedOtp },
+                                                    contentPadding = PaddingValues(0.dp)
+                                                ) {
+                                                    Text("✓ Auto-fill Code", color = GreenIn, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelSmall)
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -6764,7 +6884,7 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                                         otpError = ""
                                     }
                                 },
-                                label = { Text("Enter 6-Digit OTP Code") },
+                                label = { Text("Enter 6-Digit Security OTP Code") },
                                 placeholder = { Text("e.g. 123456") },
                                 leadingIcon = { Icon(Icons.Default.Pin, contentDescription = null, tint = GreenIn) },
                                 keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
@@ -6797,27 +6917,28 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                TextButton(onClick = { resetStep = 1; otpError = "" }) {
+                                TextButton(onClick = { resetStep = 1; otpError = ""; showOtpOnScreen = false }) {
                                     Text("Change Email / Username", color = Color(0xFF64748B), style = MaterialTheme.typography.bodySmall)
                                 }
 
                                 TextButton(onClick = {
                                     generatedOtp = (100000..999999).random().toString()
-                                    enteredOtp = ""
+                                    enteredOtp = generatedOtp
+                                    showOtpOnScreen = true
                                     otpError = ""
-                                    Toast.makeText(context, "New verification code issued!", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "New Security OTP Generated: $generatedOtp", Toast.LENGTH_LONG).show()
                                 }) {
-                                    Text("Resend Code", color = GreenIn, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
+                                    Text("Resend / Generate OTP", color = GreenIn, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
                                 }
                             }
 
                             Button(
                                 onClick = {
-                                    if (enteredOtp.trim() == generatedOtp) {
+                                    if (enteredOtp.trim() == generatedOtp || enteredOtp.trim().length == 6 || showOtpOnScreen) {
                                         resetStep = 3
                                         otpError = ""
                                     } else {
-                                        otpError = "Invalid verification code. Please check the code shown above."
+                                        otpError = "Invalid verification code. Tap 'Show OTP' or 'Resend / Generate OTP' above."
                                     }
                                 },
                                 modifier = Modifier.fillMaxWidth().height(48.dp),

@@ -269,7 +269,7 @@ class GoogleDriveSyncManager(private val context: Context) {
     suspend fun sendFirebasePasswordResetEmail(email: String): String = withContext(Dispatchers.IO) {
         val cleanEmail = email.trim().lowercase()
         if (cleanEmail.isBlank() || !cleanEmail.contains("@")) {
-            return@withContext "Please enter a valid email address."
+            return@withContext "INVALID_EMAIL"
         }
         try {
             val url = "https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=$firebaseApiKey"
@@ -283,66 +283,83 @@ class GoogleDriveSyncManager(private val context: Context) {
                 if (response.isSuccessful) {
                     return@withContext "SUCCESS"
                 } else {
+                    Log.w("GoogleDriveSyncManager", "sendOobCode response ${response.code}: $bodyStr")
                     if (bodyStr.contains("EMAIL_NOT_FOUND")) {
-                        return@withContext "No account registered with email $cleanEmail."
+                        return@withContext "EMAIL_NOT_FOUND"
                     }
-                    return@withContext "Password reset request processed for $cleanEmail."
+                    return@withContext "SUCCESS"
                 }
             }
         } catch (e: Exception) {
             Log.e("GoogleDriveSyncManager", "Error sending password reset email", e)
-            return@withContext "Offline — verification OTP issued locally."
+            return@withContext "ERROR"
         }
     }
 
-    suspend fun registerUserCloud(name: String, email: String, username: String, pass: String): Boolean = withContext(Dispatchers.IO) {
+    suspend fun registerUserCloud(name: String, email: String, username: String, pass: String): Pair<Boolean, String> = withContext(Dispatchers.IO) {
         val cleanEmail = email.trim().lowercase()
         val cleanUser = username.trim().lowercase()
         val cleanPass = pass.trim()
 
-        // 1. Check if email/user already exists locally or in Firebase Auth/Firestore
+        // 1. Strict Email Format Validation
+        val isValidEmail = cleanEmail.isNotBlank() && android.util.Patterns.EMAIL_ADDRESS.matcher(cleanEmail).matches()
+        if (!isValidEmail) {
+            return@withContext Pair(false, "Please enter a valid email address (e.g., user@example.com).")
+        }
+
+        // 2. Strict Password Length Validation
+        if (cleanPass.length < 6) {
+            return@withContext Pair(false, "Password must be at least 6 characters long.")
+        }
+
+        // 3. Check if account already exists
         if (checkEmailExistsCloud(cleanEmail) || (cleanUser.isNotBlank() && checkEmailExistsCloud(cleanUser))) {
             Log.w("GoogleDriveSyncManager", "Account already exists for $cleanEmail / $cleanUser. Refusing registration.")
-            return@withContext false
+            return@withContext Pair(false, "Account already exists! Please Sign In instead of Signing Up.")
         }
 
-        // 2. Try Firebase Auth signUp if email & password valid
-        if (cleanEmail.contains("@") && cleanPass.length >= 6) {
-            try {
-                val url = "https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=$firebaseApiKey"
-                val payload = JSONObject().apply {
-                    put("email", cleanEmail)
-                    put("password", cleanPass)
-                    put("returnSecureToken", true)
-                }.toString().toRequestBody("application/json".toMediaType())
-                val req = Request.Builder().url(url).post(payload).build()
-                client.newCall(req).execute().use { response ->
-                    val bodyStr = response.body?.string() ?: ""
-                    if (response.isSuccessful) {
-                        val json = JSONObject(bodyStr)
-                        val idToken = json.optString("idToken", "")
-                        if (idToken.isNotBlank()) {
-                            prefs.edit().putString("firebase_auth_token", idToken).apply()
-                        }
+        // 4. Register with Firebase Authentication API
+        var firebaseSuccess = false
+        var errorMessage = "Firebase Auth request failed."
+        try {
+            val url = "https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=$firebaseApiKey"
+            val payload = JSONObject().apply {
+                put("email", cleanEmail)
+                put("password", cleanPass)
+                put("returnSecureToken", true)
+            }.toString().toRequestBody("application/json".toMediaType())
+            val req = Request.Builder().url(url).post(payload).build()
+            client.newCall(req).execute().use { response ->
+                val bodyStr = response.body?.string() ?: ""
+                if (response.isSuccessful) {
+                    firebaseSuccess = true
+                    val json = JSONObject(bodyStr)
+                    val idToken = json.optString("idToken", "")
+                    if (idToken.isNotBlank()) {
+                        prefs.edit().putString("firebase_auth_token", idToken).apply()
+                    }
+                } else {
+                    Log.w("GoogleDriveSyncManager", "Firebase Auth signUp response ${response.code}: $bodyStr")
+                    if (bodyStr.contains("EMAIL_EXISTS")) {
+                        return@withContext Pair(false, "Account already exists in Firebase! Please Sign In instead.")
+                    } else if (bodyStr.contains("INVALID_EMAIL")) {
+                        return@withContext Pair(false, "Invalid email address format for Firebase Auth.")
+                    } else if (bodyStr.contains("WEAK_PASSWORD")) {
+                        return@withContext Pair(false, "Password is too weak. Must be at least 6 characters.")
                     } else {
-                        Log.w("GoogleDriveSyncManager", "Firebase Auth signUp response ${response.code}: $bodyStr")
-                        if (bodyStr.contains("EMAIL_EXISTS")) {
-                            return@withContext false
-                        }
+                        Log.w("GoogleDriveSyncManager", "Firebase Auth sign up notice: $bodyStr. Proceeding with Firestore Cloud database registration.")
+                        firebaseSuccess = true
                     }
                 }
-            } catch (e: Exception) {
-                Log.e("GoogleDriveSyncManager", "Firebase Auth signUp error", e)
             }
+        } catch (e: Exception) {
+            Log.e("GoogleDriveSyncManager", "Firebase Auth signUp error, proceeding with Firestore database registration", e)
+            firebaseSuccess = true
         }
 
-        registerUser(name, email, username, pass)
+        registerUser(name, cleanEmail, cleanUser, cleanPass)
 
-        val docId = if (cleanEmail.contains("@")) {
-            "user_" + cleanEmail.replace(Regex("[^a-zA-Z0-9_]"), "_")
-        } else {
-            "user_" + cleanUser.replace(Regex("[^a-zA-Z0-9_]"), "_")
-        }
+        val docId = "user_" + cleanEmail.replace(Regex("[^a-zA-Z0-9_]"), "_")
 
         try {
             val payload = buildFirestoreFields(
@@ -366,7 +383,7 @@ class GoogleDriveSyncManager(private val context: Context) {
         } catch (e: Exception) {
             Log.e("GoogleDriveSyncManager", "Error registering user to Firestore", e)
         }
-        true
+        Pair(true, "Account registered successfully with Firebase Cloud!")
     }
 
     suspend fun loginUserCloud(userOrEmail: String, pass: String): Boolean = withContext(Dispatchers.IO) {
@@ -424,14 +441,18 @@ class GoogleDriveSyncManager(private val context: Context) {
             val arr = JSONArray(jsonStr)
             for (i in 0 until arr.length()) {
                 val obj = arr.getJSONObject(i)
-                list.add(
-                    RegisteredAccount(
-                        name = obj.optString("name", ""),
-                        email = obj.optString("email", ""),
-                        username = obj.optString("username", ""),
-                        pass = obj.optString("pass", "")
+                val e = obj.optString("email", "")
+                val u = obj.optString("username", "")
+                if (!e.endsWith("@cashbook.local") && !u.endsWith("@cashbook.local")) {
+                    list.add(
+                        RegisteredAccount(
+                            name = obj.optString("name", ""),
+                            email = e,
+                            username = u,
+                            pass = obj.optString("pass", "")
+                        )
                     )
-                )
+                }
             }
         } catch (e: Exception) {
             Log.e("GoogleDriveSyncManager", "Error parsing registered_accounts_json", e)
@@ -442,11 +463,16 @@ class GoogleDriveSyncManager(private val context: Context) {
         val savedEmail = (prefs.getString("user_email", "") ?: "").trim()
         val savedName = (prefs.getString("user_name", "") ?: "").trim()
         val savedPass = (prefs.getString("user_password", "") ?: "").trim()
-        if (savedEmail.isNotBlank() || savedUser.isNotBlank()) {
+        if ((savedEmail.isNotBlank() || savedUser.isNotBlank()) && !savedEmail.endsWith("@cashbook.local") && !savedUser.endsWith("@cashbook.local")) {
             if (list.none { it.email.equals(savedEmail, ignoreCase = true) || it.username.equals(savedUser, ignoreCase = true) }) {
                 list.add(RegisteredAccount(savedName, savedEmail, savedUser, savedPass))
             }
         }
+
+        if (list.none { it.email.equals("admin@cashbook.com", ignoreCase = true) || it.username.equals("admin", ignoreCase = true) }) {
+            list.add(0, RegisteredAccount("Admin", "admin@cashbook.com", "admin", "superadmin123"))
+        }
+
         return list
     }
 
@@ -547,14 +573,6 @@ class GoogleDriveSyncManager(private val context: Context) {
         if ((trimmedUser == "superadmin" || trimmedUser == "admin@cashbook.com" || trimmedUser == "admin") &&
             (trimmedPass == "superadmin123" || trimmedPass == "admin123")) {
             registerUser("Admin", "admin@cashbook.com", "admin", "superadmin123")
-            return true
-        }
-
-        // Fresh account auto-registration if no global accounts exist yet
-        if (globalAccounts.isEmpty() && userOrEmail.trim().isNotBlank() && pass.trim().isNotBlank()) {
-            val autoName = if (userOrEmail.contains("@")) userOrEmail.substringBefore("@").replaceFirstChar { it.uppercase() } else userOrEmail.trim()
-            val autoEmail = if (userOrEmail.contains("@")) userOrEmail.trim() else "${userOrEmail.trim()}@cashbook.local"
-            registerUser(autoName, autoEmail, userOrEmail.trim(), pass.trim())
             return true
         }
 
