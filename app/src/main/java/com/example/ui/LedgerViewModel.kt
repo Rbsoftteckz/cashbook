@@ -546,6 +546,23 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     val globalAccounts = MutableStateFlow<List<com.example.data.RegisteredAccount>>(syncManager.getGlobalAccounts())
+    val isRefreshingAccounts = MutableStateFlow(false)
+
+    fun refreshCloudAccounts(onComplete: ((List<com.example.data.RegisteredAccount>) -> Unit)? = null) {
+        viewModelScope.launch {
+            isRefreshingAccounts.value = true
+            try {
+                syncManager.fetchFirebaseAccountsCloud()
+                val updated = syncManager.getGlobalAccounts()
+                globalAccounts.value = updated
+                onComplete?.invoke(updated)
+            } catch (e: Exception) {
+                Log.e("LedgerViewModel", "Error refreshing cloud accounts", e)
+            } finally {
+                isRefreshingAccounts.value = false
+            }
+        }
+    }
 
     suspend fun checkEmailExistsCloud(email: String): Boolean {
         val exists = syncManager.checkEmailExistsCloud(email)

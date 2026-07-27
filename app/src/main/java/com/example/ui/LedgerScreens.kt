@@ -175,8 +175,10 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
 
     val isAppLockEnabled by viewModel.isAppLockEnabled.collectAsStateWithLifecycle()
     val isAppUnlocked by viewModel.isAppUnlocked.collectAsStateWithLifecycle()
+    val globalAccounts by viewModel.globalAccounts.collectAsStateWithLifecycle()
     var showSecuritySettingsDialog by remember { mutableStateOf(false) }
     var showSuperAdminLoginDrawer by remember { mutableStateOf(false) }
+    var showSuperAdminUserRegistryInDrawer by remember { mutableStateOf(false) }
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -416,6 +418,24 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         ),
                         onClick = {
                             viewModel.setScreen(Screen.SYNC_CENTER)
+                            scope.launch { drawerState.close() }
+                        }
+                    )
+
+                    NavigationDrawerItem(
+                        icon = { Icon(Icons.Default.SupervisorAccount, contentDescription = null) },
+                        label = { Text("Firebase Users Inspector (${globalAccounts.size})") },
+                        selected = showSuperAdminUserRegistryInDrawer,
+                        colors = NavigationDrawerItemDefaults.colors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            unselectedContainerColor = Color.Transparent,
+                            selectedIconColor = MaterialTheme.colorScheme.primary,
+                            unselectedIconColor = MaterialTheme.colorScheme.primary,
+                            selectedTextColor = MaterialTheme.colorScheme.primary,
+                            unselectedTextColor = MaterialTheme.colorScheme.primary
+                        ),
+                        onClick = {
+                            showSuperAdminUserRegistryInDrawer = true
                             scope.launch { drawerState.close() }
                         }
                     )
@@ -932,6 +952,13 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                                 Text("Cancel")
                             }
                         }
+                    )
+                }
+
+                if (showSuperAdminUserRegistryInDrawer) {
+                    SuperAdminUserRegistryDialog(
+                        viewModel = viewModel,
+                        onDismiss = { showSuperAdminUserRegistryInDrawer = false }
                     )
                 }
             }
@@ -4624,6 +4651,102 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                             }
                         }
                     }
+                }
+            }
+
+            // Super Admin Firebase Users Inspector Card
+            item {
+                val globalAccounts by viewModel.globalAccounts.collectAsStateWithLifecycle()
+                var showSuperAdminRegistry by remember { mutableStateOf(false) }
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f)),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Icon(
+                                    imageVector = Icons.Default.SupervisorAccount,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Column {
+                                    Text(
+                                        "Super Admin Account Directory",
+                                        fontWeight = FontWeight.Bold,
+                                        style = MaterialTheme.typography.titleMedium
+                                    )
+                                    Text(
+                                        "Firebase Cloud Database User Registry",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+
+                            Surface(
+                                color = MaterialTheme.colorScheme.primary,
+                                shape = CircleShape
+                            ) {
+                                Text(
+                                    text = "${globalAccounts.size} Registered Users",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = Color.White,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+
+                        Text(
+                            "Live Firebase Database query active. Inspect all registered emails, usernames, security hashes, and account details.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = { showSuperAdminRegistry = true },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Icon(Icons.Default.ManageAccounts, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Inspect ${globalAccounts.size} Accounts")
+                            }
+
+                            OutlinedButton(
+                                onClick = {
+                                    viewModel.refreshCloudAccounts {
+                                        Toast.makeText(context, "Refreshed! Found ${it.size} Firebase users.", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                            }
+                        }
+                    }
+                }
+
+                if (showSuperAdminRegistry) {
+                    SuperAdminUserRegistryDialog(
+                        viewModel = viewModel,
+                        onDismiss = { showSuperAdminRegistry = false }
+                    )
                 }
             }
 
@@ -9782,6 +9905,340 @@ fun ReceiptViewerDialog(
                 }
             }
         }
+    }
+}
+
+// --- SUPER ADMIN REGISTERED USERS DIRECTORY DIALOG ---
+@Composable
+fun SuperAdminUserRegistryDialog(
+    viewModel: LedgerViewModel,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
+    val globalAccounts by viewModel.globalAccounts.collectAsStateWithLifecycle()
+    val isRefreshing by viewModel.isRefreshingAccounts.collectAsStateWithLifecycle()
+    var searchQuery by remember { mutableStateOf("") }
+    var selectedAccount by remember { mutableStateOf<com.example.data.RegisteredAccount?>(null) }
+    var showPasswords by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        viewModel.refreshCloudAccounts()
+    }
+
+    val filteredAccounts = remember(globalAccounts, searchQuery) {
+        if (searchQuery.isBlank()) {
+            globalAccounts
+        } else {
+            val query = searchQuery.trim().lowercase()
+            globalAccounts.filter { acc ->
+                acc.name.lowercase().contains(query) ||
+                acc.email.lowercase().contains(query) ||
+                acc.username.lowercase().contains(query)
+            }
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Card(
+            shape = RoundedCornerShape(20.dp),
+            modifier = Modifier
+                .fillMaxWidth(0.95f)
+                .fillMaxHeight(0.85f)
+                .padding(8.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Header
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.SupervisorAccount,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                        Column {
+                            Text(
+                                text = "Firebase Cloud Users Directory",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Super Admin Live Accounts Inspector",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "Close")
+                    }
+                }
+
+                // Stats Banner & Refresh
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f)),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "Total Accounts Registered",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                            Text(
+                                text = "${globalAccounts.size} Cloud Users",
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+
+                        Button(
+                            onClick = {
+                                viewModel.refreshCloudAccounts {
+                                    Toast.makeText(context, "Fetched ${it.size} users from Firebase Cloud!", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            enabled = !isRefreshing,
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            if (isRefreshing) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Fetching...")
+                            } else {
+                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Refresh DB")
+                            }
+                        }
+                    }
+                }
+
+                // Search Bar & Password Toggle
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        placeholder = { Text("Search email, name, username...") },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                        trailingIcon = {
+                            if (searchQuery.isNotEmpty()) {
+                                IconButton(onClick = { searchQuery = "" }) {
+                                    Icon(Icons.Default.Clear, contentDescription = "Clear")
+                                }
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp)
+                    )
+
+                    IconButton(
+                        onClick = { showPasswords = !showPasswords },
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                    ) {
+                        Icon(
+                            imageVector = if (showPasswords) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                            contentDescription = "Toggle Passwords",
+                            tint = if (showPasswords) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                // Registered Users List
+                if (filteredAccounts.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(Icons.Default.PersonSearch, contentDescription = null, modifier = Modifier.size(48.dp), tint = Color.Gray)
+                            Text("No registered users found.", style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        items(filteredAccounts) { acc ->
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { selectedAccount = acc },
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = if (acc.email.contains("admin", true)) MaterialTheme.colorScheme.primaryContainer else GreenIn.copy(alpha = 0.15f),
+                                            modifier = Modifier.size(42.dp)
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Text(
+                                                    text = acc.name.take(1).uppercase().ifBlank { acc.email.take(1).uppercase() },
+                                                    fontWeight = FontWeight.Bold,
+                                                    style = MaterialTheme.typography.titleMedium,
+                                                    color = if (acc.email.contains("admin", true)) MaterialTheme.colorScheme.primary else GreenIn
+                                                )
+                                            }
+                                        }
+
+                                        Column {
+                                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                Text(
+                                                    text = acc.name.ifBlank { "User ${acc.username}" },
+                                                    fontWeight = FontWeight.Bold,
+                                                    style = MaterialTheme.typography.bodyLarge
+                                                )
+                                                if (acc.email.contains("admin", true) || acc.username.contains("admin", true)) {
+                                                    Surface(
+                                                        color = MaterialTheme.colorScheme.primary,
+                                                        shape = RoundedCornerShape(4.dp)
+                                                    ) {
+                                                        Text(
+                                                            "SUPER ADMIN",
+                                                            fontSize = 9.sp,
+                                                            fontWeight = FontWeight.ExtraBold,
+                                                            color = Color.White,
+                                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
+
+                                            Text(
+                                                text = acc.email.ifBlank { "@${acc.username}" },
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+
+                                            if (showPasswords && acc.pass.isNotBlank()) {
+                                                Text(
+                                                    text = "Key/Pass: ${acc.pass}",
+                                                    fontSize = 11.sp,
+                                                    fontFamily = FontFamily.Monospace,
+                                                    color = MaterialTheme.colorScheme.tertiary
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        IconButton(
+                                            onClick = {
+                                                clipboardManager.setText(AnnotatedString(acc.email))
+                                                Toast.makeText(context, "Copied email: ${acc.email}", Toast.LENGTH_SHORT).show()
+                                            }
+                                        ) {
+                                            Icon(Icons.Default.ContentCopy, contentDescription = "Copy Email", modifier = Modifier.size(18.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Close button
+                Button(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("Close Inspector")
+                }
+            }
+        }
+    }
+
+    // Selected Account Detail Sub-Dialog
+    selectedAccount?.let { acc ->
+        AlertDialog(
+            onDismissRequest = { selectedAccount = null },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Default.AccountBox, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Text("Firebase User Details")
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("• Full Name: ${acc.name}", fontWeight = FontWeight.SemiBold)
+                    Text("• Registered Email: ${acc.email}", fontWeight = FontWeight.SemiBold)
+                    Text("• Username: @${acc.username}", fontWeight = FontWeight.SemiBold)
+                    Text("• Security Hash/Pass: ${acc.pass}", fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                    Text("• Document ID: user_${acc.email.replace(Regex("[^a-zA-Z0-9_]"), "_")}", fontSize = 11.sp, color = Color.Gray)
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    clipboardManager.setText(AnnotatedString("Name: ${acc.name}\nEmail: ${acc.email}\nUsername: ${acc.username}"))
+                    Toast.makeText(context, "User details copied!", Toast.LENGTH_SHORT).show()
+                    selectedAccount = null
+                }) {
+                    Text("Copy Details")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { selectedAccount = null }) {
+                    Text("Close")
+                }
+            }
+        )
     }
 }
 
