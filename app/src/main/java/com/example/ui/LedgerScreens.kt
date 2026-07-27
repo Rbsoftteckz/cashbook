@@ -16,6 +16,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import coil.compose.AsyncImage
 import android.content.Intent
+import android.content.ClipData
 import android.graphics.pdf.PdfDocument
 import android.graphics.Paint
 import android.graphics.Color as AndroidColor
@@ -3554,20 +3555,17 @@ fun ReportsScreen(viewModel: LedgerViewModel) {
                         onClick = {
                             try {
                                 val pdfFile = generatePdfReport(context, activeBook, activeBookTransactions)
-                                val pdfUri = FileProvider.getUriForFile(context, "com.example.fileprovider", pdfFile)
-                                val shareIntent = Intent().apply {
-                                    action = Intent.ACTION_SEND
-                                    putExtra(Intent.EXTRA_STREAM, pdfUri)
+                                val pdfUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", pdfFile)
+                                val shareIntent = Intent(Intent.ACTION_SEND).apply {
                                     type = "application/pdf"
+                                    putExtra(Intent.EXTRA_STREAM, pdfUri)
+                                    clipData = ClipData.newRawUri("PDF Statement Report", pdfUri)
                                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                 }
-                                try {
-                                    shareIntent.setPackage("com.whatsapp")
-                                    context.startActivity(shareIntent)
-                                } catch (e: Exception) {
-                                    shareIntent.setPackage(null)
-                                    context.startActivity(Intent.createChooser(shareIntent, "Share PDF Statement Report"))
+                                val chooserIntent = Intent.createChooser(shareIntent, "Share PDF Statement Report").apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                 }
+                                context.startActivity(chooserIntent)
                             } catch (e: Exception) {
                                 Toast.makeText(context, "PDF Error: ${e.message}", Toast.LENGTH_SHORT).show()
                             }
@@ -5074,7 +5072,8 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                                     Toast.makeText(context, "Cloud Account Registered & Synced!", Toast.LENGTH_LONG).show()
                                     showAccountAuthDialog = false
                                 } else {
-                                    Toast.makeText(context, "Failed to register account.", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Account already exists! Please Sign In instead of Signing Up.", Toast.LENGTH_LONG).show()
+                                    isRegisterMode = false
                                 }
                             } else {
                                 val loggedIn = syncManager.loginUserCloud(cleanUserOrEmail, cleanPass)
@@ -6116,16 +6115,31 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
         trimmed.isNotBlank() && android.util.Patterns.EMAIL_ADDRESS.matcher(trimmed).matches()
     }
 
-    val isEmailAlreadyRegistered = remember(userEmail, isValidEmailFormat) {
+    var isEmailAlreadyRegistered by remember { mutableStateOf(false) }
+    LaunchedEffect(userEmail, isValidEmailFormat, authStateVersion) {
         if (isValidEmailFormat) {
-            viewModel.checkEmailExists(userEmail.trim())
-        } else false
+            val local = viewModel.checkEmailExists(userEmail.trim())
+            isEmailAlreadyRegistered = local
+            if (!local) {
+                isEmailAlreadyRegistered = viewModel.checkEmailExistsCloud(userEmail.trim())
+            }
+        } else {
+            isEmailAlreadyRegistered = false
+        }
     }
 
-    val isForgotAccountFound = remember(forgotUserOrEmail) {
-        if (forgotUserOrEmail.trim().length >= 3) {
-            viewModel.checkEmailExists(forgotUserOrEmail.trim())
-        } else false
+    var isForgotAccountFound by remember { mutableStateOf(false) }
+    LaunchedEffect(forgotUserOrEmail) {
+        val trimmed = forgotUserOrEmail.trim()
+        if (trimmed.length >= 3) {
+            val local = viewModel.checkEmailExists(trimmed)
+            isForgotAccountFound = local
+            if (!local) {
+                isForgotAccountFound = viewModel.checkEmailExistsCloud(trimmed)
+            }
+        } else {
+            isForgotAccountFound = false
+        }
     }
 
     Box(
@@ -6559,21 +6573,30 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                         if (pw.isEmpty()) {
                             Toast.makeText(context, "Please enter a Password.", Toast.LENGTH_SHORT).show()
                         } else if (isEmailAlreadyRegistered) {
-                            Toast.makeText(context, "Account already exists! Switching to Sign In...", Toast.LENGTH_LONG).show()
+                            Toast.makeText(context, "Account already exists! Please Sign In instead of Signing Up.", Toast.LENGTH_LONG).show()
                             authMode = "login"
                             loginUser = if (email.isNotBlank()) email else un
                         } else {
-                            viewModel.registerCustomUser(name, email, un, pw)
-                            if (businessName.isBlank()) {
-                                businessName = if (name.isNotBlank()) "$name's Business" else if (un.isNotBlank()) "$un's Business" else "My Business"
+                            coroutineScope.launch {
+                                val registered = syncManager.registerUserCloud(name, email, un, pw)
+                                if (!registered) {
+                                    Toast.makeText(context, "Account already exists! Please Sign In instead of Signing Up.", Toast.LENGTH_LONG).show()
+                                    authMode = "login"
+                                    loginUser = if (email.isNotBlank()) email else un
+                                } else {
+                                    viewModel.registerCustomUser(name, email, un, pw)
+                                    if (businessName.isBlank()) {
+                                        businessName = if (name.isNotBlank()) "$name's Business" else if (un.isNotBlank()) "$un's Business" else "My Business"
+                                    }
+                                    if (bookName.isBlank()) {
+                                        bookName = "Main CashBook"
+                                    }
+                                    authStateVersion++
+                                    viewModel.triggerCloudSync()
+                                    val displayName = if (name.isNotBlank()) name else un
+                                    Toast.makeText(context, "Welcome $displayName! Account created.", Toast.LENGTH_SHORT).show()
+                                }
                             }
-                            if (bookName.isBlank()) {
-                                bookName = "Main CashBook"
-                            }
-                            authStateVersion++
-                            viewModel.triggerCloudSync()
-                            val displayName = if (name.isNotBlank()) name else un
-                            Toast.makeText(context, "Welcome $displayName! Account created.", Toast.LENGTH_SHORT).show()
                         }
                     },
                     modifier = Modifier
@@ -7462,9 +7485,13 @@ fun ShareStatementDialog(
                                 val shareIntent = Intent(Intent.ACTION_SEND).apply {
                                     type = "image/png"
                                     putExtra(Intent.EXTRA_STREAM, uri)
+                                    clipData = ClipData.newRawUri("Payment Reminder Card", uri)
                                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                 }
-                                context.startActivity(Intent.createChooser(shareIntent, "Share Payment Reminder Card"))
+                                val chooserIntent = Intent.createChooser(shareIntent, "Share Payment Reminder Card").apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                context.startActivity(chooserIntent)
                             } catch (e: Exception) {
                                 Toast.makeText(context, "Error sharing card image: ${e.message}", Toast.LENGTH_SHORT).show()
                             }
@@ -7499,9 +7526,13 @@ fun ShareStatementDialog(
                                 val shareIntent = Intent(Intent.ACTION_SEND).apply {
                                     type = "application/pdf"
                                     putExtra(Intent.EXTRA_STREAM, uri)
+                                    clipData = ClipData.newRawUri("PDF Statement", uri)
                                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                 }
-                                context.startActivity(Intent.createChooser(shareIntent, "Share PDF Statement"))
+                                val chooserIntent = Intent.createChooser(shareIntent, "Share PDF Statement").apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                context.startActivity(chooserIntent)
                             } catch (e: Exception) {
                                 Toast.makeText(context, "Error generating PDF: ${e.message}", Toast.LENGTH_SHORT).show()
                             }
@@ -9384,15 +9415,31 @@ fun ReceiptViewerDialog(
                         OutlinedButton(
                             onClick = {
                                 try {
+                                    val parsedUri = Uri.parse(receiptUri)
+                                    val finalUri = if (parsedUri.scheme == "file" || parsedUri.scheme == null) {
+                                        val filePath = parsedUri.path ?: receiptUri
+                                        val file = File(filePath)
+                                        if (file.exists()) {
+                                            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                                        } else {
+                                            parsedUri
+                                        }
+                                    } else {
+                                        parsedUri
+                                    }
                                     val shareIntent = Intent(Intent.ACTION_SEND).apply {
                                         type = "image/*"
-                                        putExtra(Intent.EXTRA_STREAM, Uri.parse(receiptUri))
+                                        putExtra(Intent.EXTRA_STREAM, finalUri)
+                                        clipData = ClipData.newRawUri("Receipt Image", finalUri)
                                         putExtra(Intent.EXTRA_TEXT, "Attached Transaction Receipt from CashBook App")
                                         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                     }
-                                    context.startActivity(Intent.createChooser(shareIntent, "Share Receipt Image"))
+                                    val chooserIntent = Intent.createChooser(shareIntent, "Share Receipt Image").apply {
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    }
+                                    context.startActivity(chooserIntent)
                                 } catch (e: Exception) {
-                                    Toast.makeText(context, "Sharing receipt...", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Error sharing receipt: ${e.message}", Toast.LENGTH_SHORT).show()
                                 }
                             }
                         ) {

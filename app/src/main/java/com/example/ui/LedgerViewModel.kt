@@ -249,12 +249,16 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             Log.e("LedgerViewModel", "Failed to register network callback", e)
         }
 
-        // Real-time periodic cloud polling (every 10 seconds) so team members and transactions auto-update live across all devices
+        // Real-time periodic cloud polling (every 30 seconds) so team members and transactions auto-update live silently
         viewModelScope.launch {
             while (isActive) {
-                kotlinx.coroutines.delay(10000L)
+                kotlinx.coroutines.delay(30000L)
                 if (syncManager.isUserSignedIn() && !_isSyncing.value) {
-                    triggerCloudSync()
+                    try {
+                        syncManager.syncWithCloud(database.ledgerDao())
+                    } catch (e: Exception) {
+                        Log.e("LedgerViewModel", "Background sync error", e)
+                    }
                 }
             }
         }
@@ -277,15 +281,27 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                 val message = syncManager.syncWithCloud(database.ledgerDao())
                 _syncStatus.value = message
 
-                // After sync, ensure active business & active book are updated to restored list
+                // After sync, preserve current active business & active book if valid
                 val currentBizList = repository.allBusinesses.first()
                 if (currentBizList.isNotEmpty()) {
-                    val nonDefaultBiz = currentBizList.find { it.name != "My Business" } ?: currentBizList.last()
-                    _activeBusiness.value = nonDefaultBiz
-                    val activeBizId = nonDefaultBiz.id
+                    val currentBiz = _activeBusiness.value
+                    val validBiz = if (currentBiz != null && currentBizList.any { it.id == currentBiz.id }) {
+                        currentBiz
+                    } else {
+                        currentBizList.find { it.name != "My Business" } ?: currentBizList.first()
+                    }
+                    _activeBusiness.value = validBiz
+
+                    val activeBizId = validBiz.id
                     val currentBooksList = repository.getBooksForBusiness(activeBizId).first()
                     if (currentBooksList.isNotEmpty()) {
-                        _activeBook.value = currentBooksList.firstOrNull { it.businessId == activeBizId } ?: currentBooksList.last()
+                        val currentBook = _activeBook.value
+                        val validBook = if (currentBook != null && currentBook.businessId == activeBizId && currentBooksList.any { it.id == currentBook.id }) {
+                            currentBook
+                        } else {
+                            currentBooksList.first()
+                        }
+                        _activeBook.value = validBook
                     }
                 } else if (syncManager.isUserSignedIn()) {
                     val email = syncManager.getEmail()
@@ -457,10 +473,28 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         _simulatedRole.value = "Boss"
     }
 
+    val globalAccounts = MutableStateFlow<List<com.example.data.RegisteredAccount>>(syncManager.getGlobalAccounts())
+
+    suspend fun checkEmailExistsCloud(email: String): Boolean {
+        val exists = syncManager.checkEmailExistsCloud(email)
+        globalAccounts.value = syncManager.getGlobalAccounts()
+        return exists
+    }
+
     fun checkEmailExists(email: String): Boolean {
         viewModelScope.launch {
             syncManager.fetchFirebaseAccountsCloud()
+            globalAccounts.value = syncManager.getGlobalAccounts()
         }
+        val target = email.trim().lowercase()
+        val inCloudList = globalAccounts.value.any { acc ->
+            val accEmail = acc.email.trim().lowercase()
+            val accUser = acc.username.trim().lowercase()
+            target == accEmail ||
+            target == accUser ||
+            (accEmail.contains("@") && target == accEmail.substringBefore("@"))
+        }
+        if (inCloudList) return true
         return syncManager.checkEmailExists(email, allTeamMembers.value)
     }
 

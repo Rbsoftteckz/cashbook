@@ -190,10 +190,15 @@ class GoogleDriveSyncManager(private val context: Context) {
         val list = mutableListOf<RegisteredAccount>()
         try {
             val url = "https://firestore.googleapis.com/v1/projects/$firebaseProjectId/databases/(default)/documents/users?key=$firebaseApiKey"
-            val request = Request.Builder().url(url).get().build()
+            val requestBuilder = Request.Builder().url(url)
+            val idToken = prefs.getString("firebase_auth_token", "") ?: ""
+            if (idToken.isNotBlank()) {
+                requestBuilder.addHeader("Authorization", "Bearer $idToken")
+            }
+            val request = requestBuilder.get().build()
             client.newCall(request).execute().use { response ->
+                val body = response.body?.string()
                 if (response.isSuccessful) {
-                    val body = response.body?.string()
                     if (!body.isNullOrBlank()) {
                         val root = JSONObject(body)
                         val docs = root.optJSONArray("documents")
@@ -206,6 +211,8 @@ class GoogleDriveSyncManager(private val context: Context) {
                             }
                         }
                     }
+                } else {
+                    Log.e("GoogleDriveSyncManager", "Firestore fetch users error ${response.code}: $body")
                 }
             }
         } catch (e: Exception) {
@@ -216,6 +223,47 @@ class GoogleDriveSyncManager(private val context: Context) {
             saveGlobalAccounts(list)
         }
         getGlobalAccounts()
+    }
+
+    suspend fun checkEmailExistsCloud(input: String): Boolean = withContext(Dispatchers.IO) {
+        val cleanInput = input.trim().lowercase()
+        if (cleanInput.isBlank()) return@withContext false
+
+        // 1. Local registered accounts & team members check
+        if (checkEmailExists(cleanInput)) return@withContext true
+
+        // 2. Query Firebase Auth API for identifier registration status
+        if (cleanInput.contains("@")) {
+            try {
+                val url = "https://identitytoolkit.googleapis.com/v1/accounts:createAuthUri?key=$firebaseApiKey"
+                val payload = JSONObject().apply {
+                    put("identifier", cleanInput)
+                    put("continueUri", "http://localhost")
+                }.toString().toRequestBody("application/json".toMediaType())
+                val req = Request.Builder().url(url).post(payload).build()
+                client.newCall(req).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val bodyStr = response.body?.string() ?: ""
+                        val json = JSONObject(bodyStr)
+                        if (json.optBoolean("registered", false)) {
+                            return@withContext true
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("GoogleDriveSyncManager", "Error checking Firebase Auth email status", e)
+            }
+        }
+
+        // 3. Query Firestore user accounts
+        val cloudAccounts = fetchFirebaseAccountsCloud()
+        cloudAccounts.any { acc ->
+            val accEmail = acc.email.trim().lowercase()
+            val accUser = acc.username.trim().lowercase()
+            cleanInput == accEmail ||
+            cleanInput == accUser ||
+            (accEmail.contains("@") && cleanInput == accEmail.substringBefore("@"))
+        }
     }
 
     suspend fun sendFirebasePasswordResetEmail(email: String): String = withContext(Dispatchers.IO) {
@@ -252,7 +300,13 @@ class GoogleDriveSyncManager(private val context: Context) {
         val cleanUser = username.trim().lowercase()
         val cleanPass = pass.trim()
 
-        // 1. Try Firebase Auth signUp if email & password valid
+        // 1. Check if email/user already exists locally or in Firebase Auth/Firestore
+        if (checkEmailExistsCloud(cleanEmail) || (cleanUser.isNotBlank() && checkEmailExistsCloud(cleanUser))) {
+            Log.w("GoogleDriveSyncManager", "Account already exists for $cleanEmail / $cleanUser. Refusing registration.")
+            return@withContext false
+        }
+
+        // 2. Try Firebase Auth signUp if email & password valid
         if (cleanEmail.contains("@") && cleanPass.length >= 6) {
             try {
                 val url = "https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=$firebaseApiKey"
@@ -270,6 +324,11 @@ class GoogleDriveSyncManager(private val context: Context) {
                         if (idToken.isNotBlank()) {
                             prefs.edit().putString("firebase_auth_token", idToken).apply()
                         }
+                    } else {
+                        Log.w("GoogleDriveSyncManager", "Firebase Auth signUp response ${response.code}: $bodyStr")
+                        if (bodyStr.contains("EMAIL_EXISTS")) {
+                            return@withContext false
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -277,26 +336,7 @@ class GoogleDriveSyncManager(private val context: Context) {
             }
         }
 
-        // 2. Fetch current cloud accounts from Firestore
-        val cloudAccounts = fetchFirebaseAccountsCloud()
-
-        // 3. Check for existing cloud account to prevent duplicates
-        val existingCloudAcc = cloudAccounts.find {
-            (cleanEmail.isNotBlank() && it.email.trim().lowercase() == cleanEmail) ||
-            (cleanUser.isNotBlank() && it.username.trim().lowercase() == cleanUser)
-        }
-
-        if (existingCloudAcc != null) {
-            // Found existing account on Firebase Cloud
-            if (cleanPass == existingCloudAcc.pass.trim() || existingCloudAcc.pass.isBlank()) {
-                registerUser(existingCloudAcc.name, existingCloudAcc.email, existingCloudAcc.username, cleanPass.ifBlank { existingCloudAcc.pass })
-                return@withContext true
-            } else {
-                registerUser(existingCloudAcc.name, existingCloudAcc.email, existingCloudAcc.username, cleanPass)
-            }
-        } else {
-            registerUser(name, email, username, pass)
-        }
+        registerUser(name, email, username, pass)
 
         val docId = if (cleanEmail.contains("@")) {
             "user_" + cleanEmail.replace(Regex("[^a-zA-Z0-9_]"), "_")
@@ -314,7 +354,12 @@ class GoogleDriveSyncManager(private val context: Context) {
             )
             val url = "https://firestore.googleapis.com/v1/projects/$firebaseProjectId/databases/(default)/documents/users/$docId?key=$firebaseApiKey"
             val body = payload.toString().toRequestBody("application/json".toMediaType())
-            val request = Request.Builder().url(url).patch(body).build()
+            val requestBuilder = Request.Builder().url(url)
+            val idToken = prefs.getString("firebase_auth_token", "") ?: ""
+            if (idToken.isNotBlank()) {
+                requestBuilder.addHeader("Authorization", "Bearer $idToken")
+            }
+            val request = requestBuilder.patch(body).build()
             client.newCall(request).execute().use { response ->
                 Log.d("GoogleDriveSyncManager", "Firestore register account code: ${response.code}")
             }
@@ -808,112 +853,179 @@ class GoogleDriveSyncManager(private val context: Context) {
                     saveGlobalAccounts(restoredList)
                 }
             }
-            
-            // Restore Businesses
+
+            val existingBizList = dao.getAllBusinessesList().toMutableList()
+            val existingBooksList = dao.getAllBooksList().toMutableList()
+            val existingTxList = dao.getAllTransactionsList().toMutableList()
+            val existingPartiesList = dao.getAllPartiesList().toMutableList()
+            val existingPartyTxList = dao.getAllPartyTransactionsList().toMutableList()
+            val existingTeamList = dao.getAllTeamMembersList().toMutableList()
+
+            val bizIdMap = mutableMapOf<Int, Int>()
+            val bookIdMap = mutableMapOf<Int, Int>()
+            val partyIdMap = mutableMapOf<Int, Int>()
+
+            // Restore/Merge Businesses
             if (root.has("businesses")) {
                 val bizArray = root.getJSONArray("businesses")
                 for (i in 0 until bizArray.length()) {
                     val obj = bizArray.getJSONObject(i)
-                    dao.insertBusiness(
-                        Business(
-                            id = obj.getInt("id"),
-                            name = obj.getString("name"),
-                            createdAt = obj.getLong("createdAt")
-                        )
-                    )
+                    val oldId = obj.getInt("id")
+                    val bName = obj.getString("name")
+                    val createdAt = obj.getLong("createdAt")
+
+                    val matched = existingBizList.find { it.id == oldId || it.name.equals(bName, ignoreCase = true) }
+                    if (matched != null) {
+                        bizIdMap[oldId] = matched.id
+                    } else {
+                        val newBiz = Business(id = if (existingBizList.isEmpty()) oldId else 0, name = bName, createdAt = createdAt)
+                        val newId = dao.insertBusiness(newBiz).toInt()
+                        val actualId = if (newBiz.id != 0) newBiz.id else newId
+                        bizIdMap[oldId] = actualId
+                        existingBizList.add(Business(id = actualId, name = bName, createdAt = createdAt))
+                    }
                 }
             }
 
-            // Restore Books
+            // Restore/Merge Books
             if (root.has("books")) {
                 val booksArray = root.getJSONArray("books")
                 for (i in 0 until booksArray.length()) {
                     val obj = booksArray.getJSONObject(i)
-                    dao.insertBook(
-                        Book(
-                            id = obj.getInt("id"),
-                            businessId = obj.optInt("businessId", 1),
-                            name = obj.getString("name"),
-                            phone = obj.optString("phone", ""),
-                            createdAt = obj.getLong("createdAt")
-                        )
-                    )
+                    val oldId = obj.getInt("id")
+                    val oldBizId = obj.optInt("businessId", 1)
+                    val mappedBizId = bizIdMap[oldBizId] ?: oldBizId
+                    val bkName = obj.getString("name")
+                    val phone = obj.optString("phone", "")
+                    val createdAt = obj.getLong("createdAt")
+
+                    val matched = existingBooksList.find { it.id == oldId || (it.businessId == mappedBizId && it.name.equals(bkName, ignoreCase = true)) }
+                    if (matched != null) {
+                        bookIdMap[oldId] = matched.id
+                    } else {
+                        val newBook = Book(id = if (existingBooksList.isEmpty()) oldId else 0, businessId = mappedBizId, name = bkName, phone = phone, createdAt = createdAt)
+                        val newId = dao.insertBook(newBook).toInt()
+                        val actualId = if (newBook.id != 0) newBook.id else newId
+                        bookIdMap[oldId] = actualId
+                        existingBooksList.add(Book(id = actualId, businessId = mappedBizId, name = bkName, phone = phone, createdAt = createdAt))
+                    }
                 }
             }
 
-            // Restore Parties
+            // Restore/Merge Parties
             if (root.has("parties")) {
                 val partiesArray = root.getJSONArray("parties")
                 for (i in 0 until partiesArray.length()) {
                     val obj = partiesArray.getJSONObject(i)
-                    dao.insertParty(
-                        Party(
-                            id = obj.getInt("id"),
-                            name = obj.getString("name"),
-                            phone = obj.optString("phone", ""),
-                            createdAt = obj.getLong("createdAt")
-                        )
-                    )
+                    val oldId = obj.getInt("id")
+                    val pName = obj.getString("name")
+                    val phone = obj.optString("phone", "")
+                    val createdAt = obj.getLong("createdAt")
+
+                    val matched = existingPartiesList.find { it.id == oldId || it.name.equals(pName, ignoreCase = true) }
+                    if (matched != null) {
+                        partyIdMap[oldId] = matched.id
+                    } else {
+                        val newParty = Party(id = if (existingPartiesList.isEmpty()) oldId else 0, name = pName, phone = phone, createdAt = createdAt)
+                        val newId = dao.insertParty(newParty).toInt()
+                        val actualId = if (newParty.id != 0) newParty.id else newId
+                        partyIdMap[oldId] = actualId
+                        existingPartiesList.add(Party(id = actualId, name = pName, phone = phone, createdAt = createdAt))
+                    }
                 }
             }
 
-            // Restore Transactions
+            // Restore/Merge Transactions
             if (root.has("transactions")) {
                 val txArray = root.getJSONArray("transactions")
                 for (i in 0 until txArray.length()) {
                     val obj = txArray.getJSONObject(i)
-                    dao.insertTransaction(
-                        Transaction(
-                            id = obj.getInt("id"),
-                            bookId = obj.getInt("bookId"),
-                            amount = obj.getDouble("amount"),
-                            type = obj.getString("type"),
-                            category = obj.getString("category"),
-                            paymentMethod = obj.getString("paymentMethod"),
-                            remarks = obj.getString("remarks"),
-                            timestamp = obj.getLong("timestamp"),
+                    val oldBookId = obj.getInt("bookId")
+                    val mappedBookId = bookIdMap[oldBookId] ?: oldBookId
+                    val amount = obj.getDouble("amount")
+                    val type = obj.getString("type")
+                    val category = obj.getString("category")
+                    val paymentMethod = obj.getString("paymentMethod")
+                    val remarks = obj.getString("remarks")
+                    val timestamp = obj.getLong("timestamp")
+                    val receiptUri = if (obj.has("receiptUri")) obj.optString("receiptUri", null) else null
+
+                    val exists = existingTxList.any { it.bookId == mappedBookId && it.amount == amount && it.timestamp == timestamp && it.type == type }
+                    if (!exists) {
+                        val newTx = Transaction(
+                            id = 0,
+                            bookId = mappedBookId,
+                            amount = amount,
+                            type = type,
+                            category = category,
+                            paymentMethod = paymentMethod,
+                            remarks = remarks,
+                            timestamp = timestamp,
                             isSynced = true,
-                            receiptUri = if (obj.has("receiptUri")) obj.optString("receiptUri", null) else null
+                            receiptUri = receiptUri
                         )
-                    )
+                        dao.insertTransaction(newTx)
+                        existingTxList.add(newTx)
+                    }
                 }
             }
 
-            // Restore Party Transactions
+            // Restore/Merge Party Transactions
             if (root.has("party_transactions")) {
                 val pTxArray = root.getJSONArray("party_transactions")
                 for (i in 0 until pTxArray.length()) {
                     val obj = pTxArray.getJSONObject(i)
-                    dao.insertPartyTransaction(
-                        PartyTransaction(
-                            id = obj.getInt("id"),
-                            partyId = obj.getInt("partyId"),
-                            amount = obj.getDouble("amount"),
-                            type = obj.getString("type"),
-                            remarks = obj.getString("remarks"),
-                            timestamp = obj.getLong("timestamp"),
+                    val oldPartyId = obj.getInt("partyId")
+                    val mappedPartyId = partyIdMap[oldPartyId] ?: oldPartyId
+                    val amount = obj.getDouble("amount")
+                    val type = obj.getString("type")
+                    val remarks = obj.getString("remarks")
+                    val timestamp = obj.getLong("timestamp")
+
+                    val exists = existingPartyTxList.any { it.partyId == mappedPartyId && it.amount == amount && it.timestamp == timestamp && it.type == type }
+                    if (!exists) {
+                        val newPTx = PartyTransaction(
+                            id = 0,
+                            partyId = mappedPartyId,
+                            amount = amount,
+                            type = type,
+                            remarks = remarks,
+                            timestamp = timestamp,
                             isSynced = true
                         )
-                    )
+                        dao.insertPartyTransaction(newPTx)
+                        existingPartyTxList.add(newPTx)
+                    }
                 }
             }
 
-            // Restore Team Members
+            // Restore/Merge Team Members
             if (root.has("team_members")) {
                 val teamArray = root.getJSONArray("team_members")
                 for (i in 0 until teamArray.length()) {
                     val obj = teamArray.getJSONObject(i)
-                    dao.insertTeamMember(
-                        TeamMember(
-                            id = obj.getInt("id"),
-                            businessId = obj.optInt("businessId", 1),
-                            name = obj.getString("name"),
-                            email = obj.getString("email"),
-                            phone = obj.getString("phone"),
-                            role = obj.getString("role"),
-                            createdAt = obj.getLong("createdAt")
+                    val oldBizId = obj.optInt("businessId", 1)
+                    val mappedBizId = bizIdMap[oldBizId] ?: oldBizId
+                    val name = obj.getString("name")
+                    val email = obj.getString("email")
+                    val phone = obj.getString("phone")
+                    val role = obj.getString("role")
+                    val createdAt = obj.getLong("createdAt")
+
+                    val exists = existingTeamList.any { it.email.equals(email, ignoreCase = true) && it.businessId == mappedBizId }
+                    if (!exists) {
+                        val newMember = TeamMember(
+                            id = 0,
+                            businessId = mappedBizId,
+                            name = name,
+                            email = email,
+                            phone = phone,
+                            role = role,
+                            createdAt = createdAt
                         )
-                    )
+                        dao.insertTeamMember(newMember)
+                        existingTeamList.add(newMember)
+                    }
                 }
             }
 
@@ -1058,16 +1170,8 @@ class GoogleDriveSyncManager(private val context: Context) {
                 }
             }
 
-            val localBiz = dao.getAllBusinessesList()
-            val localBooks = dao.getAllBooksList()
-            val localTxs = dao.getAllTransactionsList()
-            val localParties = dao.getAllPartiesList()
-            val localScore = calculateScoreFromCounts(localBiz.size, localBooks.size, localTxs.size, localParties.size)
-
-            val isLocalDefaultOrEmpty = (localBiz.size <= 1 && (localBiz.firstOrNull()?.name == "My Business" || localBiz.isEmpty())) && localTxs.isEmpty() && localParties.isEmpty()
-
             var restored = false
-            if (!bestCloudJson.isNullOrBlank() && (isLocalDefaultOrEmpty || maxDataScore > localScore)) {
+            if (!bestCloudJson.isNullOrBlank()) {
                 restored = restoreDatabase(bestCloudJson!!, dao)
                 if (restored) {
                     dao.markAllTransactionsSynced()
