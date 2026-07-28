@@ -914,6 +914,7 @@ class GoogleDriveSyncManager(private val context: Context) {
                 put("id", biz.id)
                 put("name", biz.name)
                 put("createdAt", biz.createdAt)
+                put("isSynced", biz.isSynced)
             })
         }
         root.put("businesses", bizArray)
@@ -927,6 +928,7 @@ class GoogleDriveSyncManager(private val context: Context) {
                 put("name", book.name)
                 put("phone", book.phone)
                 put("createdAt", book.createdAt)
+                put("isSynced", book.isSynced)
             })
         }
         root.put("books", booksArray)
@@ -1054,12 +1056,20 @@ class GoogleDriveSyncManager(private val context: Context) {
                 }
             }
 
-            val existingBizList = dao.getAllBusinessesList().toMutableList()
-            val existingBooksList = dao.getAllBooksList().toMutableList()
+            var existingBizList = dao.getAllBusinessesList().toMutableList()
+            var existingBooksList = dao.getAllBooksList().toMutableList()
             val existingTxList = dao.getAllTransactionsList().toMutableList()
             val existingPartiesList = dao.getAllPartiesList().toMutableList()
             val existingPartyTxList = dao.getAllPartyTransactionsList().toMutableList()
             val existingTeamList = dao.getAllTeamMembersList().toMutableList()
+
+            // If phone has no transactions, clear default placeholder initial records so cloud data restores cleanly
+            if (existingTxList.isEmpty() && root.has("businesses")) {
+                existingBizList.forEach { dao.deleteBusiness(it) }
+                existingBizList.clear()
+                existingBooksList.forEach { dao.deleteBook(it) }
+                existingBooksList.clear()
+            }
 
             val bizIdMap = mutableMapOf<Int, Int>()
             val bookIdMap = mutableMapOf<Int, Int>()
@@ -1075,25 +1085,13 @@ class GoogleDriveSyncManager(private val context: Context) {
                     val createdAt = obj.getLong("createdAt")
 
                     val matchedByName = existingBizList.find { it.name.equals(bName, ignoreCase = true) }
-                    val matchedById = if (matchedByName == null) existingBizList.find { it.id == oldId } else null
-                    val matched = matchedByName ?: matchedById
-
-                    if (matched != null) {
-                        bizIdMap[oldId] = matched.id
-                        // Only update local name to cloud name if local name was a placeholder (contains @ or "My Business") and cloud name is valid
-                        if (!matched.name.equals(bName, ignoreCase = true) && bName.isNotBlank() &&
-                            (matched.name.contains("@") || matched.name == "My Business" || matched.name == "Main Business")) {
-                            val updatedBiz = matched.copy(name = bName)
-                            dao.updateBusiness(updatedBiz)
-                            val idx = existingBizList.indexOfFirst { it.id == matched.id }
-                            if (idx >= 0) existingBizList[idx] = updatedBiz
-                        }
+                    if (matchedByName != null) {
+                        bizIdMap[oldId] = matchedByName.id
                     } else {
-                        val newBiz = Business(id = if (existingBizList.isEmpty()) oldId else 0, name = bName, createdAt = createdAt)
+                        val newBiz = Business(id = 0, name = bName, createdAt = createdAt, isSynced = true)
                         val newId = dao.insertBusiness(newBiz).toInt()
-                        val actualId = if (newBiz.id != 0) newBiz.id else newId
-                        bizIdMap[oldId] = actualId
-                        existingBizList.add(Business(id = actualId, name = bName, createdAt = createdAt))
+                        bizIdMap[oldId] = newId
+                        existingBizList.add(newBiz.copy(id = newId))
                     }
                 }
             }
@@ -1110,15 +1108,14 @@ class GoogleDriveSyncManager(private val context: Context) {
                     val phone = obj.optString("phone", "")
                     val createdAt = obj.getLong("createdAt")
 
-                    val matched = existingBooksList.find { it.id == oldId || (it.businessId == mappedBizId && it.name.equals(bkName, ignoreCase = true)) }
+                    val matched = existingBooksList.find { it.businessId == mappedBizId && it.name.equals(bkName, ignoreCase = true) }
                     if (matched != null) {
                         bookIdMap[oldId] = matched.id
                     } else {
-                        val newBook = Book(id = if (existingBooksList.isEmpty()) oldId else 0, businessId = mappedBizId, name = bkName, phone = phone, createdAt = createdAt)
+                        val newBook = Book(id = 0, businessId = mappedBizId, name = bkName, phone = phone, createdAt = createdAt, isSynced = true)
                         val newId = dao.insertBook(newBook).toInt()
-                        val actualId = if (newBook.id != 0) newBook.id else newId
-                        bookIdMap[oldId] = actualId
-                        existingBooksList.add(Book(id = actualId, businessId = mappedBizId, name = bkName, phone = phone, createdAt = createdAt))
+                        bookIdMap[oldId] = newId
+                        existingBooksList.add(newBook.copy(id = newId))
                     }
                 }
             }
@@ -1133,15 +1130,14 @@ class GoogleDriveSyncManager(private val context: Context) {
                     val phone = obj.optString("phone", "")
                     val createdAt = obj.getLong("createdAt")
 
-                    val matched = existingPartiesList.find { it.id == oldId || it.name.equals(pName, ignoreCase = true) }
+                    val matched = existingPartiesList.find { it.name.equals(pName, ignoreCase = true) }
                     if (matched != null) {
                         partyIdMap[oldId] = matched.id
                     } else {
-                        val newParty = Party(id = if (existingPartiesList.isEmpty()) oldId else 0, name = pName, phone = phone, createdAt = createdAt)
+                        val newParty = Party(id = 0, name = pName, phone = phone, createdAt = createdAt)
                         val newId = dao.insertParty(newParty).toInt()
-                        val actualId = if (newParty.id != 0) newParty.id else newId
-                        partyIdMap[oldId] = actualId
-                        existingPartiesList.add(Party(id = actualId, name = pName, phone = phone, createdAt = createdAt))
+                        partyIdMap[oldId] = newId
+                        existingPartiesList.add(newParty.copy(id = newId))
                     }
                 }
             }
@@ -1412,6 +1408,8 @@ class GoogleDriveSyncManager(private val context: Context) {
             if (!bestCloudJson.isNullOrBlank() && (maxDataScore > localScore || (localBizList.size <= 1 && localTxList.isEmpty()))) {
                 restored = restoreDatabase(bestCloudJson!!, dao)
                 if (restored) {
+                    dao.markAllBusinessesSynced()
+                    dao.markAllBooksSynced()
                     dao.markAllTransactionsSynced()
                     dao.markAllPartyTransactionsSynced()
                 }
@@ -1478,6 +1476,8 @@ class GoogleDriveSyncManager(private val context: Context) {
             }
 
             if (syncSuccess) {
+                dao.markAllBusinessesSynced()
+                dao.markAllBooksSynced()
                 dao.markAllTransactionsSynced()
                 dao.markAllPartyTransactionsSynced()
                 return@withContext if (restored) "🟢 Restored & Synced from $syncSource ($userEmail)" else "🟢 Synced with $syncSource ($userEmail)"
@@ -1490,6 +1490,8 @@ class GoogleDriveSyncManager(private val context: Context) {
                 val rtdbReq = Request.Builder().url(rtdbUrl).put(rtdbBody).build()
                 client.newCall(rtdbReq).execute().use { rtdbRes ->
                     if (rtdbRes.isSuccessful) {
+                        dao.markAllBusinessesSynced()
+                        dao.markAllBooksSynced()
                         dao.markAllTransactionsSynced()
                         dao.markAllPartyTransactionsSynced()
                         return@withContext if (restored) "🟢 Restored & Synced (Realtime DB)" else "🟢 Synced with Realtime DB"
@@ -1506,6 +1508,8 @@ class GoogleDriveSyncManager(private val context: Context) {
                 saveToCloudRestApi(primaryDocId, finalJson)
                 if (userEmail.isNotBlank()) saveToCloudRestApi(userEmail, finalJson)
                 if (username.isNotBlank()) saveToCloudRestApi(username, finalJson)
+                dao.markAllBusinessesSynced()
+                dao.markAllBooksSynced()
                 dao.markAllTransactionsSynced()
                 dao.markAllPartyTransactionsSynced()
                 return@withContext if (restored) "🟢 Restored Data & Saved to Cloud Vault ($userEmail)" else "🟢 Synced with Cloud Vault ($userEmail)"

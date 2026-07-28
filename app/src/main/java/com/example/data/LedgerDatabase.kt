@@ -10,7 +10,8 @@ import kotlinx.coroutines.flow.Flow
 data class Business(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val name: String,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val isSynced: Boolean = false
 )
 
 @Entity(tableName = "books")
@@ -19,7 +20,8 @@ data class Book(
     val businessId: Int = 1, // Links books to specific business
     val name: String,
     val phone: String = "",
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val isSynced: Boolean = false
 )
 
 @Entity(
@@ -161,6 +163,12 @@ interface LedgerDao {
     @Query("UPDATE party_transactions SET isSynced = 1")
     suspend fun markAllPartyTransactionsSynced()
 
+    @Query("UPDATE businesses SET isSynced = 1")
+    suspend fun markAllBusinessesSynced()
+
+    @Query("UPDATE books SET isSynced = 1")
+    suspend fun markAllBooksSynced()
+
     // Parties
     @Query("SELECT * FROM parties ORDER BY name ASC")
     fun getAllParties(): Flow<List<Party>>
@@ -202,7 +210,7 @@ interface LedgerDao {
 
 @Database(
     entities = [Business::class, Book::class, Transaction::class, Party::class, PartyTransaction::class, TeamMember::class],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class LedgerDatabase : RoomDatabase() {
@@ -293,6 +301,8 @@ class LedgerRepository(private val ledgerDao: LedgerDao) {
     suspend fun markAllTransactionsSynced() {
         ledgerDao.markAllTransactionsSynced()
         ledgerDao.markAllPartyTransactionsSynced()
+        ledgerDao.markAllBusinessesSynced()
+        ledgerDao.markAllBooksSynced()
     }
 
     suspend fun insertParty(party: Party): Long {

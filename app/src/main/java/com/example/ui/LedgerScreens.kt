@@ -8756,6 +8756,7 @@ fun ManageWorkspaceScreen(viewModel: LedgerViewModel) {
                                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                                     color = if (isActive) GreenIn else Color(0xFF0F172A)
                                 )
+                                TransactionSyncCheckIndicator(isSynced = biz.isSynced)
                             }
                             if (isActive) {
                                 AssistChip(
@@ -8946,6 +8947,7 @@ fun ManageWorkspaceScreen(viewModel: LedgerViewModel) {
                                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                                     color = if (isActive) GreenIn else Color(0xFF0F172A)
                                 )
+                                TransactionSyncCheckIndicator(isSynced = bk.isSynced)
                             }
                             if (isActive) {
                                 AssistChip(
