@@ -497,10 +497,15 @@ class GoogleDriveSyncManager(private val context: Context) {
             return@withContext Pair(false, "Password must be at least 6 characters long.")
         }
 
-        // 3. Check if account already exists on Cloud Database
-        if (checkEmailExistsCloud(cleanEmail) || (cleanUser.isNotBlank() && checkEmailExistsCloud(cleanUser))) {
-            Log.w("GoogleDriveSyncManager", "Account already exists for $cleanEmail / $cleanUser. Refusing registration.")
-            return@withContext Pair(false, "Account already exists! Please Sign In instead of Signing Up.")
+        // 3. Check if account already exists on Cloud Database or local storage
+        val cloudAccounts = fetchFirebaseAccountsCloud()
+        val existingAcc = cloudAccounts.find { it.email.lowercase() == cleanEmail || (cleanUser.isNotBlank() && it.username.lowercase() == cleanUser) }
+            ?: getGlobalAccounts().find { it.email.lowercase() == cleanEmail || (cleanUser.isNotBlank() && it.username.lowercase() == cleanUser) }
+
+        if (existingAcc != null) {
+            Log.i("GoogleDriveSyncManager", "Account already exists for $cleanEmail. Restoring existing account data instead of creating default.")
+            registerUser(existingAcc.name, existingAcc.email, existingAcc.username, existingAcc.pass)
+            return@withContext Pair(true, "EXISTING_ACCOUNT_RESTORED")
         }
 
         val acc = RegisteredAccount(name.trim(), cleanEmail, cleanUser, cleanPass)
@@ -1065,8 +1070,9 @@ class GoogleDriveSyncManager(private val context: Context) {
 
                     if (matched != null) {
                         bizIdMap[oldId] = matched.id
-                        // If matched by ID but the local business name was different from cloud name, update to true cloud name!
-                        if (!matched.name.equals(bName, ignoreCase = true) && bName.isNotBlank()) {
+                        // Only update local name to cloud name if local name was a placeholder (contains @ or "My Business") and cloud name is valid
+                        if (!matched.name.equals(bName, ignoreCase = true) && bName.isNotBlank() &&
+                            (matched.name.contains("@") || matched.name == "My Business" || matched.name == "Main Business")) {
                             val updatedBiz = matched.copy(name = bName)
                             dao.updateBusiness(updatedBiz)
                             val idx = existingBizList.indexOfFirst { it.id == matched.id }
@@ -1079,20 +1085,6 @@ class GoogleDriveSyncManager(private val context: Context) {
                         bizIdMap[oldId] = actualId
                         existingBizList.add(Business(id = actualId, name = bName, createdAt = createdAt))
                     }
-                }
-
-                // Clean up any empty local placeholder business that was not in cloud backup
-                val restoredBizLocalIds = bizIdMap.values.toSet()
-                val currentLocalBizList = dao.getAllBusinessesList()
-                val emptyPlaceholders = currentLocalBizList.filter { localBiz ->
-                    localBiz.id !in restoredBizLocalIds &&
-                    existingTxList.none { tx ->
-                        val bk = existingBooksList.find { b -> b.id == tx.bookId }
-                        bk?.businessId == localBiz.id
-                    }
-                }
-                for (placeholder in emptyPlaceholders) {
-                    dao.deleteBusiness(placeholder)
                 }
             }
 
@@ -1332,7 +1324,7 @@ class GoogleDriveSyncManager(private val context: Context) {
                 val uDocId = "cashbook_$unClean"
                 if (!candidateDocIds.contains(uDocId)) candidateDocIds.add(uDocId)
             }
-            if (!candidateDocIds.contains("cashbook_default_user")) {
+            if (!isRealCloudAccount() && !candidateDocIds.contains("cashbook_default_user")) {
                 candidateDocIds.add("cashbook_default_user")
             }
 
@@ -1387,20 +1379,27 @@ class GoogleDriveSyncManager(private val context: Context) {
                 }
             }
 
-            // 2. Check local prefs vaults
-            val allPrefs = prefs.all
-            for ((key, value) in allPrefs) {
-                if (key.startsWith("cloud_vault_") && value is String && value.isNotBlank()) {
-                    val score = calculateJsonDataScore(value)
+            // 2. Check local prefs vaults for active candidate IDs only
+            for (candId in candidateDocIds) {
+                val vaultJson = prefs.getString("cloud_vault_$candId", "")
+                if (!vaultJson.isNullOrBlank()) {
+                    val score = calculateJsonDataScore(vaultJson)
                     if (score > maxDataScore) {
                         maxDataScore = score
-                        bestCloudJson = value
+                        bestCloudJson = vaultJson
                     }
                 }
             }
 
+            // Calculate current local score
+            val localBizList = dao.getAllBusinessesList()
+            val localBooksList = dao.getAllBooksList()
+            val localTxList = dao.getAllTransactionsList()
+            val localPartiesList = dao.getAllPartiesList()
+            val localScore = calculateScoreFromCounts(localBizList.size, localBooksList.size, localTxList.size, localPartiesList.size)
+
             var restored = false
-            if (!bestCloudJson.isNullOrBlank()) {
+            if (!bestCloudJson.isNullOrBlank() && (maxDataScore > localScore || (localBizList.size <= 1 && localTxList.isEmpty()))) {
                 restored = restoreDatabase(bestCloudJson!!, dao)
                 if (restored) {
                     dao.markAllTransactionsSynced()

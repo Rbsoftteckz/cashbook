@@ -432,7 +432,8 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             val id = repository.insertBusiness(Business(name = name))
             val newBiz = Business(id = id.toInt(), name = name)
             _activeBusiness.value = newBiz
-            _activeBook.value = null
+            val bookId = repository.insertBook(Book(businessId = newBiz.id, name = "Main CashBook"))
+            _activeBook.value = Book(id = bookId.toInt(), businessId = newBiz.id, name = "Main CashBook")
             triggerCloudSync()
         }
     }
@@ -522,6 +523,16 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             syncManager.registerUserCloud(name, email, username, pass)
             triggerCloudSync()
         }
+    }
+
+    suspend fun loginSuperAdminCloud(user: String, pass: String): Boolean {
+        val success = syncManager.loginUserCloud(user, pass)
+        if (success) {
+            isSuperAdmin.value = true
+            _simulatedRole.value = "Boss"
+            triggerCloudSync()
+        }
+        return success
     }
 
     fun loginSuperAdmin(user: String, pass: String): Boolean {

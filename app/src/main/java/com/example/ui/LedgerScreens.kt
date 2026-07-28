@@ -980,7 +980,9 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
 
     var showTransactionDialog by remember { mutableStateOf<String?>(null) }
     var showAddBookDialog by remember { mutableStateOf(false) }
-    var showShareBusinessDialog by remember { mutableStateOf<com.example.data.Business?>(null) }
+    var showBusinessSelectorDialog by remember { mutableStateOf(false) }
+    var showAddBusinessDialog by remember { mutableStateOf(false) }
+    var newBusinessName by remember { mutableStateOf("") }
     var dashboardSearchQuery by remember { mutableStateOf("") }
     var dashboardFilterType by remember { mutableStateOf("all") }
     val context = LocalContext.current
@@ -1011,6 +1013,113 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
         matchesQuery && matchesType
     }
 
+    if (showBusinessSelectorDialog) {
+        AlertDialog(
+            onDismissRequest = { showBusinessSelectorDialog = false },
+            title = {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Select Business", fontWeight = FontWeight.Bold)
+                    TextButton(onClick = {
+                        showBusinessSelectorDialog = false
+                        showAddBusinessDialog = true
+                    }) {
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Add New")
+                    }
+                }
+            },
+            text = {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(businesses) { biz ->
+                        val isSelected = biz.id == activeBusiness?.id
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    viewModel.selectBusiness(biz)
+                                    showBusinessSelectorDialog = false
+                                },
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(14.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    Icon(
+                                        Icons.Default.Storefront,
+                                        contentDescription = null,
+                                        tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        biz.name,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                                if (isSelected) {
+                                    Icon(Icons.Default.Check, contentDescription = "Selected", tint = MaterialTheme.colorScheme.primary)
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showBusinessSelectorDialog = false }) {
+                    Text("Close")
+                }
+            }
+        )
+    }
+
+    if (showAddBusinessDialog) {
+        AlertDialog(
+            onDismissRequest = { showAddBusinessDialog = false },
+            title = { Text("Create Business Account") },
+            text = {
+                OutlinedTextField(
+                    value = newBusinessName,
+                    onValueChange = { newBusinessName = it },
+                    label = { Text("Business Entity Name") },
+                    placeholder = { Text("e.g. Retail Shop, Personal") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (newBusinessName.isNotBlank()) {
+                            viewModel.createBusiness(newBusinessName.trim())
+                            newBusinessName = ""
+                            showAddBusinessDialog = false
+                        }
+                    }
+                ) {
+                    Text("Create")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddBusinessDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -1032,7 +1141,10 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { showBusinessSelectorDialog = true },
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -1049,6 +1161,12 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                                     style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                                     color = MaterialTheme.colorScheme.primary
                                 )
+                                Icon(
+                                    imageVector = Icons.Default.ArrowDropDown,
+                                    contentDescription = "Select Business",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(24.dp)
+                                )
                             }
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
@@ -1058,16 +1176,17 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                             )
                         }
 
-                        if (activeBusiness != null) {
-                            OutlinedButton(
-                                onClick = { showShareBusinessDialog = activeBusiness },
-                                shape = RoundedCornerShape(20.dp),
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                                border = BorderStroke(1.dp, GreenIn)
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
-                                Icon(Icons.Default.Share, contentDescription = null, tint = GreenIn, modifier = Modifier.size(14.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Share 📤", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = GreenIn)
+                                Icon(Icons.Default.SwapHoriz, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                                Text("Switch", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.primary)
                             }
                         }
                     }
@@ -1104,150 +1223,12 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
             }
         }
 
-        // Cloud Sync & Offline Status Banner
+        // Bento Part 2: Horizontal Side-by-Side In & Out Cards
         item {
-            val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
-            val isOnline by viewModel.isOnline.collectAsStateWithLifecycle()
-            val isSyncing by viewModel.isSyncing.collectAsStateWithLifecycle()
-            val isUserSignedIn = viewModel.syncManager.isUserSignedIn()
-            val isRealCloudAccount = viewModel.syncManager.isRealCloudAccount()
-            val userEmail = viewModel.syncManager.getEmail()
-
-            val isSyncError = !isOnline || syncStatus.contains("Error", ignoreCase = true) || syncStatus.contains("Failed", ignoreCase = true) || syncStatus.contains("403") || syncStatus.contains("401") || syncStatus.contains("400") || syncStatus.contains("500") || syncStatus.contains("Disconnected", ignoreCase = true)
-            val isRealSuccess = isOnline && isRealCloudAccount && !isSyncError && (syncStatus.contains("Synced", ignoreCase = true) || syncStatus.contains("Restored", ignoreCase = true) || syncStatus.contains("Success", ignoreCase = true) || syncStatus.contains("Connected", ignoreCase = true))
-
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { viewModel.setScreen(Screen.SYNC_CENTER) },
-                colors = CardDefaults.cardColors(
-                    containerColor = if (!isOnline) {
-                        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.15f)
-                    } else if (isSyncError) {
-                        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.15f)
-                    } else if (isRealSuccess) {
-                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)
-                    } else {
-                        Color(0xFFECFDF5)
-                    }
-                ),
-                border = androidx.compose.foundation.BorderStroke(
-                    1.dp, 
-                    if (!isOnline) MaterialTheme.colorScheme.error.copy(alpha = 0.4f) else if (isSyncError) MaterialTheme.colorScheme.error.copy(alpha = 0.4f) else if (isRealSuccess) MaterialTheme.colorScheme.primary.copy(alpha = 0.3f) else Color(0xFFA7F3D0)
-                ),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        modifier = Modifier.weight(1f),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = if (!isOnline) Icons.Default.CloudOff else if (isSyncError) Icons.Default.CloudOff else if (isRealSuccess) Icons.Default.CloudSync else Icons.Default.OfflinePin,
-                            contentDescription = null,
-                            tint = if (!isOnline) MaterialTheme.colorScheme.error else if (isSyncError) MaterialTheme.colorScheme.error else if (isRealSuccess) GreenIn else Color(0xFF059669),
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Column {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(
-                                    text = "CashBook Easy Khata Cloud Sync",
-                                    fontWeight = FontWeight.Bold,
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                                Surface(
-                                    color = if (!isOnline) MaterialTheme.colorScheme.errorContainer else if (isSyncError) MaterialTheme.colorScheme.errorContainer else if (isRealSuccess) GreenIn.copy(alpha = 0.12f) else Color(0xFFD1FAE5),
-                                    shape = RoundedCornerShape(4.dp)
-                                ) {
-                                    Text(
-                                        text = if (!isOnline) "OFFLINE MODE" else if (isSyncError) "SYNC ISSUE" else if (isRealSuccess) "CONNECTED & SYNCED" else if (isRealCloudAccount) "PENDING SYNC" else "OFFLINE READY",
-                                        color = if (!isOnline) MaterialTheme.colorScheme.error else if (isSyncError) MaterialTheme.colorScheme.error else if (isRealSuccess) GreenIn else if (isRealCloudAccount) MaterialTheme.colorScheme.primary else Color(0xFF047857),
-                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
-                                }
-                            }
-                            Text(
-                                text = if (!isOnline) {
-                                    "No internet connection detected. Saved in local SQLite database."
-                                } else if (!isRealCloudAccount) {
-                                    "Local Account ($userEmail). Saved locally in SQLite database."
-                                } else if (isSyncError) {
-                                    "Account: $userEmail — Status: $syncStatus"
-                                } else if (isRealSuccess) {
-                                    "Cloud Account: $userEmail — Entries synchronized."
-                                } else {
-                                    "Account active ($userEmail). Tap to sync."
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (!isOnline || isSyncError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                    Icon(
-                        imageVector = Icons.Default.ChevronRight,
-                        contentDescription = "Manage Sync",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                    )
-                }
-            }
-        }
-
-        // Unified Bento-style Grid Financial Summary Metrics
-        item {
-            Column(
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // Bento Part 1: Net Balance Primary Card
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (netBalance >= 0) GreenIn.copy(alpha = 0.08f) else RedOut.copy(alpha = 0.08f)
-                    ),
-                    border = BorderStroke(1.5.dp, if (netBalance >= 0) GreenIn.copy(alpha = 0.4f) else RedOut.copy(alpha = 0.4f))
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(18.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "Unified Business Capital Balance",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Icon(
-                                imageVector = if (netBalance >= 0) Icons.Default.ArrowUpward else Icons.Default.ArrowDownward,
-                                contentDescription = null,
-                                tint = if (netBalance >= 0) GreenIn else RedOut,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = "Rs. ${String.format("%,.2f", netBalance)}",
-                            style = MaterialTheme.typography.headlineLarge.copy(fontWeight = FontWeight.ExtraBold),
-                            color = if (netBalance >= 0) GreenIn else RedOut
-                        )
-                    }
-                }
-
-                // Bento Part 2: Horizontal Side-by-Side In & Out Cards
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -1737,25 +1718,6 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                 showAddBookDialog = false
                 Toast.makeText(context, "Customer / Cashbook created!", Toast.LENGTH_SHORT).show()
             }
-        )
-    }
-
-    if (showShareBusinessDialog != null) {
-        val biz = showShareBusinessDialog!!
-        val bizBooks = books.filter { it.businessId == biz.id }
-        val bizBookIds = bizBooks.map { it.id }.toSet()
-        val bizTx = allTransactions.filter { bizBookIds.contains(it.bookId) }
-        val bizIn = bizTx.filter { it.type == "IN" }.sumOf { it.amount }
-        val bizOut = bizTx.filter { it.type == "OUT" }.sumOf { it.amount }
-        val bizNet = bizIn - bizOut
-
-        ShareBusinessDialog(
-            business = biz,
-            booksCount = bizBooks.size,
-            totalNetBalance = bizNet,
-            totalIn = bizIn,
-            totalOut = bizOut,
-            onDismiss = { showShareBusinessDialog = null }
         )
     }
 }
@@ -6732,17 +6694,19 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                                 if (u.isEmpty() || p.isEmpty()) {
                                     Toast.makeText(context, "Please enter Username and Password.", Toast.LENGTH_SHORT).show()
                                 } else {
-                                    val success = viewModel.loginSuperAdmin(u, p)
-                                    if (success) {
-                                        authStateVersion++
-                                        viewModel.triggerCloudSync()
-                                        Toast.makeText(context, "Welcome! Signed in successfully.", Toast.LENGTH_SHORT).show()
-                                    } else {
-                                        val emailExists = viewModel.checkEmailExists(u)
-                                        if (emailExists) {
-                                            Toast.makeText(context, "Incorrect password for '$u'. Tap 'Forgot Password?' to reset.", Toast.LENGTH_LONG).show()
+                                    coroutineScope.launch {
+                                        val success = viewModel.loginSuperAdminCloud(u, p)
+                                        if (success) {
+                                            authStateVersion++
+                                            viewModel.triggerCloudSync()
+                                            Toast.makeText(context, "Welcome back! Restoring and syncing cloud data...", Toast.LENGTH_SHORT).show()
                                         } else {
-                                            Toast.makeText(context, "Account '$u' not found. Please tap 'Create Account' to register.", Toast.LENGTH_LONG).show()
+                                            val emailExists = viewModel.checkEmailExistsCloud(u)
+                                            if (emailExists) {
+                                                Toast.makeText(context, "Incorrect password for '$u'. Tap 'Forgot Password?' to reset.", Toast.LENGTH_LONG).show()
+                                            } else {
+                                                Toast.makeText(context, "Account '$u' not found. Please tap 'Sign Up' tab to register.", Toast.LENGTH_LONG).show()
+                                            }
                                         }
                                     }
                                 }
@@ -6864,9 +6828,9 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                                             verticalAlignment = Alignment.CenterVertically,
                                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                                         ) {
-                                            Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFD97706), modifier = Modifier.size(18.dp))
+                                            Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFFD97706), modifier = Modifier.size(18.dp))
                                             Text(
-                                                "This email already exists! Please Sign In or Reset Password.",
+                                                "Existing account detected. Continuing will restore your cloud data.",
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = Color(0xFF92400E),
                                                 fontWeight = FontWeight.SemiBold
@@ -6945,31 +6909,28 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                             Toast.makeText(context, "Please enter a valid Email Address (e.g., name@example.com).", Toast.LENGTH_SHORT).show()
                         } else if (pw.length < 6) {
                             Toast.makeText(context, "Password must be at least 6 characters long.", Toast.LENGTH_SHORT).show()
-                        } else if (isEmailAlreadyRegistered) {
-                            Toast.makeText(context, "Account already exists! Please Sign In instead of Signing Up.", Toast.LENGTH_LONG).show()
-                            authMode = "login"
-                            loginUser = email
                         } else {
                             coroutineScope.launch {
                                 val (registered, msg) = syncManager.registerUserCloud(name, email, un, pw)
                                 if (!registered) {
                                     Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
-                                    if (msg.contains("already exists", ignoreCase = true)) {
-                                        authMode = "login"
-                                        loginUser = email
-                                    }
                                 } else {
                                     viewModel.registerCustomUser(name, email, un, pw)
-                                    if (businessName.isBlank()) {
-                                        businessName = if (name.isNotBlank()) "${name.trim()}'s Business" else "Main Business"
-                                    }
-                                    if (bookName.isBlank()) {
-                                        bookName = "Main CashBook"
+                                    if (msg == "EXISTING_ACCOUNT_RESTORED") {
+                                        Toast.makeText(context, "Existing account found! Restoring your saved cloud database...", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        if (businessName.isBlank()) {
+                                            businessName = if (name.isNotBlank()) "${name.trim()}'s Business" else "Main Business"
+                                        }
+                                        if (bookName.isBlank()) {
+                                            bookName = "Main CashBook"
+                                        }
+                                        viewModel.createBusinessAndBook(businessName, bookName)
+                                        val displayName = if (name.isNotBlank()) name else un
+                                        Toast.makeText(context, "Welcome $displayName! Account registered.", Toast.LENGTH_SHORT).show()
                                     }
                                     authStateVersion++
                                     viewModel.triggerCloudSync()
-                                    val displayName = if (name.isNotBlank()) name else un
-                                    Toast.makeText(context, "Welcome $displayName! Registered & synced with Firebase.", Toast.LENGTH_SHORT).show()
                                 }
                             }
                         }
