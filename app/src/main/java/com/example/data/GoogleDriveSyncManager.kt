@@ -141,6 +141,15 @@ class GoogleDriveSyncManager(private val context: Context) {
 
     fun getAvatarUrl(): String = prefs.getString("google_avatar_url", "") ?: ""
 
+    fun getDeviceId(): String {
+        var id = prefs.getString("device_id", "")
+        if (id.isNullOrBlank()) {
+            id = java.util.UUID.randomUUID().toString()
+            prefs.edit().putString("device_id", id).apply()
+        }
+        return id
+    }
+
     fun clearGoogleAuth() {
         prefs.edit()
             .remove("access_token")
@@ -876,6 +885,7 @@ class GoogleDriveSyncManager(private val context: Context) {
         val root = JSONObject()
         root.put("version", 2)
         root.put("timestamp", System.currentTimeMillis())
+        root.put("device_id", getDeviceId())
 
         // Save Account Credentials Metadata to Cloud Backup
         val accountObj = JSONObject().apply {

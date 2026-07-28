@@ -2212,12 +2212,12 @@ fun TransactionSyncCheckIndicator(
         if (isSynced) {
             Icon(
                 imageVector = Icons.Default.DoneAll,
-                contentDescription = "Synced to Drive (Double Green Check)",
+                contentDescription = "Synced to Cloud (Double Green Check)",
                 tint = Color(0xFF25D366),
                 modifier = Modifier.size(16.dp)
             )
             Text(
-                text = "Synced",
+                text = "Synced ✓✓",
                 style = MaterialTheme.typography.labelSmall,
                 color = Color(0xFF25D366),
                 fontWeight = FontWeight.Bold
@@ -2225,12 +2225,12 @@ fun TransactionSyncCheckIndicator(
         } else {
             Icon(
                 imageVector = Icons.Default.Check,
-                contentDescription = "Offline / Unsynced (Single Red Check)",
+                contentDescription = "Pending Cloud Sync (Single Red Check)",
                 tint = Color(0xFFEF4444),
                 modifier = Modifier.size(16.dp)
             )
             Text(
-                text = "Offline",
+                text = "Pending Sync ✓",
                 style = MaterialTheme.typography.labelSmall,
                 color = Color(0xFFEF4444),
                 fontWeight = FontWeight.Bold

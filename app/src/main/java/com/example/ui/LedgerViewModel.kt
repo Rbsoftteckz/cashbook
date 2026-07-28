@@ -620,7 +620,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                     paymentMethod = paymentMethod,
                     remarks = remarks,
                     timestamp = timestamp,
-                    isSynced = syncManager.isUserSignedIn(),
+                    isSynced = false,
                     receiptUri = receiptUri
                 )
             )
@@ -728,7 +728,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                     amount = amount,
                     type = type,
                     remarks = remarks,
-                    isSynced = syncManager.isUserSignedIn()
+                    isSynced = false
                 )
             )
             triggerCloudSync()
