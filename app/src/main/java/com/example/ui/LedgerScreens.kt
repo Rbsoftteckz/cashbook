@@ -6505,69 +6505,104 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                     .border(1.dp, Color(0xFFE2E8F0), RoundedCornerShape(20.dp))
             )
 
-            // Mode Selector Tabs (Sign In | Sign Up | Forgot Password)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color(0xFFE2E8F0))
-                    .padding(4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Surface(
-                    onClick = { authMode = "login" },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(8.dp),
-                    color = if (authMode == "login") Color.White else Color.Transparent,
-                    shadowElevation = if (authMode == "login") 2.dp else 0.dp
-                ) {
-                    Box(modifier = Modifier.padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
-                        Text(
-                            "Sign In",
-                            style = MaterialTheme.typography.labelLarge.copy(
-                                fontWeight = if (authMode == "login") FontWeight.Bold else FontWeight.Medium,
-                                color = if (authMode == "login") GreenIn else Color(0xFF64748B)
-                            )
-                        )
-                    }
-                }
+            val isOnline by viewModel.isOnline.collectAsStateWithLifecycle()
 
-                Surface(
-                    onClick = { authMode = "signup" },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(8.dp),
-                    color = if (authMode == "signup") Color.White else Color.Transparent,
-                    shadowElevation = if (authMode == "signup") 2.dp else 0.dp
+            if (!isOnline) {
+                // --- OFFLINE DETECTED CARD ---
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFEF2F2)),
+                    border = BorderStroke(1.dp, Color(0xFFFCA5A5)),
+                    shape = RoundedCornerShape(16.dp)
                 ) {
-                    Box(modifier = Modifier.padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(Icons.Default.CloudOff, contentDescription = null, tint = Color(0xFFDC2626), modifier = Modifier.size(48.dp))
                         Text(
-                            "Sign Up",
-                            style = MaterialTheme.typography.labelLarge.copy(
-                                fontWeight = if (authMode == "signup") FontWeight.Bold else FontWeight.Medium,
-                                color = if (authMode == "signup") GreenIn else Color(0xFF64748B)
-                            )
+                            "No Internet Connection",
+                            style = MaterialTheme.typography.titleLarge.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF991B1B)
+                            ),
+                            textAlign = TextAlign.Center
                         )
+                        Text(
+                            "App detected offline status. Cloud Sign In and Cloud Sync require an active internet connection. You can continue working offline using the local database.",
+                            style = MaterialTheme.typography.bodyMedium.copy(color = Color(0xFF7F1D1D)),
+                            textAlign = TextAlign.Center
+                        )
+                        Button(
+                            onClick = {
+                                val name = "Offline User"
+                                val email = "offline@cashbook.local"
+                                val un = "offline_user"
+                                val pw = "offline123"
+                                syncManager.registerUser(name, email, un, pw)
+                                viewModel.registerCustomUser(name, email, un, pw)
+                                authStateVersion++
+                                Toast.makeText(context, "Operating in 100% Offline Local DB Mode.", Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.fillMaxWidth().height(50.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.CloudOff, contentDescription = null, tint = Color.White)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Continue Offline (100% Local DB)", color = Color.White, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
+            } else {
+                // --- ONLINE MODE: 2 TABS (Sign In | Sign Up) ---
+                if (authMode != "forgot") {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0xFFE2E8F0))
+                            .padding(4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Surface(
+                            onClick = { authMode = "login" },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (authMode == "login") Color.White else Color.Transparent,
+                            shadowElevation = if (authMode == "login") 2.dp else 0.dp
+                        ) {
+                            Box(modifier = Modifier.padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
+                                Text(
+                                    "Sign In",
+                                    style = MaterialTheme.typography.labelLarge.copy(
+                                        fontWeight = if (authMode == "login") FontWeight.Bold else FontWeight.Medium,
+                                        color = if (authMode == "login") GreenIn else Color(0xFF64748B)
+                                    )
+                                )
+                            }
+                        }
 
-                Surface(
-                    onClick = { authMode = "forgot" },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(8.dp),
-                    color = if (authMode == "forgot") Color.White else Color.Transparent,
-                    shadowElevation = if (authMode == "forgot") 2.dp else 0.dp
-                ) {
-                    Box(modifier = Modifier.padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
-                        Text(
-                            "Reset Pass",
-                            style = MaterialTheme.typography.labelLarge.copy(
-                                fontWeight = if (authMode == "forgot") FontWeight.Bold else FontWeight.Medium,
-                                color = if (authMode == "forgot") GreenIn else Color(0xFF64748B)
-                            )
-                        )
+                        Surface(
+                            onClick = { authMode = "signup" },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (authMode == "signup") Color.White else Color.Transparent,
+                            shadowElevation = if (authMode == "signup") 2.dp else 0.dp
+                        ) {
+                            Box(modifier = Modifier.padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
+                                Text(
+                                    "Sign Up",
+                                    style = MaterialTheme.typography.labelLarge.copy(
+                                        fontWeight = if (authMode == "signup") FontWeight.Bold else FontWeight.Medium,
+                                        color = if (authMode == "signup") GreenIn else Color(0xFF64748B)
+                                    )
+                                )
+                            }
+                        }
                     }
                 }
-            }
 
             if (isUserSignedIn) {
                 // Auto-sync cloud data & transition to main app
@@ -6724,38 +6759,11 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                             Text("Sign In", color = Color.White, fontWeight = FontWeight.Bold)
                         }
 
-                        OutlinedButton(
-                            onClick = {
-                                val name = if (fullName.isNotBlank()) fullName.trim() else "Offline User"
-                                val email = if (userEmail.trim().contains("@")) userEmail.trim() else "offline@cashbook.local"
-                                val un = if (username.isNotBlank()) username.trim() else "offline_user"
-                                val pw = if (userPassword.isNotBlank()) userPassword.trim() else "offline123"
-
-                                syncManager.registerUser(name, email, un, pw)
-                                viewModel.registerCustomUser(name, email, un, pw)
-                                if (businessName.isNotBlank()) {
-                                    viewModel.createBusiness(businessName.trim())
-                                }
-                                authStateVersion++
-                                Toast.makeText(context, "Operating in 100% Offline Mode. Tap 'Connect Cloud' anytime to backup to Firebase.", Toast.LENGTH_LONG).show()
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(48.dp),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Icon(Icons.Default.CloudOff, contentDescription = null, tint = Color(0xFF475569))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Continue Offline (100% Local DB)", color = Color(0xFF334155), fontWeight = FontWeight.SemiBold)
-                        }
-
-                        Divider(color = Color(0xFFE2E8F0))
-
                         TextButton(
                             onClick = { authMode = "signup" },
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("Don't have an account? Create Account / Continue with Email", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                            Text("Don't have an account? Sign Up", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
@@ -6953,7 +6961,7 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                                 } else {
                                     viewModel.registerCustomUser(name, email, un, pw)
                                     if (businessName.isBlank()) {
-                                        businessName = if (name.isNotBlank()) "$name's Business" else if (un.isNotBlank()) "$un's Business" else "My Business"
+                                        businessName = if (name.isNotBlank()) "${name.trim()}'s Business" else "Main Business"
                                     }
                                     if (bookName.isBlank()) {
                                         bookName = "Main CashBook"
@@ -6980,31 +6988,6 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                             color = Color.White
                         )
                     )
-                }
-
-                OutlinedButton(
-                    onClick = {
-                        val name = if (fullName.isNotBlank()) fullName.trim() else "Offline User"
-                        val email = if (userEmail.trim().contains("@")) userEmail.trim() else "offline@cashbook.local"
-                        val un = if (username.isNotBlank()) username.trim() else "offline_user"
-                        val pw = if (userPassword.isNotBlank()) userPassword.trim() else "offline123"
-
-                        syncManager.registerUser(name, email, un, pw)
-                        viewModel.registerCustomUser(name, email, un, pw)
-                        if (businessName.isNotBlank()) {
-                            viewModel.createBusiness(businessName.trim())
-                        }
-                        authStateVersion++
-                        Toast.makeText(context, "Operating in 100% Offline Mode. Tap 'Connect Cloud' anytime to backup to Firebase.", Toast.LENGTH_LONG).show()
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(Icons.Default.CloudOff, contentDescription = null, tint = Color(0xFF475569))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Continue Offline (100% Local DB)", color = Color(0xFF334155), fontWeight = FontWeight.SemiBold)
                 }
 
                 TextButton(
@@ -7384,6 +7367,7 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
             }
         }
     }
+}
 }
 
 @Composable

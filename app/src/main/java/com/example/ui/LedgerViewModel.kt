@@ -358,26 +358,32 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                 if (currentBizList.isNotEmpty()) {
                     val currentBiz = _activeBusiness.value
                     val validBiz = if (currentBiz != null && currentBizList.any { it.id == currentBiz.id }) {
-                        currentBiz
+                        currentBizList.first { it.id == currentBiz.id }
                     } else {
-                        currentBizList.find { it.name != "My Business" } ?: currentBizList.first()
+                        currentBizList.find { it.name != "My Business" && !it.name.contains("@") } ?: currentBizList.first()
                     }
-                    _activeBusiness.value = validBiz
+                    if (_activeBusiness.value != validBiz) {
+                        _activeBusiness.value = validBiz
+                    }
 
                     val activeBizId = validBiz.id
                     val currentBooksList = repository.getBooksForBusiness(activeBizId).first()
                     if (currentBooksList.isNotEmpty()) {
                         val currentBook = _activeBook.value
                         val validBook = if (currentBook != null && currentBook.businessId == activeBizId && currentBooksList.any { it.id == currentBook.id }) {
-                            currentBook
+                            currentBooksList.first { it.id == currentBook.id }
                         } else {
                             currentBooksList.first()
                         }
-                        _activeBook.value = validBook
+                        if (_activeBook.value != validBook) {
+                            _activeBook.value = validBook
+                        }
                     }
                 } else if (syncManager.isUserSignedIn()) {
                     val email = syncManager.getEmail()
-                    val bizName = if (email.isNotBlank()) "${email.substringBefore("@")}'s Business" else "My Business"
+                    val globalAcc = syncManager.getGlobalAccounts().find { it.email.equals(email, ignoreCase = true) }
+                    val rawName = globalAcc?.name?.trim()?.ifBlank { null } ?: syncManager.getName().trim().ifBlank { null }
+                    val bizName = if (!rawName.isNullOrBlank() && !rawName.contains("@")) "${rawName}'s Business" else "Main Business"
                     createBusinessAndBook(bizName, "Main CashBook")
                 }
             } catch (e: Exception) {
@@ -515,10 +521,6 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             syncManager.registerUserCloud(name, email, username, pass)
             triggerCloudSync()
-            if (businesses.value.isEmpty()) {
-                val bizName = if (name.isNotBlank()) "${name.trim()}'s Business" else if (username.isNotBlank()) "${username.trim()}'s Business" else "My Business"
-                createBusinessAndBook(bizName, "Main CashBook")
-            }
         }
     }
 
@@ -530,10 +532,6 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             viewModelScope.launch {
                 syncManager.loginUserCloud(user, pass)
                 triggerCloudSync()
-                if (businesses.value.isEmpty()) {
-                    val bizName = if (user.isNotBlank()) "${user.trim()}'s Business" else "My Business"
-                    createBusinessAndBook(bizName, "Main CashBook")
-                }
             }
         }
         return success

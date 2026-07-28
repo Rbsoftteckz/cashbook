@@ -1059,9 +1059,19 @@ class GoogleDriveSyncManager(private val context: Context) {
                     val bName = obj.getString("name")
                     val createdAt = obj.getLong("createdAt")
 
-                    val matched = existingBizList.find { it.id == oldId || it.name.equals(bName, ignoreCase = true) }
+                    val matchedByName = existingBizList.find { it.name.equals(bName, ignoreCase = true) }
+                    val matchedById = if (matchedByName == null) existingBizList.find { it.id == oldId } else null
+                    val matched = matchedByName ?: matchedById
+
                     if (matched != null) {
                         bizIdMap[oldId] = matched.id
+                        // If matched by ID but the local business name was different from cloud name, update to true cloud name!
+                        if (!matched.name.equals(bName, ignoreCase = true) && bName.isNotBlank()) {
+                            val updatedBiz = matched.copy(name = bName)
+                            dao.updateBusiness(updatedBiz)
+                            val idx = existingBizList.indexOfFirst { it.id == matched.id }
+                            if (idx >= 0) existingBizList[idx] = updatedBiz
+                        }
                     } else {
                         val newBiz = Business(id = if (existingBizList.isEmpty()) oldId else 0, name = bName, createdAt = createdAt)
                         val newId = dao.insertBusiness(newBiz).toInt()
@@ -1069,6 +1079,20 @@ class GoogleDriveSyncManager(private val context: Context) {
                         bizIdMap[oldId] = actualId
                         existingBizList.add(Business(id = actualId, name = bName, createdAt = createdAt))
                     }
+                }
+
+                // Clean up any empty local placeholder business that was not in cloud backup
+                val restoredBizLocalIds = bizIdMap.values.toSet()
+                val currentLocalBizList = dao.getAllBusinessesList()
+                val emptyPlaceholders = currentLocalBizList.filter { localBiz ->
+                    localBiz.id !in restoredBizLocalIds &&
+                    existingTxList.none { tx ->
+                        val bk = existingBooksList.find { b -> b.id == tx.bookId }
+                        bk?.businessId == localBiz.id
+                    }
+                }
+                for (placeholder in emptyPlaceholders) {
+                    dao.deleteBusiness(placeholder)
                 }
             }
 
