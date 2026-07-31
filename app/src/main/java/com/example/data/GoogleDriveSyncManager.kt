@@ -746,7 +746,14 @@ class GoogleDriveSyncManager(private val context: Context) {
         if (!isUserLoggedIn()) return false
         val email = getEmail().trim().lowercase()
         val username = (prefs.getString("username", "") ?: "").trim().lowercase()
-        return email == "admin@cashbook.com" || username == "admin" || username == "superadmin" || prefs.getBoolean("is_super_admin", false)
+        val isAdminAccount = email == "admin@cashbook.com" || username == "admin" || username == "superadmin"
+        if (!isAdminAccount) {
+            if (prefs.getBoolean("is_super_admin", false)) {
+                prefs.edit().putBoolean("is_super_admin", false).apply()
+            }
+            return false
+        }
+        return true
     }
 
     fun registerUser(name: String, email: String, username: String, pass: String) {
@@ -1183,7 +1190,7 @@ class GoogleDriveSyncManager(private val context: Context) {
 
                     if (matched != null) {
                         bookIdMap[oldId] = matched.id
-                        if (!matched.name.equals(bkName, ignoreCase = true) && bkName.isNotBlank()) {
+                        if ((!matched.name.equals(bkName, ignoreCase = true) && bkName.isNotBlank()) || matched.phone != phone) {
                             val updatedBook = matched.copy(name = bkName, phone = phone, isSynced = true)
                             dao.updateBook(updatedBook)
                             val idx = existingBooksList.indexOfFirst { it.id == matched.id }
@@ -1194,6 +1201,19 @@ class GoogleDriveSyncManager(private val context: Context) {
                         val newId = dao.insertBook(newBook).toInt()
                         bookIdMap[oldId] = newId
                         existingBooksList.add(newBook.copy(id = newId))
+                    }
+                }
+
+                // Delete local books that were deleted on remote
+                if (bizIdMap.isNotEmpty()) {
+                    val mappedBizIds = bizIdMap.values.toSet()
+                    val remoteBookIdsInLocal = bookIdMap.values.toSet()
+                    val booksToDelete = existingBooksList.filter { localBook ->
+                        localBook.isSynced && mappedBizIds.contains(localBook.businessId) && !remoteBookIdsInLocal.contains(localBook.id)
+                    }
+                    booksToDelete.forEach { localBook ->
+                        dao.deleteBook(localBook)
+                        existingBooksList.remove(localBook)
                     }
                 }
             }
@@ -1223,6 +1243,7 @@ class GoogleDriveSyncManager(private val context: Context) {
             // Restore/Merge Transactions
             if (root.has("transactions")) {
                 val txArray = root.getJSONArray("transactions")
+                val remoteTxTimestamps = mutableSetOf<Long>()
                 for (i in 0 until txArray.length()) {
                     val obj = txArray.getJSONObject(i)
                     val oldBookId = obj.getInt("bookId")
@@ -1235,8 +1256,26 @@ class GoogleDriveSyncManager(private val context: Context) {
                     val timestamp = obj.getLong("timestamp")
                     val receiptUri = if (obj.has("receiptUri")) obj.optString("receiptUri", null) else null
 
-                    val exists = existingTxList.any { it.bookId == mappedBookId && it.amount == amount && it.timestamp == timestamp && it.type == type }
-                    if (!exists) {
+                    remoteTxTimestamps.add(timestamp)
+
+                    val matched = existingTxList.find { it.timestamp == timestamp && it.bookId == mappedBookId }
+                    if (matched != null) {
+                        if (matched.amount != amount || matched.type != type || matched.category != category ||
+                            matched.paymentMethod != paymentMethod || matched.remarks != remarks || matched.receiptUri != receiptUri) {
+                            val updatedTx = matched.copy(
+                                amount = amount,
+                                type = type,
+                                category = category,
+                                paymentMethod = paymentMethod,
+                                remarks = remarks,
+                                receiptUri = receiptUri,
+                                isSynced = true
+                            )
+                            dao.updateTransaction(updatedTx)
+                            val idx = existingTxList.indexOfFirst { it.id == matched.id }
+                            if (idx >= 0) existingTxList[idx] = updatedTx
+                        }
+                    } else {
                         val newTx = Transaction(
                             id = 0,
                             bookId = mappedBookId,
@@ -1249,8 +1288,20 @@ class GoogleDriveSyncManager(private val context: Context) {
                             isSynced = true,
                             receiptUri = receiptUri
                         )
-                        dao.insertTransaction(newTx)
-                        existingTxList.add(newTx)
+                        val newId = dao.insertTransaction(newTx).toInt()
+                        existingTxList.add(newTx.copy(id = newId))
+                    }
+                }
+
+                // Delete local transactions that were deleted on remote
+                if (bookIdMap.isNotEmpty()) {
+                    val mappedBookIds = bookIdMap.values.toSet()
+                    val toDelete = existingTxList.filter { localTx ->
+                        localTx.isSynced && mappedBookIds.contains(localTx.bookId) && !remoteTxTimestamps.contains(localTx.timestamp)
+                    }
+                    toDelete.forEach { localTx ->
+                        dao.deleteTransaction(localTx)
+                        existingTxList.remove(localTx)
                     }
                 }
             }
@@ -1258,6 +1309,7 @@ class GoogleDriveSyncManager(private val context: Context) {
             // Restore/Merge Party Transactions
             if (root.has("party_transactions")) {
                 val pTxArray = root.getJSONArray("party_transactions")
+                val remotePartyTxTimestamps = mutableSetOf<Long>()
                 for (i in 0 until pTxArray.length()) {
                     val obj = pTxArray.getJSONObject(i)
                     val oldPartyId = obj.getInt("partyId")
@@ -1267,8 +1319,22 @@ class GoogleDriveSyncManager(private val context: Context) {
                     val remarks = obj.getString("remarks")
                     val timestamp = obj.getLong("timestamp")
 
-                    val exists = existingPartyTxList.any { it.partyId == mappedPartyId && it.amount == amount && it.timestamp == timestamp && it.type == type }
-                    if (!exists) {
+                    remotePartyTxTimestamps.add(timestamp)
+
+                    val matched = existingPartyTxList.find { it.timestamp == timestamp && it.partyId == mappedPartyId }
+                    if (matched != null) {
+                        if (matched.amount != amount || matched.type != type || matched.remarks != remarks) {
+                            val updatedPTx = matched.copy(
+                                amount = amount,
+                                type = type,
+                                remarks = remarks,
+                                isSynced = true
+                            )
+                            dao.insertPartyTransaction(updatedPTx)
+                            val idx = existingPartyTxList.indexOfFirst { it.id == matched.id }
+                            if (idx >= 0) existingPartyTxList[idx] = updatedPTx
+                        }
+                    } else {
                         val newPTx = PartyTransaction(
                             id = 0,
                             partyId = mappedPartyId,
@@ -1278,8 +1344,20 @@ class GoogleDriveSyncManager(private val context: Context) {
                             timestamp = timestamp,
                             isSynced = true
                         )
-                        dao.insertPartyTransaction(newPTx)
-                        existingPartyTxList.add(newPTx)
+                        val newId = dao.insertPartyTransaction(newPTx).toInt()
+                        existingPartyTxList.add(newPTx.copy(id = newId))
+                    }
+                }
+
+                // Delete local party transactions deleted on remote
+                if (partyIdMap.isNotEmpty()) {
+                    val mappedPartyIds = partyIdMap.values.toSet()
+                    val toDelete = existingPartyTxList.filter { localPTx ->
+                        localPTx.isSynced && mappedPartyIds.contains(localPTx.partyId) && !remotePartyTxTimestamps.contains(localPTx.timestamp)
+                    }
+                    toDelete.forEach { localPTx ->
+                        dao.deletePartyTransaction(localPTx)
+                        existingPartyTxList.remove(localPTx)
                     }
                 }
             }
@@ -1287,6 +1365,7 @@ class GoogleDriveSyncManager(private val context: Context) {
             // Restore/Merge Team Members
             if (root.has("team_members")) {
                 val teamArray = root.getJSONArray("team_members")
+                val remoteTeamEmails = mutableSetOf<String>()
                 for (i in 0 until teamArray.length()) {
                     val obj = teamArray.getJSONObject(i)
                     val oldBizId = obj.optInt("businessId", 1)
@@ -1297,8 +1376,17 @@ class GoogleDriveSyncManager(private val context: Context) {
                     val role = obj.getString("role")
                     val createdAt = obj.getLong("createdAt")
 
-                    val exists = existingTeamList.any { it.email.equals(email, ignoreCase = true) && it.businessId == mappedBizId }
-                    if (!exists) {
+                    remoteTeamEmails.add(email.trim().lowercase())
+
+                    val matched = existingTeamList.find { it.email.equals(email, ignoreCase = true) && it.businessId == mappedBizId }
+                    if (matched != null) {
+                        if (matched.name != name || matched.phone != phone || matched.role != role) {
+                            val updatedTM = matched.copy(name = name, phone = phone, role = role)
+                            dao.insertTeamMember(updatedTM)
+                            val idx = existingTeamList.indexOfFirst { it.id == matched.id }
+                            if (idx >= 0) existingTeamList[idx] = updatedTM
+                        }
+                    } else {
                         val newMember = TeamMember(
                             id = 0,
                             businessId = mappedBizId,
@@ -1308,8 +1396,19 @@ class GoogleDriveSyncManager(private val context: Context) {
                             role = role,
                             createdAt = createdAt
                         )
-                        dao.insertTeamMember(newMember)
-                        existingTeamList.add(newMember)
+                        val newId = dao.insertTeamMember(newMember).toInt()
+                        existingTeamList.add(newMember.copy(id = newId))
+                    }
+                }
+
+                if (bizIdMap.isNotEmpty()) {
+                    val mappedBizIds = bizIdMap.values.toSet()
+                    val membersToDelete = existingTeamList.filter { localTM ->
+                        mappedBizIds.contains(localTM.businessId) && !remoteTeamEmails.contains(localTM.email.trim().lowercase())
+                    }
+                    membersToDelete.forEach { localTM ->
+                        dao.deleteTeamMember(localTM)
+                        existingTeamList.remove(localTM)
                     }
                 }
             }
@@ -1410,6 +1509,17 @@ class GoogleDriveSyncManager(private val context: Context) {
                 val uDocId = "cashbook_$unClean"
                 if (!candidateDocIds.contains(uDocId)) candidateDocIds.add(uDocId)
             }
+
+            // Include candidate docIds for all team members so team sync shares changes bi-directionally
+            val allTeamMembers = dao.getAllTeamMembersList()
+            for (tm in allTeamMembers) {
+                if (tm.email.isNotBlank() && tm.email.contains("@")) {
+                    val cleanTmEmail = tm.email.trim().lowercase().replace(Regex("[^a-zA-Z0-9_]"), "_")
+                    val tmDocId = "cashbook_$cleanTmEmail"
+                    if (!candidateDocIds.contains(tmDocId)) candidateDocIds.add(tmDocId)
+                }
+            }
+
             if (!isRealCloudAccount() && !candidateDocIds.contains("cashbook_default_user")) {
                 candidateDocIds.add("cashbook_default_user")
             }
@@ -1440,7 +1550,7 @@ class GoogleDriveSyncManager(private val context: Context) {
                                     val json = fields.optJSONObject("dataJson")?.optString("stringValue", "")
                                     if (!json.isNullOrBlank()) {
                                         val score = calculateJsonDataScore(json)
-                                        if (score > maxDataScore) {
+                                        if (score >= maxDataScore) {
                                             maxDataScore = score
                                             bestCloudJson = json
                                         }
@@ -1458,36 +1568,22 @@ class GoogleDriveSyncManager(private val context: Context) {
                 }
             }
 
-            // 2. Check local prefs vaults for active candidate IDs only
-            for (candId in candidateDocIds) {
-                val vaultJson = prefs.getString("cloud_vault_$candId", "")
-                if (!vaultJson.isNullOrBlank()) {
-                    val score = calculateJsonDataScore(vaultJson)
-                    if (score > maxDataScore) {
-                        maxDataScore = score
-                        bestCloudJson = vaultJson
+            // 2. Check local prefs vaults for active candidate IDs only if cloud returned nothing
+            if (bestCloudJson.isNullOrBlank()) {
+                for (candId in candidateDocIds) {
+                    val vaultJson = prefs.getString("cloud_vault_$candId", "")
+                    if (!vaultJson.isNullOrBlank()) {
+                        val score = calculateJsonDataScore(vaultJson)
+                        if (score > maxDataScore) {
+                            maxDataScore = score
+                            bestCloudJson = vaultJson
+                        }
                     }
                 }
             }
 
-            // Calculate current local state
-            val localBizList = dao.getAllBusinessesList()
-            val localBooksList = dao.getAllBooksList()
-            val localTxList = dao.getAllTransactionsList()
-            val localPartiesList = dao.getAllPartiesList()
-
-            val hasUnsyncedEdits = localBizList.any { !it.isSynced } ||
-                                    localBooksList.any { !it.isSynced } ||
-                                    localTxList.any { !it.isSynced }
-
-            val userHasModified = prefs.getBoolean("user_has_modified_local_db", false)
-            val hasRestoredBefore = prefs.getBoolean("has_performed_initial_cloud_restore_$primaryDocId", false)
-
-            val isLocalFreshUnedited = localTxList.isEmpty() && localPartiesList.isEmpty() &&
-                    (localBizList.isEmpty() || (localBizList.size == 1 && (localBizList[0].name == "My Business" || localBizList[0].name == "Main Business" || localBizList[0].name.contains("@"))))
-
             var restored = false
-            if (!userHasModified && !hasRestoredBefore && !hasUnsyncedEdits && isLocalFreshUnedited && !bestCloudJson.isNullOrBlank() && maxDataScore > 0) {
+            if (!bestCloudJson.isNullOrBlank()) {
                 restored = restoreDatabase(bestCloudJson!!, dao)
                 if (restored) {
                     prefs.edit().putBoolean("has_performed_initial_cloud_restore_$primaryDocId", true).apply()
@@ -1498,7 +1594,7 @@ class GoogleDriveSyncManager(private val context: Context) {
                 }
             }
 
-            // 3. Serialize full DB after restoration
+            // 3. Serialize full DB after restoration/merge
             val finalJson = serializeDatabaseFromDao(dao)
 
             // Save in local vault for all candidate docIds

@@ -197,13 +197,7 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
     var businessToDelete by remember { mutableStateOf<com.example.data.Business?>(null) }
     var bookToDelete by remember { mutableStateOf<com.example.data.Book?>(null) }
     var deleteConfirmationInput by remember { mutableStateOf("") }
-    var showSuperAdminConsoleMode by remember { mutableStateOf(isSuperAdmin) }
-
-    LaunchedEffect(isSuperAdmin) {
-        if (isSuperAdmin) {
-            showSuperAdminConsoleMode = true
-        }
-    }
+    var showSuperAdminConsoleMode by remember { mutableStateOf(false) }
 
     if (isAppLockEnabled && !isAppUnlocked) {
         AppSecureLockScreen(viewModel = viewModel, onUnlockSuccess = {})
