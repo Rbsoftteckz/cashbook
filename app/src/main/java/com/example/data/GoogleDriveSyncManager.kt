@@ -1389,8 +1389,6 @@ class GoogleDriveSyncManager(private val context: Context) {
 
     suspend fun syncWithFirebaseCloud(dao: LedgerDao): String = withContext(Dispatchers.IO) {
         if (!isRealCloudAccount()) {
-            dao.markAllTransactionsSynced()
-            dao.markAllPartyTransactionsSynced()
             return@withContext "Offline Local Mode — Saved in local SQLite database"
         }
         var lastHttpError: String? = null

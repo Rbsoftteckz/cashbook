@@ -445,7 +445,7 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                                 tint = if (isSynced) GreenIn else Color.Red
                             ) 
                         },
-                        label = { Text("Google Drive Cloud Sync") },
+                        label = { Text("Cloud Sync Center") },
                         selected = currentScreen == Screen.SYNC_CENTER,
                         badge = {
                             Box(
@@ -1043,7 +1043,7 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
     val netBalance = totalIn - totalOut
 
     val inCategories = listOf("Sales", "Salary", "Interest", "Commission", "Rent Received", "Other")
-    val outCategories = listOf("Food", "Rent", "Salary Paid", "Office Supplies", "Travel", "Utilities", "Purchases", "Other")
+    val outCategories = listOf("General", "Goods / Items", "Expense", "Purchases", "Other")
     val paymentMethods = listOf("Cash", "Online", "Bank")
 
     // Real-time UTC local timestamp reference
@@ -2260,27 +2260,27 @@ fun TransactionSyncCheckIndicator(
             Icon(
                 imageVector = Icons.Default.DoneAll,
                 contentDescription = "Synced to Cloud (Double Green Check)",
-                tint = Color(0xFF25D366),
-                modifier = Modifier.size(16.dp)
+                tint = Color(0xFF16A34A),
+                modifier = Modifier.size(15.dp)
             )
             Text(
-                text = "Synced ✓✓",
+                text = "Synced",
                 style = MaterialTheme.typography.labelSmall,
-                color = Color(0xFF25D366),
+                color = Color(0xFF16A34A),
                 fontWeight = FontWeight.Bold
             )
         } else {
             Icon(
                 imageVector = Icons.Default.Check,
-                contentDescription = "Pending Cloud Sync (Single Red Check)",
-                tint = Color(0xFFEF4444),
-                modifier = Modifier.size(16.dp)
+                contentDescription = "Saved Locally (Single Check)",
+                tint = Color(0xFF2563EB),
+                modifier = Modifier.size(15.dp)
             )
             Text(
-                text = "Pending Sync ✓",
+                text = "Saved Locally",
                 style = MaterialTheme.typography.labelSmall,
-                color = Color(0xFFEF4444),
-                fontWeight = FontWeight.Bold
+                color = Color(0xFF2563EB),
+                fontWeight = FontWeight.Medium
             )
         }
     }
@@ -3429,15 +3429,14 @@ fun ReportsScreen(viewModel: LedgerViewModel) {
     // Aggregate Analytics
     val totalIn = activeBookTransactions.filter { it.type == "IN" }.sumOf { it.amount }
     val totalOut = activeBookTransactions.filter { it.type == "OUT" }.sumOf { it.amount }
-    
-    val modeCash = activeBookTransactions.filter { it.paymentMethod == "Cash" }.sumOf { if (it.type == "IN") it.amount else -it.amount }
-    val modeOnline = activeBookTransactions.filter { it.paymentMethod == "Online" }.sumOf { if (it.type == "IN") it.amount else -it.amount }
-    val modeBank = activeBookTransactions.filter { it.paymentMethod == "Bank" }.sumOf { if (it.type == "IN") it.amount else -it.amount }
+    val netBalance = totalIn - totalOut
 
-    // Category aggregations
+    // Item & Category aggregations for Expenditure
     val categoryTotals = activeBookTransactions
         .filter { it.type == "OUT" }
-        .groupBy { it.category }
+        .groupBy { tx ->
+            if (tx.remarks.isNotBlank()) tx.remarks else if (tx.category.isNotBlank() && tx.category != "General" && tx.category != "Food") tx.category else "Expenses"
+        }
         .mapValues { entry -> entry.value.sumOf { it.amount } }
         .toList()
         .sortedByDescending { it.second }
@@ -3456,38 +3455,127 @@ fun ReportsScreen(viewModel: LedgerViewModel) {
             )
         }
 
-        // Account Breakdown
+        // Visual Cash Flow Analytics Graph
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("Liquid Cash Assets by Mode", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                    Spacer(modifier = Modifier.height(12.dp))
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text("Cash Flow Visual Analytics", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                            Text("Overview of Total Income, Expenses & Net Balance", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                    // Visual Bar Chart Graph
+                    val maxVal = maxOf(totalIn, totalOut, kotlin.math.abs(netBalance), 1.0)
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
+                            .padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text("💵 Cash Vault")
-                        Text("Rs. ${String.format("%,.0f", modeCash)}", fontWeight = FontWeight.Bold, color = if (modeCash >= 0) GreenIn else RedOut)
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("⚡ UPI / Online Account")
-                        Text("Rs. ${String.format("%,.0f", modeOnline)}", fontWeight = FontWeight.Bold, color = if (modeOnline >= 0) GreenIn else RedOut)
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("🏦 Bank Deposits")
-                        Text("Rs. ${String.format("%,.0f", modeBank)}", fontWeight = FontWeight.Bold, color = if (modeBank >= 0) GreenIn else RedOut)
+                        // Bar 1: Got (In)
+                        val fractionIn = (totalIn / maxVal).toFloat().coerceIn(0f, 1f)
+                        Column {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Box(modifier = Modifier.size(10.dp).background(GreenIn, CircleShape))
+                                    Text("Total Got (In)", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                                }
+                                Text("Rs. ${String.format("%,.0f", totalIn)}", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = GreenIn)
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(14.dp)
+                                    .clip(RoundedCornerShape(7.dp))
+                                    .background(GreenIn.copy(alpha = 0.12f))
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth(fractionIn)
+                                        .height(14.dp)
+                                        .clip(RoundedCornerShape(7.dp))
+                                        .background(Brush.horizontalGradient(listOf(GreenIn.copy(alpha = 0.7f), GreenIn)))
+                                )
+                            }
+                        }
+
+                        // Bar 2: Gave (Out)
+                        val fractionOut = (totalOut / maxVal).toFloat().coerceIn(0f, 1f)
+                        Column {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Box(modifier = Modifier.size(10.dp).background(RedOut, CircleShape))
+                                    Text("Total Gave (Out)", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                                }
+                                Text("Rs. ${String.format("%,.0f", totalOut)}", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = RedOut)
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(14.dp)
+                                    .clip(RoundedCornerShape(7.dp))
+                                    .background(RedOut.copy(alpha = 0.12f))
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth(fractionOut)
+                                        .height(14.dp)
+                                        .clip(RoundedCornerShape(7.dp))
+                                        .background(Brush.horizontalGradient(listOf(RedOut.copy(alpha = 0.7f), RedOut)))
+                                )
+                            }
+                        }
+
+                        // Bar 3: Net Balance
+                        val fractionNet = (kotlin.math.abs(netBalance) / maxVal).toFloat().coerceIn(0f, 1f)
+                        val netColor = if (netBalance >= 0) Color(0xFF2563EB) else Color(0xFFD97706)
+                        Column {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Box(modifier = Modifier.size(10.dp).background(netColor, CircleShape))
+                                    Text("Net Cash Balance", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                                }
+                                Text("Rs. ${String.format("%,.0f", netBalance)}", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = netColor)
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(14.dp)
+                                    .clip(RoundedCornerShape(7.dp))
+                                    .background(netColor.copy(alpha = 0.12f))
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth(fractionNet)
+                                        .height(14.dp)
+                                        .clip(RoundedCornerShape(7.dp))
+                                        .background(Brush.horizontalGradient(listOf(netColor.copy(alpha = 0.7f), netColor)))
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -3856,7 +3944,7 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
                         "Digital Staff Roster",
@@ -3890,11 +3978,14 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                     } else {
                         Toast.makeText(context, "Unauthorized: Only Boss/Admin can recruit team members.", Toast.LENGTH_SHORT).show()
                     }
-                }
+                },
+                modifier = Modifier.height(38.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                shape = RoundedCornerShape(8.dp)
             ) {
-                Icon(Icons.Default.PersonAddAlt, contentDescription = null)
+                Icon(Icons.Default.PersonAddAlt, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(4.dp))
-                Text("Add Team")
+                Text("Add Team", fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }
         }
 
@@ -3919,21 +4010,35 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Box(
                         modifier = Modifier
-                            .size(36.dp)
+                            .size(40.dp)
                             .background(GreenIn, CircleShape),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text("👤", fontSize = 18.sp)
+                        Text("👤", fontSize = 20.sp)
                     }
                     Column {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                text = syncManager.getName().ifBlank { "Rasool Bakhsh" },
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Surface(
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                shape = RoundedCornerShape(4.dp)
+                            ) {
+                                Text(
+                                    text = "Admin / Owner (You)",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                )
+                            }
+                        }
                         Text(
-                            text = syncManager.getName().ifBlank { "Account Owner" },
-                            fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = syncManager.getEmail().ifBlank { "Local Business Account" },
+                            text = syncManager.getEmail().ifBlank { "mailofrb@gmail.com" },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -3954,40 +4059,7 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
             }
         }
 
-        // Active testing chip
-        Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(modifier = Modifier.padding(12.dp)) {
-                Text(
-                    "Switch Simulated Security Role (Sandbox Mode):",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    roles.filter { it != "Boss" }.forEach { r ->
-                        val isSelected = simulatedRole == r
-                        FilterChip(
-                            selected = isSelected,
-                            onClick = { viewModel.setSimulatedRole(r) },
-                            label = { Text(r, fontSize = 11.sp) }
-                        )
-                    }
-                    val isBoss = simulatedRole == "Boss"
-                    FilterChip(
-                        selected = isBoss,
-                        onClick = { viewModel.setSimulatedRole("Boss") },
-                        label = { Text("Boss (Owner)", fontSize = 11.sp) }
-                    )
-                }
-            }
-        }
+
 
         // Team members lazy column or empty state
         if (activeTeamMembers.isEmpty()) {
@@ -4420,19 +4492,19 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                "CashBook Easy Khata Sync & Backup Vault",
+                "CashBook Pro Sync & Backup Center",
                 fontWeight = FontWeight.Bold,
                 style = MaterialTheme.typography.titleLarge
             )
             Text(
-                "Real-time Cloud Database Sync & Optional Personal Google Drive Backup",
+                "Real-time Firebase Cloud Sync & Offline Local Database Engine",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
             )
         }
 
-        // Top Segmented Tab Switcher (3 Tabs: Cloud Synced, Google Drive, Offline AIS Status)
+        // Top Segmented Tab Switcher (2 Tabs: Cloud Database, Offline Local DB)
         item {
             Row(
                 modifier = Modifier
@@ -4463,7 +4535,7 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            "Cloud Synced",
+                            "Cloud Database",
                             fontWeight = if (activeSyncTab == 0) FontWeight.Bold else FontWeight.Medium,
                             color = if (activeSyncTab == 0) GreenIn else Color.Gray,
                             style = MaterialTheme.typography.labelMedium
@@ -4471,7 +4543,7 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                     }
                 }
 
-                // Tab 1: Google Drive & Status
+                // Tab 1: Offline Local DB
                 Surface(
                     onClick = { activeSyncTab = 1 },
                     modifier = Modifier.weight(1f),
@@ -4485,45 +4557,16 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            Icons.Default.CloudQueue,
+                            Icons.Default.Storage,
                             contentDescription = null,
                             modifier = Modifier.size(16.dp),
                             tint = if (activeSyncTab == 1) GreenIn else Color.Gray
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            "Google Drive",
+                            "Offline Local DB",
                             fontWeight = if (activeSyncTab == 1) FontWeight.Bold else FontWeight.Medium,
                             color = if (activeSyncTab == 1) GreenIn else Color.Gray,
-                            style = MaterialTheme.typography.labelMedium
-                        )
-                    }
-                }
-
-                // Tab 2: Offline AIS Status
-                Surface(
-                    onClick = { activeSyncTab = 2 },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(8.dp),
-                    color = if (activeSyncTab == 2) Color.White else Color.Transparent,
-                    shadowElevation = if (activeSyncTab == 2) 2.dp else 0.dp
-                ) {
-                    Row(
-                        modifier = Modifier.padding(vertical = 10.dp),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Default.Storage,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp),
-                            tint = if (activeSyncTab == 2) GreenIn else Color.Gray
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            "Offline AIS",
-                            fontWeight = if (activeSyncTab == 2) FontWeight.Bold else FontWeight.Medium,
-                            color = if (activeSyncTab == 2) GreenIn else Color.Gray,
                             style = MaterialTheme.typography.labelMedium
                         )
                     }
@@ -4788,317 +4831,8 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                     }
                 }
             }
-        } else if (activeSyncTab == 1) {
-            // --- TAB 1: DEDICATED GOOGLE DRIVE BACKUP VAULT ---
-            item {
-                var driveAuthVersion by remember { mutableIntStateOf(0) }
-                val isDriveConnected = remember(driveAuthVersion) { syncManager.isGoogleDriveConnected() }
-                val driveEmail = remember(driveAuthVersion) { syncManager.getGoogleEmail() }
-                val driveName = remember(driveAuthVersion) { syncManager.getGoogleName() }
-                var showDriveOAuthDialog by remember { mutableStateOf(false) }
-                var driveLastBackupTime by remember { mutableStateOf("") }
-                var driveStatusMessage by remember { mutableStateOf("") }
-
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                ) {
-                    Column(
-                        modifier = Modifier.padding(18.dp),
-                        verticalArrangement = Arrangement.spacedBy(14.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                if (isDriveConnected) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(48.dp)
-                                            .background(GreenIn.copy(alpha = 0.15f), CircleShape),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            Icons.Default.CloudDone,
-                                            contentDescription = "Drive Connected",
-                                            tint = GreenIn,
-                                            modifier = Modifier.size(32.dp)
-                                        )
-                                    }
-                                } else {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(48.dp)
-                                            .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f), CircleShape),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            Icons.Default.CloudOff,
-                                            contentDescription = "Drive Disconnected",
-                                            tint = MaterialTheme.colorScheme.error,
-                                            modifier = Modifier.size(32.dp)
-                                        )
-                                    }
-                                }
-
-                                Column {
-                                    Text(
-                                        "Google Drive Backup Vault",
-                                        fontWeight = FontWeight.Bold,
-                                        style = MaterialTheme.typography.titleMedium
-                                    )
-                                    Text(
-                                        if (isDriveConnected) "Connected Account" else "Not Linked to Google Drive",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-
-                            Surface(
-                                color = if (isDriveConnected) GreenIn.copy(alpha = 0.15f) else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Text(
-                                    if (isDriveConnected) "🟢 Drive Linked" else "🔴 Drive Offline",
-                                    color = if (isDriveConnected) GreenIn else MaterialTheme.colorScheme.error,
-                                    fontWeight = FontWeight.Bold,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                )
-                            }
-                        }
-
-                        Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
-                        if (isDriveConnected) {
-                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Text("Connected Email:", style = MaterialTheme.typography.bodySmall)
-                                    Text(
-                                        driveEmail.ifBlank { driveName.ifBlank { "Google Drive Account" } },
-                                        fontWeight = FontWeight.Bold,
-                                        style = MaterialTheme.typography.bodySmall
-                                    )
-                                }
-
-                                if (driveLastBackupTime.isNotBlank()) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Text("Last Drive Sync:", style = MaterialTheme.typography.bodySmall)
-                                        Text(driveLastBackupTime, color = GreenIn, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
-                                    }
-                                }
-
-                                if (driveStatusMessage.isNotBlank()) {
-                                    Text(
-                                        "Drive Output: $driveStatusMessage",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                Button(
-                                    onClick = {
-                                        viewModel.triggerDriveSync { res ->
-                                            driveStatusMessage = res
-                                            val nowStr = java.text.SimpleDateFormat("dd MMM, hh:mm a", java.util.Locale.getDefault()).format(java.util.Date())
-                                            driveLastBackupTime = nowStr
-                                            Toast.makeText(context, res, Toast.LENGTH_LONG).show()
-                                        }
-                                    },
-                                    modifier = Modifier.weight(1f),
-                                    colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
-                                    shape = RoundedCornerShape(10.dp),
-                                    enabled = !isSyncing
-                                ) {
-                                    if (isSyncing) {
-                                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
-                                    } else {
-                                        Icon(Icons.Default.CloudUpload, contentDescription = null, tint = Color.White)
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text("Backup Now", color = Color.White, fontWeight = FontWeight.Bold)
-                                    }
-                                }
-
-                                OutlinedButton(
-                                    onClick = {
-                                        viewModel.triggerDriveSync { res ->
-                                            driveStatusMessage = res
-                                            Toast.makeText(context, "Restore: $res", Toast.LENGTH_LONG).show()
-                                        }
-                                    },
-                                    modifier = Modifier.weight(1f),
-                                    shape = RoundedCornerShape(10.dp),
-                                    enabled = !isSyncing
-                                ) {
-                                    Icon(Icons.Default.CloudDownload, contentDescription = null)
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Restore Data")
-                                }
-                            }
-
-                            TextButton(
-                                onClick = {
-                                    syncManager.clearGoogleAuth()
-                                    driveAuthVersion++
-                                    Toast.makeText(context, "Google Drive disconnected.", Toast.LENGTH_SHORT).show()
-                                },
-                                modifier = Modifier.align(Alignment.CenterHorizontally)
-                            ) {
-                                Icon(Icons.Default.LinkOff, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Disconnect Google Drive", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                            }
-                        } else {
-                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Text(
-                                    "Google Drive Backup is completely separate from Cloud Sync. Click below to sign into your Google account and authorize private cashbook backups in Google Drive.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-
-                                Button(
-                                    onClick = { showDriveOAuthDialog = true },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
-                                    shape = RoundedCornerShape(10.dp)
-                                ) {
-                                    Icon(Icons.Default.Login, contentDescription = null, tint = Color.White)
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Connect Google Drive Account", color = Color.White, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Security & Privacy Info Card
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF8FAFC)),
-                    border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("🛡️", fontSize = 18.sp)
-                            Text("Google Drive Private Vault", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
-                        }
-                        Text(
-                            "• Backups are stored in your personal Google Drive appDataFolder.\n" +
-                            "• Easy restore when installing CashBook on any device.\n" +
-                            "• Entirely separate and distinct from multi-user Cloud Sync.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFF64748B)
-                        )
-                    }
-                }
-
-                // OAuth WebView Dialog for Google Drive Connect
-                if (showDriveOAuthDialog) {
-                    Dialog(onDismissRequest = { showDriveOAuthDialog = false }) {
-                        Card(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(vertical = 24.dp, horizontal = 12.dp),
-                            shape = RoundedCornerShape(16.dp)
-                        ) {
-                            Column(modifier = Modifier.fillMaxSize()) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(16.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text("Authorize Google Drive Backup", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                                    IconButton(onClick = { showDriveOAuthDialog = false }) {
-                                        Icon(Icons.Default.Close, contentDescription = "Close WebView")
-                                    }
-                                }
-
-                                AndroidView(
-                                    factory = { ctx ->
-                                        WebView(ctx).apply {
-                                            settings.javaScriptEnabled = true
-                                            settings.domStorageEnabled = true
-                                            val defaultUa = android.webkit.WebSettings.getDefaultUserAgent(ctx)
-                                            val sanitizedUa = if (defaultUa.isNullOrBlank()) {
-                                                "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
-                                            } else {
-                                                defaultUa.replace("; wv", "").replace("Version/4.0 ", "").replace("Version/4.0", "")
-                                            }
-                                            settings.userAgentString = sanitizedUa
-
-                                            webViewClient = object : WebViewClient() {
-                                                override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
-                                                    return handleRedirect(url)
-                                                }
-
-                                                 override fun shouldOverrideUrlLoading(view: WebView?, request: android.webkit.WebResourceRequest?): Boolean {
-                                                    return handleRedirect(request?.url?.toString())
-                                                }
-
-                                                override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
-                                                    super.onPageStarted(view, url, favicon)
-                                                    handleRedirect(url)
-                                                }
-
-                                                private fun handleRedirect(url: String?): Boolean {
-                                                    val currentRedirectUri = syncManager.getRedirectUri()
-                                                    if (url != null && url.startsWith(currentRedirectUri)) {
-                                                        val token = extractAccessToken(url)
-                                                        if (token != null) {
-                                                            syncManager.saveAccessToken(token)
-                                                            driveAuthVersion++
-                                                            showDriveOAuthDialog = false
-                                                            viewModel.triggerDriveSync {
-                                                                Toast.makeText(context, "Google Drive Connected & Synced!", Toast.LENGTH_LONG).show()
-                                                            }
-                                                            return true
-                                                        }
-                                                    }
-                                                    return false
-                                                }
-                                            }
-
-                                            val finalClientId = syncManager.getClientId()
-                                            val finalRedirectUri = syncManager.getRedirectUri()
-                                            val authUrl = "https://accounts.google.com/o/oauth2/v2/auth?" +
-                                                    "client_id=$finalClientId&" +
-                                                    "redirect_uri=$finalRedirectUri&" +
-                                                    "response_type=token&" +
-                                                    "scope=https://www.googleapis.com/auth/drive.appdata%20email%20profile"
-                                            loadUrl(authUrl)
-                                        }
-                                    },
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .fillMaxWidth()
-                                )
-                            }
-                        }
-                    }
-                }
-            }
         } else {
-            // --- TAB 2: OFFLINE AIS & LOCAL STORAGE STATUS ---
+            // --- TAB 1: OFFLINE AIS & LOCAL STORAGE STATUS ---
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -5612,7 +5346,7 @@ fun WhatsNewScreen(viewModel: LedgerViewModel) {
                         style = MaterialTheme.typography.titleMedium
                     )
                     Text(
-                        text = "Your offline database automatically backs up to your secure Cloud Google Drive storage silently on every change. When you sign in on another device, your files restore instantly with zero risk of data loss.",
+                        text = "Your offline database automatically syncs to your secure Realtime Cloud Database silently on every change. When you sign in on another device, your entries update automatically.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -5657,8 +5391,8 @@ fun WhatsNewScreen(viewModel: LedgerViewModel) {
 @Composable
 fun HelpDocsScreen(viewModel: LedgerViewModel) {
     val faqs = listOf(
-        "How do I add transactions offline?" to "Our Digital Cashbook runs entirely client-side. Every entry is persisted in local device storage instantly, and is automatically uploaded to Google Drive when networks reconnect.",
-        "Is my financial data secure?" to "Yes! Your books are stored securely in local app-sandboxes. When you configure Google Drive sync, your data resides entirely inside your personal cloud account and is never stored on third-party servers.",
+        "How do I add transactions offline?" to "Our Digital Cashbook runs entirely client-side. Every entry is persisted in local device storage instantly, and is automatically synced to the cloud when network connects.",
+        "Is my financial data secure?" to "Yes! Your books are stored securely in local app-sandboxes and synced via real-time encrypted cloud database architecture.",
         "Can multiple operators log entries?" to "Absolutely. You can invite operators from the 'Staff & Team' menu and assign specific roles. For instance, 'Data Entry' operators can input Cash In/Out logs but cannot delete any history.",
         "How to export reports for tax filing?" to "Navigate to the Reports page or open any active book and click 'Export CSV'. This generates a standard spreadsheet list containing timestamps, remarks, tags, and payment modes ready to use."
     )
@@ -6518,6 +6252,7 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
             )
 
             val isOnline by viewModel.isOnline.collectAsStateWithLifecycle()
+            val isSuperAdmin by viewModel.isSuperAdmin.collectAsStateWithLifecycle()
 
             if (!isOnline) {
                 // --- OFFLINE DETECTED CARD ---
@@ -6623,13 +6358,15 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                                         Text("Ping", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                     }
                                 }
-                                IconButton(onClick = { showFirebaseSettings = !showFirebaseSettings }, modifier = Modifier.size(28.dp)) {
-                                    Icon(Icons.Default.Settings, contentDescription = "Firebase Settings", tint = Color(0xFF1E40AF), modifier = Modifier.size(16.dp))
+                                if (isSuperAdmin) {
+                                    IconButton(onClick = { showFirebaseSettings = !showFirebaseSettings }, modifier = Modifier.size(28.dp)) {
+                                        Icon(Icons.Default.Settings, contentDescription = "Firebase Settings", tint = Color(0xFF1E40AF), modifier = Modifier.size(16.dp))
+                                    }
                                 }
                             }
                         }
 
-                        if (showFirebaseSettings) {
+                        if (isSuperAdmin && showFirebaseSettings) {
                             Divider(color = Color(0xFFBFDBFE))
                             Text("Custom Firebase Cloud Credentials", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1E40AF))
                             
@@ -7681,7 +7418,7 @@ fun ShareBusinessDialog(
         
         *How it works for Team Members / Partners:*
         1. Open Cashbook Pro app on your Android phone.
-        2. Click 'Google Drive Cloud Sync' or 'Sync Center'.
+        2. Click 'Cloud Sync Center' or 'Sync Center'.
         3. Connect your account to automatically sync all live Cash In / Cash Out entries for *${business.name}* across all partner phones!
     """.trimIndent()
 
@@ -7723,7 +7460,7 @@ fun ShareBusinessDialog(
                         Text("💡 How Business Sharing Works for Team Members:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall, color = GreenIn)
                         Text("1. Share this invite information with your team member or partner via WhatsApp or SMS.", style = MaterialTheme.typography.bodySmall)
                         Text("2. The team member installs Cashbook Pro on their mobile phone.", style = MaterialTheme.typography.bodySmall)
-                        Text("3. They sign into Google Drive Cloud Sync using their account.", style = MaterialTheme.typography.bodySmall)
+                        Text("3. They sign into Cloud Sync Center using their account.", style = MaterialTheme.typography.bodySmall)
                         Text("4. All Cash In / Cash Out logs for '${business.name}' update automatically across all team phones in real time!", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
                     }
                 }
@@ -8028,26 +7765,26 @@ fun ShareStatementDialog(
 
                         Divider(color = Color(0xFFE2E8F0), thickness = 1.dp)
 
-                        // Card Footer: Business Name & Easy Khata branding
+                        // Card Footer: Business Name & CashBook Pro branding
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(businessName.ifBlank { "Guest Business" }, style = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.Black))
-                            Text("CashBook Easy Khata", style = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981)))
+                            Text("CashBook Pro", style = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981)))
                         }
                     }
                 }
 
-                // Action Option 1: Share Payment Reminder Card Image
+                // Action Option 1: Share Statement Image
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable {
                             try {
-                                val bitmap = createPaymentReminderBitmap(context, bookName, netBalance, businessName)
-                                val imageFile = File(context.cacheDir, "payment_reminder.png")
+                                val bitmap = createBookStatementImageBitmap(context, bookName, bookPhone, businessName, transactions)
+                                val imageFile = File(context.cacheDir, "book_statement.png")
                                 imageFile.outputStream().use { out ->
                                     bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
                                 }
@@ -8055,15 +7792,15 @@ fun ShareStatementDialog(
                                 val shareIntent = Intent(Intent.ACTION_SEND).apply {
                                     type = "image/png"
                                     putExtra(Intent.EXTRA_STREAM, uri)
-                                    clipData = ClipData.newRawUri("Payment Reminder Card", uri)
+                                    clipData = ClipData.newRawUri("Book Statement Image", uri)
                                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                 }
-                                val chooserIntent = Intent.createChooser(shareIntent, "Share Payment Reminder Card").apply {
+                                val chooserIntent = Intent.createChooser(shareIntent, "Share Statement Image").apply {
                                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                 }
                                 context.startActivity(chooserIntent)
                             } catch (e: Exception) {
-                                Toast.makeText(context, "Error sharing card image: ${e.message}", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Error sharing statement image: ${e.message}", Toast.LENGTH_SHORT).show()
                             }
                             onDismiss()
                         },
@@ -8079,8 +7816,8 @@ fun ShareStatementDialog(
                         Icon(Icons.Default.Image, contentDescription = null, tint = Color(0xFF059669))
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
-                            Text("Share Payment Reminder Card (Image)", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium, color = Color(0xFF065F46))
-                            Text("Send visual card image to WhatsApp / Gallery", style = MaterialTheme.typography.bodySmall, color = Color(0xFF047857))
+                            Text("Share Statement Card (Image)", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium, color = Color(0xFF065F46))
+                            Text("Send visual statement image with item details to WhatsApp / Gallery", style = MaterialTheme.typography.bodySmall, color = Color(0xFF047857))
                         }
                     }
                 }
@@ -8121,7 +7858,7 @@ fun ShareStatementDialog(
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text("Share PDF Receipt / Statement", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
-                            Text("Professional PDF document with Customer name & Debit/Credit table", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f))
+                            Text("Professional PDF document with Customer name & item transaction table", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f))
                         }
                     }
                 }
@@ -8146,7 +7883,7 @@ fun ShareStatementDialog(
                                         putExtra(Intent.EXTRA_TEXT, textTable)
                                         type = "text/plain"
                                     },
-                                    "Share Statement"
+                                    "Share Statement Text"
                                 )
                                 context.startActivity(genericChooser)
                             }
@@ -8164,8 +7901,8 @@ fun ShareStatementDialog(
                         Icon(Icons.Default.Share, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
-                            Text("Share Text Table via WhatsApp", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                            Text("Formatted WhatsApp message with full ledger details", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f))
+                            Text("Share TXT Statement via WhatsApp", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                            Text("Formatted text message with full itemized transaction details", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f))
                         }
                     }
                 }
@@ -8187,7 +7924,7 @@ fun generateWhatsAppTextTable(
     val sb = StringBuilder()
     sb.append("-------------------------------------------\n")
     sb.append("🏢 *BUSINESS:* ${businessName.ifBlank { "My Business" }}\n")
-    sb.append("📖 *CONSUMER / BOOK:* ${bookName.ifBlank { "Khata Book" }}\n")
+    sb.append("📖 *CASHBOOK / CONSUMER:* ${bookName.ifBlank { "Khata Book" }}\n")
     if (bookPhone.isNotBlank()) {
         sb.append("📞 *PHONE:* $bookPhone\n")
     }
@@ -8204,13 +7941,11 @@ fun generateWhatsAppTextTable(
     for ((date, dayTxs) in grouped) {
         sb.append("\n📅 *$date*\n")
         for (tx in dayTxs) {
-            val item = if (tx.remarks.isNotBlank()) tx.remarks else tx.category
+            val itemName = if (tx.remarks.isNotBlank()) tx.remarks else if (tx.category.isNotBlank() && tx.category != "General") tx.category else ""
             val amtStr = String.format("%,.0f", tx.amount)
-            if (tx.type == "OUT") {
-                sb.append(" • Gave (Out): Rs. $amtStr ($item)\n")
-            } else {
-                sb.append(" • Got (In)  : Rs. $amtStr ($item)\n")
-            }
+            val typeStr = if (tx.type == "OUT") "Gave (Out)" else "Got (In)"
+            val itemStr = if (itemName.isNotBlank()) " ($itemName)" else ""
+            sb.append(" • $typeStr: Rs. $amtStr$itemStr\n")
         }
     }
 
@@ -8251,7 +7986,9 @@ fun generateTextReport(activeBook: Book?, transactions: List<Transaction>): Stri
     transactions.forEachIndexed { index, tx ->
         val dateStr = SimpleDateFormat("dd-MMM-yyyy", Locale.getDefault()).format(Date(tx.timestamp))
         val typePrefix = if (tx.type == "IN") "[IN]" else "[OUT]"
-        sb.append("${index + 1}. $dateStr $typePrefix Rs. ${String.format("%,.0f", tx.amount)} - ${tx.remarks} (${tx.paymentMethod})\n")
+        val itemName = if (tx.remarks.isNotBlank()) tx.remarks else if (tx.category.isNotBlank() && tx.category != "General") tx.category else ""
+        val itemStr = if (itemName.isNotBlank()) " - $itemName" else ""
+        sb.append("${index + 1}. $dateStr $typePrefix Rs. ${String.format("%,.0f", tx.amount)}$itemStr (${tx.paymentMethod})\n")
     }
     sb.append("\nGenerated by CashBook Pro App.")
     return sb.toString()
@@ -8272,7 +8009,7 @@ fun generatePdfReport(
     val paint = Paint()
 
     val bookName = activeBook?.name ?: "Customer Statement"
-    val phoneStr = activeBook?.phone?.ifBlank { "03337972023" } ?: "03337972023"
+    val phoneStr = activeBook?.phone?.ifBlank { "" } ?: ""
     val bizName = activeBusiness?.name?.ifBlank { "Guest Business" } ?: "Guest Business"
 
     val dateFmt = SimpleDateFormat("dd'th' MMM, yy", Locale.getDefault())
@@ -8288,7 +8025,9 @@ fun generatePdfReport(
     paint.textSize = 11f
     paint.isFakeBoldText = false
     canvas.drawText(bizName, 35f, 62f, paint)
-    canvas.drawText("Phone: $phoneStr", 35f, 77f, paint)
+    if (phoneStr.isNotBlank()) {
+        canvas.drawText("Phone: $phoneStr", 35f, 77f, paint)
+    }
 
     // Right aligned date range
     paint.textAlign = Paint.Align.RIGHT
@@ -8345,7 +8084,7 @@ fun generatePdfReport(
     paint.textSize = 10f
     paint.isFakeBoldText = true
     canvas.drawText("Date", 45f, headerY + 16f, paint)
-    canvas.drawText("Details", 130f, headerY + 16f, paint)
+    canvas.drawText("Item Name / Remarks", 130f, headerY + 16f, paint)
     canvas.drawText("Debit (-)", 290f, headerY + 16f, paint)
     canvas.drawText("Credit (+)", 380f, headerY + 16f, paint)
     canvas.drawText("Balance", 470f, headerY + 16f, paint)
@@ -8371,8 +8110,8 @@ fun generatePdfReport(
         paint.color = AndroidColor.parseColor("#111827")
         canvas.drawText(dateText, 45f, currentY + 15f, paint)
 
-        val detailsText = if (tx.remarks.isNotBlank()) tx.remarks else tx.category
-        val displayDetails = if (detailsText.length > 24) detailsText.take(22) + "..." else detailsText
+        val itemName = if (tx.remarks.isNotBlank()) tx.remarks else if (tx.category.isNotBlank() && tx.category != "General") tx.category else ""
+        val displayDetails = if (itemName.length > 24) itemName.take(22) + "..." else itemName
         canvas.drawText(displayDetails, 130f, currentY + 15f, paint)
 
         // Debit column
@@ -8420,6 +8159,138 @@ fun generatePdfReport(
     pdfDocument.close()
 
     return file
+}
+
+fun createBookStatementImageBitmap(
+    context: Context,
+    bookName: String,
+    bookPhone: String,
+    businessName: String,
+    transactions: List<Transaction>
+): Bitmap {
+    val totalIn = transactions.filter { it.type == "IN" }.sumOf { it.amount }
+    val totalOut = transactions.filter { it.type == "OUT" }.sumOf { it.amount }
+    val netBalance = totalIn - totalOut
+
+    val width = 900
+    val txCount = minOf(transactions.size, 15)
+    val height = kotlin.math.max(500, 320 + (txCount * 45) + 100)
+    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    val canvas = AndroidCanvas(bitmap)
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    // Background
+    canvas.drawColor(AndroidColor.WHITE)
+
+    // Outer Border
+    paint.color = AndroidColor.parseColor("#CBD5E1")
+    paint.style = Paint.Style.STROKE
+    paint.strokeWidth = 3f
+    canvas.drawRoundRect(20f, 20f, (width - 20).toFloat(), (height - 20).toFloat(), 20f, 20f, paint)
+    paint.style = Paint.Style.FILL
+
+    // Top Banner
+    paint.color = AndroidColor.parseColor("#0F172A")
+    canvas.drawRoundRect(20f, 20f, (width - 20).toFloat(), 110f, 20f, 20f, paint)
+
+    paint.color = AndroidColor.WHITE
+    paint.textSize = 28f
+    paint.isFakeBoldText = true
+    canvas.drawText("${bookName.ifBlank { "Khata Book" }} - Statement", 40f, 65f, paint)
+
+    paint.textSize = 16f
+    paint.isFakeBoldText = false
+    paint.color = AndroidColor.parseColor("#94A3B8")
+    val phoneStr = if (bookPhone.isNotBlank()) " | Phone: $bookPhone" else ""
+    canvas.drawText("${businessName.ifBlank { "CashBook Pro" }}$phoneStr", 40f, 95f, paint)
+
+    val dateStr = SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()).format(Date())
+    paint.textAlign = Paint.Align.RIGHT
+    canvas.drawText(dateStr, (width - 40).toFloat(), 65f, paint)
+    paint.textAlign = Paint.Align.LEFT
+
+    // Summary Boxes
+    // Got (In)
+    paint.color = AndroidColor.parseColor("#ECFDF5")
+    canvas.drawRoundRect(40f, 130f, 290f, 200f, 12f, 12f, paint)
+    paint.color = AndroidColor.parseColor("#065F46")
+    paint.textSize = 13f
+    paint.isFakeBoldText = true
+    canvas.drawText("TOTAL GOT (IN)", 55f, 155f, paint)
+    paint.textSize = 20f
+    canvas.drawText("Rs. ${String.format("%,.0f", totalIn)}", 55f, 185f, paint)
+
+    // Gave (Out)
+    paint.color = AndroidColor.parseColor("#FEF2F2")
+    canvas.drawRoundRect(310f, 130f, 560f, 200f, 12f, 12f, paint)
+    paint.color = AndroidColor.parseColor("#991B1B")
+    paint.textSize = 13f
+    paint.isFakeBoldText = true
+    canvas.drawText("TOTAL GAVE (OUT)", 325f, 155f, paint)
+    paint.textSize = 20f
+    canvas.drawText("Rs. ${String.format("%,.0f", totalOut)}", 325f, 185f, paint)
+
+    // Net Balance
+    val isGive = netBalance < 0
+    paint.color = if (isGive) AndroidColor.parseColor("#FEF2F2") else AndroidColor.parseColor("#ECFDF5")
+    canvas.drawRoundRect(580f, 130f, 860f, 200f, 12f, 12f, paint)
+    paint.color = if (isGive) AndroidColor.parseColor("#991B1B") else AndroidColor.parseColor("#065F46")
+    paint.textSize = 13f
+    paint.isFakeBoldText = true
+    canvas.drawText("NET BALANCE", 595f, 155f, paint)
+    paint.textSize = 20f
+    canvas.drawText("Rs. ${String.format("%,.0f", kotlin.math.abs(netBalance))}", 595f, 185f, paint)
+
+    // Table Header
+    val headerY = 225f
+    paint.color = AndroidColor.parseColor("#F1F5F9")
+    canvas.drawRect(40f, headerY, 860f, headerY + 35f, paint)
+
+    paint.color = AndroidColor.parseColor("#334155")
+    paint.textSize = 15f
+    paint.isFakeBoldText = true
+    canvas.drawText("Date", 55f, headerY + 23f, paint)
+    canvas.drawText("Item Name / Remarks", 200f, headerY + 23f, paint)
+    canvas.drawText("Type", 520f, headerY + 23f, paint)
+    canvas.drawText("Amount", 680f, headerY + 23f, paint)
+
+    // Table Rows
+    var currentY = headerY + 35f
+    paint.isFakeBoldText = false
+
+    transactions.take(15).forEach { tx ->
+        val txDate = SimpleDateFormat("dd MMM, yy", Locale.getDefault()).format(Date(tx.timestamp))
+        val itemName = if (tx.remarks.isNotBlank()) tx.remarks else if (tx.category.isNotBlank() && tx.category != "General") tx.category else ""
+        val isIn = tx.type == "IN"
+
+        paint.color = AndroidColor.parseColor("#E2E8F0")
+        paint.strokeWidth = 1f
+        canvas.drawLine(40f, currentY + 35f, 860f, currentY + 35f, paint)
+
+        paint.color = AndroidColor.parseColor("#1E293B")
+        paint.textSize = 14f
+        canvas.drawText(txDate, 55f, currentY + 22f, paint)
+
+        val truncatedItem = if (itemName.length > 28) itemName.take(26) + "..." else itemName
+        paint.color = AndroidColor.parseColor("#334155")
+        canvas.drawText(truncatedItem, 200f, currentY + 22f, paint)
+
+        paint.color = if (isIn) AndroidColor.parseColor("#059669") else AndroidColor.parseColor("#DC2626")
+        paint.isFakeBoldText = true
+        canvas.drawText(if (isIn) "GOT (IN)" else "GAVE (OUT)", 520f, currentY + 22f, paint)
+
+        canvas.drawText("Rs. ${String.format("%,.0f", tx.amount)}", 680f, currentY + 22f, paint)
+        paint.isFakeBoldText = false
+
+        currentY += 40f
+    }
+
+    currentY += 15f
+    paint.color = AndroidColor.parseColor("#94A3B8")
+    paint.textSize = 13f
+    canvas.drawText("Generated by CashBook Pro App", 55f, currentY + 20f, paint)
+
+    return bitmap
 }
 
 fun createPaymentReminderBitmap(
@@ -8489,7 +8360,7 @@ fun createPaymentReminderBitmap(
 
     paint.color = AndroidColor.parseColor("#10B981")
     paint.textAlign = Paint.Align.RIGHT
-    canvas.drawText("CashBook Easy Khata App", 750f, 415f, paint)
+    canvas.drawText("CashBook Pro App", 750f, 415f, paint)
     paint.textAlign = Paint.Align.LEFT
 
     return bitmap
@@ -8563,7 +8434,7 @@ fun SettingsScreen(viewModel: LedgerViewModel) {
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("CashBook Easy Khata Cloud & Offline Sync", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                    Text("CashBook Pro Cloud & Offline Sync", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
                     
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -9651,7 +9522,7 @@ fun ProfileScreen(viewModel: LedgerViewModel) {
                     ) {
                         Icon(Icons.Default.CloudSync, contentDescription = null)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Google Drive Sync Center")
+                        Text("Cloud Sync Center")
                     }
 
                     OutlinedButton(
