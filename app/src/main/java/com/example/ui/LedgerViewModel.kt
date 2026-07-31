@@ -102,11 +102,22 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     val simulatedRole: StateFlow<String> = _simulatedRole.asStateFlow()
 
     // Multi-Business states
-    val businesses: StateFlow<List<Business>> = repository.allBusinesses.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
-        initialValue = emptyList()
-    )
+    val businesses: StateFlow<List<Business>> = repository.allBusinesses
+        .map { list ->
+            val activeEmail = syncManager.getEmail().trim().lowercase()
+            if (activeEmail.isBlank() || isSuperAdmin.value) {
+                list
+            } else {
+                list.filter { biz ->
+                    biz.userEmail.isBlank() || biz.userEmail.trim().lowercase() == activeEmail
+                }
+            }
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
 
     private val _activeBusiness = MutableStateFlow<Business?>(null)
     val activeBusiness: StateFlow<Business?> = _activeBusiness.asStateFlow()
@@ -428,10 +439,11 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun createBusiness(name: String) {
+        val userEmail = syncManager.getEmail().trim().lowercase()
         viewModelScope.launch {
             syncManager.markLocalDbModified()
-            val id = repository.insertBusiness(Business(name = name, isSynced = false))
-            val newBiz = Business(id = id.toInt(), name = name, isSynced = false)
+            val id = repository.insertBusiness(Business(name = name, userEmail = userEmail, isSynced = false))
+            val newBiz = Business(id = id.toInt(), name = name, userEmail = userEmail, isSynced = false)
             _activeBusiness.value = newBiz
             val bookId = repository.insertBook(Book(businessId = newBiz.id, name = "Main CashBook", isSynced = false))
             _activeBook.value = Book(id = bookId.toInt(), businessId = newBiz.id, name = "Main CashBook", isSynced = false)
@@ -452,10 +464,11 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun createBusinessAndBook(businessName: String, bookName: String = "") {
+        val userEmail = syncManager.getEmail().trim().lowercase()
         viewModelScope.launch {
             syncManager.markLocalDbModified()
-            val id = repository.insertBusiness(Business(name = businessName, isSynced = false))
-            val newBiz = Business(id = id.toInt(), name = businessName, isSynced = false)
+            val id = repository.insertBusiness(Business(name = businessName, userEmail = userEmail, isSynced = false))
+            val newBiz = Business(id = id.toInt(), name = businessName, userEmail = userEmail, isSynced = false)
             _activeBusiness.value = newBiz
             if (bookName.isNotBlank()) {
                 val bookId = repository.insertBook(Book(businessId = newBiz.id, name = bookName, isSynced = false))
@@ -521,12 +534,18 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    // --- Super Admin State & Actions ---
+    // --- Super Admin & User Auth State & Actions ---
     val isSuperAdmin = MutableStateFlow(syncManager.isSuperAdminLoggedIn())
+    val isUserSignedIn = MutableStateFlow(syncManager.isUserSignedIn())
+
+    fun updateAuthState() {
+        isUserSignedIn.value = syncManager.isUserSignedIn()
+        isSuperAdmin.value = syncManager.isSuperAdminLoggedIn()
+    }
 
     fun registerCustomUser(name: String, email: String, username: String, pass: String) {
         syncManager.registerCustomUser(name, email, username, pass)
-        isSuperAdmin.value = true
+        updateAuthState()
         _simulatedRole.value = "Boss"
         viewModelScope.launch {
             syncManager.registerUserCloud(name, email, username, pass)
@@ -537,7 +556,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     suspend fun loginSuperAdminCloud(user: String, pass: String): Boolean {
         val success = syncManager.loginUserCloud(user, pass)
         if (success) {
-            isSuperAdmin.value = true
+            updateAuthState()
             _simulatedRole.value = "Boss"
             triggerCloudSync()
         }
@@ -547,7 +566,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     fun loginSuperAdmin(user: String, pass: String): Boolean {
         val success = syncManager.loginSuperAdmin(user, pass)
         if (success) {
-            isSuperAdmin.value = true
+            updateAuthState()
             _simulatedRole.value = "Boss"
             viewModelScope.launch {
                 syncManager.loginUserCloud(user, pass)
@@ -559,7 +578,13 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun logoutSuperAdmin() {
         syncManager.logoutSuperAdmin()
-        isSuperAdmin.value = false
+        updateAuthState()
+        _simulatedRole.value = "Boss"
+    }
+
+    fun logoutUser() {
+        syncManager.logoutUser()
+        updateAuthState()
         _simulatedRole.value = "Boss"
     }
 
@@ -576,6 +601,54 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                 onComplete?.invoke(updated)
             } catch (e: Exception) {
                 Log.e("LedgerViewModel", "Error refreshing cloud accounts", e)
+            } finally {
+                isRefreshingAccounts.value = false
+            }
+        }
+    }
+
+    fun addUserCloud(name: String, email: String, username: String, pass: String, onComplete: ((Boolean) -> Unit)? = null) {
+        viewModelScope.launch {
+            isRefreshingAccounts.value = true
+            try {
+                val success = syncManager.addUserCloud(name, email, username, pass)
+                refreshCloudAccounts()
+                onComplete?.invoke(success)
+            } catch (e: Exception) {
+                Log.e("LedgerViewModel", "Error adding user cloud", e)
+                onComplete?.invoke(false)
+            } finally {
+                isRefreshingAccounts.value = false
+            }
+        }
+    }
+
+    fun updateUserCloud(oldEmail: String, newName: String, newEmail: String, newUsername: String, newPass: String, onComplete: ((Boolean) -> Unit)? = null) {
+        viewModelScope.launch {
+            isRefreshingAccounts.value = true
+            try {
+                val success = syncManager.updateUserCloud(oldEmail, newName, newEmail, newUsername, newPass)
+                refreshCloudAccounts()
+                onComplete?.invoke(success)
+            } catch (e: Exception) {
+                Log.e("LedgerViewModel", "Error updating user cloud", e)
+                onComplete?.invoke(false)
+            } finally {
+                isRefreshingAccounts.value = false
+            }
+        }
+    }
+
+    fun deleteUserCloud(emailToDelete: String, onComplete: ((Boolean) -> Unit)? = null) {
+        viewModelScope.launch {
+            isRefreshingAccounts.value = true
+            try {
+                val success = syncManager.deleteUserCloud(emailToDelete)
+                refreshCloudAccounts()
+                onComplete?.invoke(success)
+            } catch (e: Exception) {
+                Log.e("LedgerViewModel", "Error deleting user cloud", e)
+                onComplete?.invoke(false)
             } finally {
                 isRefreshingAccounts.value = false
             }

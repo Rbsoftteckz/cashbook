@@ -172,6 +172,7 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
     val simulatedRole by viewModel.simulatedRole.collectAsStateWithLifecycle()
     val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
     val isSuperAdmin by viewModel.isSuperAdmin.collectAsStateWithLifecycle()
+    val isUserSignedIn by viewModel.isUserSignedIn.collectAsStateWithLifecycle()
 
     val isAppLockEnabled by viewModel.isAppLockEnabled.collectAsStateWithLifecycle()
     val isAppUnlocked by viewModel.isAppUnlocked.collectAsStateWithLifecycle()
@@ -196,10 +197,24 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
     var businessToDelete by remember { mutableStateOf<com.example.data.Business?>(null) }
     var bookToDelete by remember { mutableStateOf<com.example.data.Book?>(null) }
     var deleteConfirmationInput by remember { mutableStateOf("") }
+    var showSuperAdminConsoleMode by remember { mutableStateOf(isSuperAdmin) }
+
+    LaunchedEffect(isSuperAdmin) {
+        if (isSuperAdmin) {
+            showSuperAdminConsoleMode = true
+        }
+    }
 
     if (isAppLockEnabled && !isAppUnlocked) {
         AppSecureLockScreen(viewModel = viewModel, onUnlockSuccess = {})
-    } else if (!isSuperAdmin || businesses.isEmpty()) {
+    } else if (!isUserSignedIn) {
+        OnboardingSetupScreen(viewModel = viewModel)
+    } else if (isSuperAdmin && showSuperAdminConsoleMode) {
+        SuperAdminConsoleScreen(
+            viewModel = viewModel,
+            onSwitchToBusinessView = { showSuperAdminConsoleMode = false }
+        )
+    } else if (businesses.isEmpty()) {
         OnboardingSetupScreen(viewModel = viewModel)
     } else {
         ModalNavigationDrawer(
@@ -266,7 +281,10 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                             )
                         }
 
-                        if (isSuperAdmin) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             TextButton(
                                 onClick = {
                                     viewModel.logoutSuperAdmin()
@@ -278,17 +296,19 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text("Sign Out", fontSize = 11.sp, color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
                             }
-                        } else {
-                            TextButton(
-                                onClick = {
-                                    scope.launch { drawerState.close() }
-                                    showSuperAdminLoginDrawer = true
-                                },
-                                contentPadding = PaddingValues(0.dp)
-                            ) {
-                                Icon(Icons.Default.VpnKey, contentDescription = null, modifier = Modifier.size(14.dp), tint = GreenIn)
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Sign In", fontSize = 11.sp, color = GreenIn, fontWeight = FontWeight.Bold)
+
+                            if (!isSuperAdmin) {
+                                TextButton(
+                                    onClick = {
+                                        scope.launch { drawerState.close() }
+                                        showSuperAdminLoginDrawer = true
+                                    },
+                                    contentPadding = PaddingValues(0.dp)
+                                ) {
+                                    Icon(Icons.Default.VpnKey, contentDescription = null, modifier = Modifier.size(14.dp), tint = GreenIn)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Super Admin", fontSize = 11.sp, color = GreenIn, fontWeight = FontWeight.Bold)
+                                }
                             }
                         }
                     }
@@ -304,6 +324,31 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    if (isSuperAdmin) {
+                        Surface(
+                            onClick = {
+                                scope.launch { drawerState.close() }
+                                showSuperAdminConsoleMode = true
+                            },
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(Icons.Default.SupervisorAccount, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Super Admin Console", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                                    Text("Firebase Cloud Database", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f))
+                                }
+                                Icon(Icons.Default.ArrowForward, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                            }
+                        }
+                    }
+
                     Text(
                         "Core Ledgers",
                         style = MaterialTheme.typography.bodySmall,
@@ -422,23 +467,25 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         }
                     )
 
-                    NavigationDrawerItem(
-                        icon = { Icon(Icons.Default.SupervisorAccount, contentDescription = null) },
-                        label = { Text("Firebase Users Inspector (${globalAccounts.size})") },
-                        selected = showSuperAdminUserRegistryInDrawer,
-                        colors = NavigationDrawerItemDefaults.colors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                            unselectedContainerColor = Color.Transparent,
-                            selectedIconColor = MaterialTheme.colorScheme.primary,
-                            unselectedIconColor = MaterialTheme.colorScheme.primary,
-                            selectedTextColor = MaterialTheme.colorScheme.primary,
-                            unselectedTextColor = MaterialTheme.colorScheme.primary
-                        ),
-                        onClick = {
-                            showSuperAdminUserRegistryInDrawer = true
-                            scope.launch { drawerState.close() }
-                        }
-                    )
+                    if (isSuperAdmin) {
+                        NavigationDrawerItem(
+                            icon = { Icon(Icons.Default.SupervisorAccount, contentDescription = null) },
+                            label = { Text("Firebase Users Inspector (${globalAccounts.size})") },
+                            selected = showSuperAdminUserRegistryInDrawer,
+                            colors = NavigationDrawerItemDefaults.colors(
+                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                unselectedContainerColor = Color.Transparent,
+                                selectedIconColor = MaterialTheme.colorScheme.primary,
+                                unselectedIconColor = MaterialTheme.colorScheme.primary,
+                                selectedTextColor = MaterialTheme.colorScheme.primary,
+                                unselectedTextColor = MaterialTheme.colorScheme.primary
+                            ),
+                            onClick = {
+                                showSuperAdminUserRegistryInDrawer = true
+                                scope.launch { drawerState.close() }
+                            }
+                        )
+                    }
 
                     NavigationDrawerItem(
                         icon = { Icon(Icons.Default.ContactSupport, contentDescription = null) },
@@ -639,7 +686,7 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         val isOnline by viewModel.isOnline.collectAsStateWithLifecycle()
                         val isRealCloudAccount = viewModel.syncManager.isRealCloudAccount()
                         val isSyncError = !isOnline || syncStatus.contains("Error", ignoreCase = true) || syncStatus.contains("Failed", ignoreCase = true) || syncStatus.contains("403") || syncStatus.contains("401") || syncStatus.contains("400") || syncStatus.contains("500") || syncStatus.contains("Disconnected", ignoreCase = true)
-                        val isRealSuccess = isOnline && isRealCloudAccount && !isSyncError && (syncStatus.contains("Synced", ignoreCase = true) || syncStatus.contains("Restored", ignoreCase = true) || syncStatus.contains("Success", ignoreCase = true) || syncStatus.contains("Connected", ignoreCase = true))
+                        val isRealSuccess = isOnline && isRealCloudAccount && !isSyncError && (syncStatus.contains("Synced", ignoreCase = true) || syncStatus.contains("Restored", ignoreCase = true) || syncStatus.contains("Success", ignoreCase = true) || syncStatus.contains("Connected", ignoreCase = true) || syncStatus.contains("Vault", ignoreCase = true) || syncStatus.contains("Active", ignoreCase = true) || syncStatus.contains("Ready", ignoreCase = true))
 
                         IconButton(
                             onClick = { viewModel.setScreen(Screen.SYNC_CENTER) },
@@ -4326,6 +4373,7 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
 fun SyncCenterScreen(viewModel: LedgerViewModel) {
     val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
     val isSyncing by viewModel.isSyncing.collectAsStateWithLifecycle()
+    val isSuperAdmin by viewModel.isSuperAdmin.collectAsStateWithLifecycle()
     val simulatedRole by viewModel.simulatedRole.collectAsStateWithLifecycle()
 
     val clipboardManager = LocalClipboardManager.current
@@ -4497,7 +4545,7 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                         val isOnline by viewModel.isOnline.collectAsStateWithLifecycle()
                         val isRealCloudAccount = viewModel.syncManager.isRealCloudAccount()
                         val isSyncError = !isOnline || syncStatus.contains("Error", ignoreCase = true) || syncStatus.contains("Failed", ignoreCase = true) || syncStatus.contains("403") || syncStatus.contains("401") || syncStatus.contains("400") || syncStatus.contains("500") || syncStatus.contains("Forbidden", ignoreCase = true) || syncStatus.contains("Disconnected", ignoreCase = true)
-                        val isRealSyncSuccess = isOnline && isRealCloudAccount && !isSyncError && (syncStatus.contains("Synced", ignoreCase = true) || syncStatus.contains("Restored", ignoreCase = true) || syncStatus.contains("Success", ignoreCase = true) || syncStatus.contains("Connected", ignoreCase = true))
+                        val isRealSyncSuccess = isOnline && isRealCloudAccount && !isSyncError && (syncStatus.contains("Synced", ignoreCase = true) || syncStatus.contains("Restored", ignoreCase = true) || syncStatus.contains("Success", ignoreCase = true) || syncStatus.contains("Connected", ignoreCase = true) || syncStatus.contains("Vault", ignoreCase = true) || syncStatus.contains("Active", ignoreCase = true) || syncStatus.contains("Ready", ignoreCase = true))
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -4617,98 +4665,100 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
             }
 
             // Super Admin Firebase Users Inspector Card
-            item {
-                val globalAccounts by viewModel.globalAccounts.collectAsStateWithLifecycle()
-                var showSuperAdminRegistry by remember { mutableStateOf(false) }
+            if (isSuperAdmin) {
+                item {
+                    val globalAccounts by viewModel.globalAccounts.collectAsStateWithLifecycle()
+                    var showSuperAdminRegistry by remember { mutableStateOf(false) }
 
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f)),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)),
-                    shape = RoundedCornerShape(14.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f)),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)),
+                        shape = RoundedCornerShape(14.dp)
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Icon(
-                                    imageVector = Icons.Default.SupervisorAccount,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                                Column {
-                                    Text(
-                                        "Super Admin Account Directory",
-                                        fontWeight = FontWeight.Bold,
-                                        style = MaterialTheme.typography.titleMedium
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Icon(
+                                        imageVector = Icons.Default.SupervisorAccount,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(24.dp)
                                     )
+                                    Column {
+                                        Text(
+                                            "Super Admin Account Directory",
+                                            fontWeight = FontWeight.Bold,
+                                            style = MaterialTheme.typography.titleMedium
+                                        )
+                                        Text(
+                                            "Firebase Cloud Database User Registry",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+
+                                Surface(
+                                    color = MaterialTheme.colorScheme.primary,
+                                    shape = CircleShape
+                                ) {
                                     Text(
-                                        "Firebase Cloud Database User Registry",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        text = "${globalAccounts.size} Registered Users",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = Color.White,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                     )
                                 }
                             }
 
-                            Surface(
-                                color = MaterialTheme.colorScheme.primary,
-                                shape = CircleShape
-                            ) {
-                                Text(
-                                    text = "${globalAccounts.size} Registered Users",
-                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                    color = Color.White,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                )
-                            }
-                        }
+                            Text(
+                                "Live Firebase Database query active. Inspect all registered emails, usernames, security hashes, and account details.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
 
-                        Text(
-                            "Live Firebase Database query active. Inspect all registered emails, usernames, security hashes, and account details.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Button(
-                                onClick = { showSuperAdminRegistry = true },
-                                modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(10.dp)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Icon(Icons.Default.ManageAccounts, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Inspect ${globalAccounts.size} Accounts")
-                            }
+                                Button(
+                                    onClick = { showSuperAdminRegistry = true },
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Icon(Icons.Default.ManageAccounts, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Inspect ${globalAccounts.size} Accounts")
+                                }
 
-                            OutlinedButton(
-                                onClick = {
-                                    viewModel.refreshCloudAccounts {
-                                        Toast.makeText(context, "Refreshed! Found ${it.size} Firebase users.", Toast.LENGTH_SHORT).show()
-                                    }
-                                },
-                                shape = RoundedCornerShape(10.dp)
-                            ) {
-                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                                OutlinedButton(
+                                    onClick = {
+                                        viewModel.refreshCloudAccounts {
+                                            Toast.makeText(context, "Refreshed! Found ${it.size} Firebase users.", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                                }
                             }
                         }
                     }
-                }
 
-                if (showSuperAdminRegistry) {
-                    SuperAdminUserRegistryDialog(
-                        viewModel = viewModel,
-                        onDismiss = { showSuperAdminRegistry = false }
-                    )
+                    if (showSuperAdminRegistry) {
+                        SuperAdminUserRegistryDialog(
+                            viewModel = viewModel,
+                            onDismiss = { showSuperAdminRegistry = false }
+                        )
+                    }
                 }
             }
 
@@ -6518,6 +6568,133 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                     }
                 }
             } else {
+                // --- ONLINE MODE STATUS HEADER ---
+                var firebasePingStatus by remember { mutableStateOf("Checking Firebase Cloud...") }
+                var isTestingFirebase by remember { mutableStateOf(false) }
+                var showFirebaseSettings by remember { mutableStateOf(false) }
+                var customProjId by remember { mutableStateOf(syncManager.getFirebaseProjectId()) }
+                var customApiKey by remember { mutableStateOf(syncManager.getFirebaseApiKey()) }
+
+                LaunchedEffect(Unit) {
+                    val (ok, msg) = syncManager.pingCloudConnection()
+                    firebasePingStatus = if (ok) "🟢 $msg" else "🔴 $msg"
+                }
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFEFF6FF)),
+                    border = BorderStroke(1.dp, Color(0xFFBFDBFE)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Icon(Icons.Default.Wifi, contentDescription = null, tint = GreenIn, modifier = Modifier.size(16.dp))
+                                    Text("Internet: Online", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = GreenIn)
+                                }
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Icon(Icons.Default.CloudQueue, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                                    Text(firebasePingStatus, style = MaterialTheme.typography.labelSmall, color = Color(0xFF1E40AF), fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                TextButton(
+                                    onClick = {
+                                        isTestingFirebase = true
+                                        coroutineScope.launch {
+                                            val (ok, msg) = syncManager.pingCloudConnection()
+                                            isTestingFirebase = false
+                                            firebasePingStatus = if (ok) "🟢 $msg" else "🔴 $msg"
+                                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
+                                ) {
+                                    if (isTestingFirebase) {
+                                        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                                    } else {
+                                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Ping", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                                IconButton(onClick = { showFirebaseSettings = !showFirebaseSettings }, modifier = Modifier.size(28.dp)) {
+                                    Icon(Icons.Default.Settings, contentDescription = "Firebase Settings", tint = Color(0xFF1E40AF), modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        }
+
+                        if (showFirebaseSettings) {
+                            Divider(color = Color(0xFFBFDBFE))
+                            Text("Custom Firebase Cloud Credentials", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1E40AF))
+                            
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFFEF3C7)),
+                                border = BorderStroke(1.dp, Color(0xFFFDE68A)),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text("🎉 Your 'Cashbook' project credentials are configured!", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF15803D))
+                                    Text("Project ID: cashbook-8d579", fontSize = 10.sp, color = Color(0xFF166534))
+                                    Text("Web API Key: BCJ_4...HOrGU", fontSize = 10.sp, color = Color(0xFF166534))
+                                    Text("Tap 'Save & Test Firebase Connection' below to activate!", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF15803D))
+                                    
+                                    Row(
+                                        modifier = Modifier.padding(top = 4.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        AssistChip(
+                                            onClick = { 
+                                                customProjId = "cashbook-8d579"
+                                                customApiKey = "BCJ_4LbHKtiGOSxjVYH1J-jP7tibnIrTeFqrL233DknUm4lmAM95NlEpfgE13Yx5Or0ftg2TPW4woTbNe-HOrGU"
+                                            },
+                                            label = { Text("Reset to cashbook-8d579", fontSize = 10.sp) }
+                                        )
+                                    }
+                                }
+                            }
+
+                            OutlinedTextField(
+                                value = customProjId,
+                                onValueChange = { customProjId = it },
+                                label = { Text("Firebase Project ID", fontSize = 11.sp) },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                textStyle = LocalTextStyle.current.copy(fontSize = 12.sp)
+                            )
+                            OutlinedTextField(
+                                value = customApiKey,
+                                onValueChange = { customApiKey = it },
+                                label = { Text("Firebase Web API Key", fontSize = 11.sp) },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                textStyle = LocalTextStyle.current.copy(fontSize = 12.sp)
+                            )
+                            Button(
+                                onClick = {
+                                    syncManager.saveFirebaseProjectId(customProjId.trim())
+                                    syncManager.saveFirebaseApiKey(customApiKey.trim())
+                                    coroutineScope.launch {
+                                        val (ok, msg) = syncManager.pingCloudConnection()
+                                        firebasePingStatus = if (ok) "🟢 $msg" else "🔴 $msg"
+                                        Toast.makeText(context, "Saved & Tested: $msg", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text("Save & Test Firebase Connection", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+
                 // --- ONLINE MODE: 2 TABS (Sign In | Sign Up) ---
                 if (authMode != "forgot") {
                     Row(
@@ -6569,7 +6746,7 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
             if (isUserSignedIn) {
                 // Auto-sync cloud data & transition to main app
                 LaunchedEffect(Unit) {
-                    viewModel.isSuperAdmin.value = true
+                    viewModel.isSuperAdmin.value = syncManager.isSuperAdminLoggedIn()
                     viewModel.triggerCloudSync()
                 }
 
@@ -9869,6 +10046,10 @@ fun SuperAdminUserRegistryDialog(
     var selectedAccount by remember { mutableStateOf<com.example.data.RegisteredAccount?>(null) }
     var showPasswords by remember { mutableStateOf(false) }
 
+    var showAddUserDialog by remember { mutableStateOf(false) }
+    var accountToEdit by remember { mutableStateOf<com.example.data.RegisteredAccount?>(null) }
+    var accountToDelete by remember { mutableStateOf<com.example.data.RegisteredAccount?>(null) }
+
     LaunchedEffect(Unit) {
         viewModel.refreshCloudAccounts()
     }
@@ -9971,23 +10152,38 @@ fun SuperAdminUserRegistryDialog(
                             )
                         }
 
-                        Button(
-                            onClick = {
-                                viewModel.refreshCloudAccounts {
-                                    Toast.makeText(context, "Fetched ${it.size} users from Firebase Cloud!", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            enabled = !isRefreshing,
-                            shape = RoundedCornerShape(10.dp)
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            if (isRefreshing) {
-                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Fetching...")
-                            } else {
-                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Button(
+                                onClick = { showAddUserDialog = true },
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = GreenIn)
+                            ) {
+                                Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("Refresh DB")
+                                Text("Add User")
+                            }
+
+                            Button(
+                                onClick = {
+                                    viewModel.refreshCloudAccounts {
+                                        Toast.makeText(context, "Fetched ${it.size} users from Firebase Cloud!", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                enabled = !isRefreshing,
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                if (isRefreshing) {
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("...")
+                                } else {
+                                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Refresh")
+                                }
                             }
                         }
                     }
@@ -10124,14 +10320,29 @@ fun SuperAdminUserRegistryDialog(
                                         }
                                     }
 
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                                        IconButton(
+                                            onClick = { accountToEdit = acc },
+                                            modifier = Modifier.size(32.dp)
+                                        ) {
+                                            Icon(Icons.Default.Edit, contentDescription = "Edit User", modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+                                        }
+
+                                        IconButton(
+                                            onClick = { accountToDelete = acc },
+                                            modifier = Modifier.size(32.dp)
+                                        ) {
+                                            Icon(Icons.Default.Delete, contentDescription = "Delete User", modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.error)
+                                        }
+
                                         IconButton(
                                             onClick = {
                                                 clipboardManager.setText(AnnotatedString(acc.email))
                                                 Toast.makeText(context, "Copied email: ${acc.email}", Toast.LENGTH_SHORT).show()
-                                            }
+                                            },
+                                            modifier = Modifier.size(32.dp)
                                         ) {
-                                            Icon(Icons.Default.ContentCopy, contentDescription = "Copy Email", modifier = Modifier.size(18.dp))
+                                            Icon(Icons.Default.ContentCopy, contentDescription = "Copy Email", modifier = Modifier.size(16.dp))
                                         }
                                     }
                                 }
@@ -10150,6 +10361,191 @@ fun SuperAdminUserRegistryDialog(
                 }
             }
         }
+    }
+
+    // Add Cloud User Sub-Dialog
+    if (showAddUserDialog) {
+        var newName by remember { mutableStateOf("") }
+        var newEmail by remember { mutableStateOf("") }
+        var newUsername by remember { mutableStateOf("") }
+        var newPass by remember { mutableStateOf("") }
+
+        AlertDialog(
+            onDismissRequest = { showAddUserDialog = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Default.PersonAdd, contentDescription = null, tint = GreenIn)
+                    Text("Add New Cloud User")
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = newName,
+                        onValueChange = { newName = it },
+                        label = { Text("Full Name") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = newEmail,
+                        onValueChange = { newEmail = it },
+                        label = { Text("Email Address") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = newUsername,
+                        onValueChange = { newUsername = it },
+                        label = { Text("Username") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = newPass,
+                        onValueChange = { newPass = it },
+                        label = { Text("Password / Security Key") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (newEmail.isBlank() && newUsername.isBlank()) {
+                            Toast.makeText(context, "Email or Username required!", Toast.LENGTH_SHORT).show()
+                        } else {
+                            viewModel.addUserCloud(newName, newEmail, newUsername, newPass) { success ->
+                                if (success) {
+                                    Toast.makeText(context, "User added to Cloud DB successfully!", Toast.LENGTH_SHORT).show()
+                                    showAddUserDialog = false
+                                } else {
+                                    Toast.makeText(context, "Failed to add user to Cloud DB", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = GreenIn)
+                ) {
+                    Text("Add User")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddUserDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Edit Cloud User Sub-Dialog
+    accountToEdit?.let { acc ->
+        var editName by remember { mutableStateOf(acc.name) }
+        var editEmail by remember { mutableStateOf(acc.email) }
+        var editUsername by remember { mutableStateOf(acc.username) }
+        var editPass by remember { mutableStateOf(acc.pass) }
+
+        AlertDialog(
+            onDismissRequest = { accountToEdit = null },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Default.Edit, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Text("Edit User Details")
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = editName,
+                        onValueChange = { editName = it },
+                        label = { Text("Full Name") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = editEmail,
+                        onValueChange = { editEmail = it },
+                        label = { Text("Email Address") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = editUsername,
+                        onValueChange = { editUsername = it },
+                        label = { Text("Username") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = editPass,
+                        onValueChange = { editPass = it },
+                        label = { Text("Password / Security Key") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.updateUserCloud(acc.email, editName, editEmail, editUsername, editPass) { success ->
+                            if (success) {
+                                Toast.makeText(context, "User updated in Cloud DB!", Toast.LENGTH_SHORT).show()
+                                accountToEdit = null
+                            } else {
+                                Toast.makeText(context, "Failed to update user in Cloud DB", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                ) {
+                    Text("Save Changes")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { accountToEdit = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Delete Cloud User Confirmation Dialog
+    accountToDelete?.let { acc ->
+        AlertDialog(
+            onDismissRequest = { accountToDelete = null },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                    Text("Delete Cloud User?")
+                }
+            },
+            text = {
+                Text("Are you sure you want to delete user '${acc.email.ifBlank { acc.username }}' from Firebase Cloud DB? This action cannot be undone.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.deleteUserCloud(acc.email.ifBlank { acc.username }) { success ->
+                            if (success) {
+                                Toast.makeText(context, "User deleted from Cloud DB!", Toast.LENGTH_SHORT).show()
+                                accountToDelete = null
+                            } else {
+                                Toast.makeText(context, "Failed to delete user", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Delete User")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { accountToDelete = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 
     // Selected Account Detail Sub-Dialog
@@ -10183,6 +10579,538 @@ fun SuperAdminUserRegistryDialog(
             dismissButton = {
                 TextButton(onClick = { selectedAccount = null }) {
                     Text("Close")
+                }
+            }
+        )
+    }
+}
+
+// --- SUPER ADMIN CONSOLE SCREEN ---
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SuperAdminConsoleScreen(
+    viewModel: LedgerViewModel,
+    onSwitchToBusinessView: (() -> Unit)? = null
+) {
+    val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
+    val globalAccounts by viewModel.globalAccounts.collectAsStateWithLifecycle()
+    val isRefreshing by viewModel.isRefreshingAccounts.collectAsStateWithLifecycle()
+
+    var searchQuery by remember { mutableStateOf("") }
+    var showPasswords by remember { mutableStateOf(false) }
+
+    var showAddUserDialog by remember { mutableStateOf(false) }
+    var accountToEdit by remember { mutableStateOf<com.example.data.RegisteredAccount?>(null) }
+    var accountToDelete by remember { mutableStateOf<com.example.data.RegisteredAccount?>(null) }
+
+    LaunchedEffect(Unit) {
+        viewModel.refreshCloudAccounts()
+    }
+
+    val filteredAccounts = remember(globalAccounts, searchQuery) {
+        if (searchQuery.isBlank()) {
+            globalAccounts
+        } else {
+            val query = searchQuery.trim().lowercase()
+            globalAccounts.filter { acc ->
+                acc.name.lowercase().contains(query) ||
+                acc.email.lowercase().contains(query) ||
+                acc.username.lowercase().contains(query)
+            }
+        }
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Icon(
+                                Icons.Default.SupervisorAccount,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Text("Super Admin Console", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                        }
+                        Text("Firebase Cloud Database Management", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                },
+                actions = {
+                    onSwitchToBusinessView?.let { onSwitch ->
+                        OutlinedButton(
+                            onClick = onSwitch,
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.Store, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Cashbooks")
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
+                    }
+                    Button(
+                        onClick = {
+                            viewModel.logoutSuperAdmin()
+                            Toast.makeText(context, "Super Admin logged out.", Toast.LENGTH_SHORT).show()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.ExitToApp, contentDescription = "Sign Out", modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Sign Out", fontWeight = FontWeight.Bold)
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
+            )
+        }
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            // Stats & Control Header Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)),
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                "${globalAccounts.size} Registered Cloud Users",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                "Direct access to Firebase Cloud User Registry",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        Surface(
+                            color = GreenIn,
+                            shape = CircleShape
+                        ) {
+                            Text(
+                                "● Firebase Active",
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = { showAddUserDialog = true },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = GreenIn)
+                        ) {
+                            Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Add Cloud User", fontWeight = FontWeight.Bold)
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                viewModel.refreshCloudAccounts {
+                                    Toast.makeText(context, "Fetched ${it.size} Firebase users!", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            enabled = !isRefreshing,
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            if (isRefreshing) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            } else {
+                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Refresh DB")
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Search Bar & Options
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Search name, email, username...") },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(Icons.Default.Close, contentDescription = "Clear")
+                            }
+                        }
+                    },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp)
+                )
+
+                IconButton(
+                    onClick = { showPasswords = !showPasswords },
+                    modifier = Modifier
+                        .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
+                        .size(52.dp)
+                ) {
+                    Icon(
+                        if (showPasswords) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                        contentDescription = "Toggle Passwords",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+
+            Text(
+                "Showing ${filteredAccounts.size} of ${globalAccounts.size} cloud accounts",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            // Users List
+            if (filteredAccounts.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Default.PersonOff, contentDescription = null, modifier = Modifier.size(48.dp), tint = Color.Gray)
+                        Text("No matching Firebase users found.", color = Color.Gray, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    items(filteredAccounts, key = { it.email.ifBlank { it.username } }) { acc ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(40.dp)
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Text(
+                                                    text = acc.name.take(1).uppercase().ifBlank { "U" },
+                                                    color = Color.White,
+                                                    fontWeight = FontWeight.Bold,
+                                                    style = MaterialTheme.typography.titleMedium
+                                                )
+                                            }
+                                        }
+
+                                        Column {
+                                            Text(
+                                                text = acc.name.ifBlank { "Cloud Account" },
+                                                fontWeight = FontWeight.Bold,
+                                                style = MaterialTheme.typography.bodyLarge
+                                            )
+                                            Text(
+                                                text = acc.email.ifBlank { "@${acc.username}" },
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            if (acc.username.isNotBlank() && acc.email.isNotBlank()) {
+                                                Text(
+                                                    text = "@${acc.username}",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.primary
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                                        IconButton(
+                                            onClick = { accountToEdit = acc },
+                                            modifier = Modifier.size(36.dp)
+                                        ) {
+                                            Icon(Icons.Default.Edit, contentDescription = "Edit User", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                                        }
+
+                                        IconButton(
+                                            onClick = { accountToDelete = acc },
+                                            modifier = Modifier.size(36.dp)
+                                        ) {
+                                            Icon(Icons.Default.Delete, contentDescription = "Delete User", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.error)
+                                        }
+
+                                        IconButton(
+                                            onClick = {
+                                                clipboardManager.setText(AnnotatedString(acc.email.ifBlank { acc.username }))
+                                                Toast.makeText(context, "Copied!", Toast.LENGTH_SHORT).show()
+                                            },
+                                            modifier = Modifier.size(36.dp)
+                                        ) {
+                                            Icon(Icons.Default.ContentCopy, contentDescription = "Copy Email", modifier = Modifier.size(18.dp))
+                                        }
+                                    }
+                                }
+
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "Password: ${if (showPasswords) acc.pass else "••••••••"}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontFamily = FontFamily.Monospace
+                                        )
+                                        Text(
+                                            text = "Firebase DB",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Add Cloud User Sub-Dialog
+    if (showAddUserDialog) {
+        var newName by remember { mutableStateOf("") }
+        var newEmail by remember { mutableStateOf("") }
+        var newUsername by remember { mutableStateOf("") }
+        var newPass by remember { mutableStateOf("") }
+
+        AlertDialog(
+            onDismissRequest = { showAddUserDialog = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Default.PersonAdd, contentDescription = null, tint = GreenIn)
+                    Text("Add New Cloud User")
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = newName,
+                        onValueChange = { newName = it },
+                        label = { Text("Full Name") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = newEmail,
+                        onValueChange = { newEmail = it },
+                        label = { Text("Email Address") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = newUsername,
+                        onValueChange = { newUsername = it },
+                        label = { Text("Username") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = newPass,
+                        onValueChange = { newPass = it },
+                        label = { Text("Password / Security Key") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (newEmail.isBlank() && newUsername.isBlank()) {
+                            Toast.makeText(context, "Email or Username required!", Toast.LENGTH_SHORT).show()
+                        } else {
+                            viewModel.addUserCloud(newName, newEmail, newUsername, newPass) { success ->
+                                if (success) {
+                                    Toast.makeText(context, "User added to Cloud DB successfully!", Toast.LENGTH_SHORT).show()
+                                    showAddUserDialog = false
+                                } else {
+                                    Toast.makeText(context, "Failed to add user to Cloud DB", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = GreenIn)
+                ) {
+                    Text("Add User")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddUserDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Edit Cloud User Sub-Dialog
+    accountToEdit?.let { acc ->
+        var editName by remember { mutableStateOf(acc.name) }
+        var editEmail by remember { mutableStateOf(acc.email) }
+        var editUsername by remember { mutableStateOf(acc.username) }
+        var editPass by remember { mutableStateOf(acc.pass) }
+
+        AlertDialog(
+            onDismissRequest = { accountToEdit = null },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Default.Edit, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Text("Edit User Details")
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = editName,
+                        onValueChange = { editName = it },
+                        label = { Text("Full Name") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = editEmail,
+                        onValueChange = { editEmail = it },
+                        label = { Text("Email Address") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = editUsername,
+                        onValueChange = { editUsername = it },
+                        label = { Text("Username") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = editPass,
+                        onValueChange = { editPass = it },
+                        label = { Text("Password / Security Key") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.updateUserCloud(acc.email, editName, editEmail, editUsername, editPass) { success ->
+                            if (success) {
+                                Toast.makeText(context, "User updated in Cloud DB!", Toast.LENGTH_SHORT).show()
+                                accountToEdit = null
+                            } else {
+                                Toast.makeText(context, "Failed to update user in Cloud DB", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                ) {
+                    Text("Save Changes")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { accountToEdit = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Delete Cloud User Confirmation Dialog
+    accountToDelete?.let { acc ->
+        AlertDialog(
+            onDismissRequest = { accountToDelete = null },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                    Text("Delete Cloud User?")
+                }
+            },
+            text = {
+                Text("Are you sure you want to delete user '${acc.email.ifBlank { acc.username }}' from Firebase Cloud DB? This action cannot be undone.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.deleteUserCloud(acc.email.ifBlank { acc.username }) { success ->
+                            if (success) {
+                                Toast.makeText(context, "User deleted from Cloud DB!", Toast.LENGTH_SHORT).show()
+                                accountToDelete = null
+                            } else {
+                                Toast.makeText(context, "Failed to delete user", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Delete User")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { accountToDelete = null }) {
+                    Text("Cancel")
                 }
             }
         )

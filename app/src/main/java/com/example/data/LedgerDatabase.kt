@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.Flow
 data class Business(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val name: String,
+    val userEmail: String = "",
     val createdAt: Long = System.currentTimeMillis(),
     val isSynced: Boolean = false
 )
@@ -210,7 +211,7 @@ interface LedgerDao {
 
 @Database(
     entities = [Business::class, Book::class, Transaction::class, Party::class, PartyTransaction::class, TeamMember::class],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class LedgerDatabase : RoomDatabase() {
