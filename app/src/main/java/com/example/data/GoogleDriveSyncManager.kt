@@ -1171,11 +1171,26 @@ class GoogleDriveSyncManager(private val context: Context) {
                         existingBizList.add(newBiz.copy(id = newId))
                     }
                 }
+
+                // Delete local businesses that were deleted on remote
+                val remoteBizIdsInLocal = bizIdMap.values.toSet()
+                val remoteBizNames = mutableSetOf<String>()
+                for (i in 0 until bizArray.length()) {
+                    remoteBizNames.add(bizArray.getJSONObject(i).getString("name").trim().lowercase())
+                }
+                val bizToDelete = existingBizList.filter { localBiz ->
+                    localBiz.isSynced && !remoteBizIdsInLocal.contains(localBiz.id) && !remoteBizNames.contains(localBiz.name.trim().lowercase())
+                }
+                bizToDelete.forEach { localBiz ->
+                    dao.deleteBusiness(localBiz)
+                    existingBizList.remove(localBiz)
+                }
             }
 
             // Restore/Merge Books
             if (root.has("books")) {
                 val booksArray = root.getJSONArray("books")
+                val remoteBookKeys = mutableSetOf<String>()
                 for (i in 0 until booksArray.length()) {
                     val obj = booksArray.getJSONObject(i)
                     val oldId = obj.getInt("id")
@@ -1184,6 +1199,8 @@ class GoogleDriveSyncManager(private val context: Context) {
                     val bkName = obj.getString("name")
                     val phone = obj.optString("phone", "")
                     val createdAt = obj.getLong("createdAt")
+
+                    remoteBookKeys.add("$mappedBizId:${bkName.trim().lowercase()}")
 
                     val defaultBookMatch = if (existingBooksList.size == 1 && existingTxList.isEmpty() && existingBooksList[0].businessId == mappedBizId) existingBooksList[0] else null
                     val matched = existingBooksList.find { it.businessId == mappedBizId && it.name.equals(bkName, ignoreCase = true) } ?: defaultBookMatch
@@ -1205,28 +1222,29 @@ class GoogleDriveSyncManager(private val context: Context) {
                 }
 
                 // Delete local books that were deleted on remote
-                if (bizIdMap.isNotEmpty()) {
-                    val mappedBizIds = bizIdMap.values.toSet()
-                    val remoteBookIdsInLocal = bookIdMap.values.toSet()
-                    val booksToDelete = existingBooksList.filter { localBook ->
-                        localBook.isSynced && mappedBizIds.contains(localBook.businessId) && !remoteBookIdsInLocal.contains(localBook.id)
-                    }
-                    booksToDelete.forEach { localBook ->
-                        dao.deleteBook(localBook)
-                        existingBooksList.remove(localBook)
-                    }
+                val remoteBookIdsInLocal = bookIdMap.values.toSet()
+                val targetBizIds = if (bizIdMap.isNotEmpty()) bizIdMap.values.toSet() else existingBizList.map { it.id }.toSet()
+                val booksToDelete = existingBooksList.filter { localBook ->
+                    localBook.isSynced && targetBizIds.contains(localBook.businessId) && !remoteBookIdsInLocal.contains(localBook.id) && !remoteBookKeys.contains("${localBook.businessId}:${localBook.name.trim().lowercase()}")
+                }
+                booksToDelete.forEach { localBook ->
+                    dao.deleteBook(localBook)
+                    existingBooksList.remove(localBook)
                 }
             }
 
             // Restore/Merge Parties
             if (root.has("parties")) {
                 val partiesArray = root.getJSONArray("parties")
+                val remotePartyNames = mutableSetOf<String>()
                 for (i in 0 until partiesArray.length()) {
                     val obj = partiesArray.getJSONObject(i)
                     val oldId = obj.getInt("id")
                     val pName = obj.getString("name")
                     val phone = obj.optString("phone", "")
                     val createdAt = obj.getLong("createdAt")
+
+                    remotePartyNames.add(pName.trim().lowercase())
 
                     val matched = existingPartiesList.find { it.name.equals(pName, ignoreCase = true) }
                     if (matched != null) {
@@ -1237,6 +1255,16 @@ class GoogleDriveSyncManager(private val context: Context) {
                         partyIdMap[oldId] = newId
                         existingPartiesList.add(newParty.copy(id = newId))
                     }
+                }
+
+                // Delete local parties that were deleted on remote
+                val remotePartyIdsInLocal = partyIdMap.values.toSet()
+                val partiesToDelete = existingPartiesList.filter { localParty ->
+                    !remotePartyIdsInLocal.contains(localParty.id) && !remotePartyNames.contains(localParty.name.trim().lowercase())
+                }
+                partiesToDelete.forEach { localParty ->
+                    dao.deleteParty(localParty)
+                    existingPartiesList.remove(localParty)
                 }
             }
 
@@ -1294,15 +1322,13 @@ class GoogleDriveSyncManager(private val context: Context) {
                 }
 
                 // Delete local transactions that were deleted on remote
-                if (bookIdMap.isNotEmpty()) {
-                    val mappedBookIds = bookIdMap.values.toSet()
-                    val toDelete = existingTxList.filter { localTx ->
-                        localTx.isSynced && mappedBookIds.contains(localTx.bookId) && !remoteTxTimestamps.contains(localTx.timestamp)
-                    }
-                    toDelete.forEach { localTx ->
-                        dao.deleteTransaction(localTx)
-                        existingTxList.remove(localTx)
-                    }
+                val targetBookIds = if (bookIdMap.isNotEmpty()) bookIdMap.values.toSet() else existingBooksList.map { it.id }.toSet()
+                val toDelete = existingTxList.filter { localTx ->
+                    localTx.isSynced && targetBookIds.contains(localTx.bookId) && !remoteTxTimestamps.contains(localTx.timestamp)
+                }
+                toDelete.forEach { localTx ->
+                    dao.deleteTransaction(localTx)
+                    existingTxList.remove(localTx)
                 }
             }
 
@@ -1350,15 +1376,13 @@ class GoogleDriveSyncManager(private val context: Context) {
                 }
 
                 // Delete local party transactions deleted on remote
-                if (partyIdMap.isNotEmpty()) {
-                    val mappedPartyIds = partyIdMap.values.toSet()
-                    val toDelete = existingPartyTxList.filter { localPTx ->
-                        localPTx.isSynced && mappedPartyIds.contains(localPTx.partyId) && !remotePartyTxTimestamps.contains(localPTx.timestamp)
-                    }
-                    toDelete.forEach { localPTx ->
-                        dao.deletePartyTransaction(localPTx)
-                        existingPartyTxList.remove(localPTx)
-                    }
+                val targetPartyIds = if (partyIdMap.isNotEmpty()) partyIdMap.values.toSet() else existingPartiesList.map { it.id }.toSet()
+                val toDelete = existingPartyTxList.filter { localPTx ->
+                    localPTx.isSynced && targetPartyIds.contains(localPTx.partyId) && !remotePartyTxTimestamps.contains(localPTx.timestamp)
+                }
+                toDelete.forEach { localPTx ->
+                    dao.deletePartyTransaction(localPTx)
+                    existingPartyTxList.remove(localPTx)
                 }
             }
 
@@ -1401,15 +1425,13 @@ class GoogleDriveSyncManager(private val context: Context) {
                     }
                 }
 
-                if (bizIdMap.isNotEmpty()) {
-                    val mappedBizIds = bizIdMap.values.toSet()
-                    val membersToDelete = existingTeamList.filter { localTM ->
-                        mappedBizIds.contains(localTM.businessId) && !remoteTeamEmails.contains(localTM.email.trim().lowercase())
-                    }
-                    membersToDelete.forEach { localTM ->
-                        dao.deleteTeamMember(localTM)
-                        existingTeamList.remove(localTM)
-                    }
+                val targetBizIds = if (bizIdMap.isNotEmpty()) bizIdMap.values.toSet() else existingBizList.map { it.id }.toSet()
+                val membersToDelete = existingTeamList.filter { localTM ->
+                    targetBizIds.contains(localTM.businessId) && !remoteTeamEmails.contains(localTM.email.trim().lowercase())
+                }
+                membersToDelete.forEach { localTM ->
+                    dao.deleteTeamMember(localTM)
+                    existingTeamList.remove(localTM)
                 }
             }
 
@@ -1483,7 +1505,19 @@ class GoogleDriveSyncManager(private val context: Context) {
     }
 
     fun markLocalDbModified() {
-        prefs.edit().putBoolean("user_has_modified_local_db", true).apply()
+        prefs.edit()
+            .putBoolean("user_has_modified_local_db", true)
+            .putLong("local_db_last_modified_ts", System.currentTimeMillis())
+            .apply()
+    }
+
+    private fun extractJsonTimestamp(json: String): Long {
+        return try {
+            val root = JSONObject(json)
+            root.optLong("timestamp", 0L)
+        } catch (e: Exception) {
+            0L
+        }
     }
 
     suspend fun syncWithFirebaseCloud(dao: LedgerDao): String = withContext(Dispatchers.IO) {
@@ -1526,7 +1560,7 @@ class GoogleDriveSyncManager(private val context: Context) {
 
             val idToken = getFirebaseAuthToken()
             var bestCloudJson: String? = null
-            var maxDataScore = 0
+            var maxCloudTimestamp = 0L
 
             val projId = getFirebaseProjectId()
             val apiKey = getFirebaseApiKey()
@@ -1549,9 +1583,9 @@ class GoogleDriveSyncManager(private val context: Context) {
                                 if (fields != null) {
                                     val json = fields.optJSONObject("dataJson")?.optString("stringValue", "")
                                     if (!json.isNullOrBlank()) {
-                                        val score = calculateJsonDataScore(json)
-                                        if (score >= maxDataScore) {
-                                            maxDataScore = score
+                                        val ts = extractJsonTimestamp(json)
+                                        if (ts > maxCloudTimestamp) {
+                                            maxCloudTimestamp = ts
                                             bestCloudJson = json
                                         }
                                     }
@@ -1573,17 +1607,22 @@ class GoogleDriveSyncManager(private val context: Context) {
                 for (candId in candidateDocIds) {
                     val vaultJson = prefs.getString("cloud_vault_$candId", "")
                     if (!vaultJson.isNullOrBlank()) {
-                        val score = calculateJsonDataScore(vaultJson)
-                        if (score > maxDataScore) {
-                            maxDataScore = score
+                        val ts = extractJsonTimestamp(vaultJson)
+                        if (ts > maxCloudTimestamp) {
+                            maxCloudTimestamp = ts
                             bestCloudJson = vaultJson
                         }
                     }
                 }
             }
 
+            val userHasModified = prefs.getBoolean("user_has_modified_local_db", false)
+            val localLastModifiedTs = prefs.getLong("local_db_last_modified_ts", 0L)
+            val localLastSyncedTs = prefs.getLong("local_db_last_synced_ts", 0L)
+            val isCloudNewer = maxCloudTimestamp > maxOf(localLastModifiedTs, localLastSyncedTs)
+
             var restored = false
-            if (!bestCloudJson.isNullOrBlank()) {
+            if (!userHasModified && isCloudNewer && !bestCloudJson.isNullOrBlank()) {
                 restored = restoreDatabase(bestCloudJson!!, dao)
                 if (restored) {
                     prefs.edit().putBoolean("has_performed_initial_cloud_restore_$primaryDocId", true).apply()
@@ -1655,6 +1694,11 @@ class GoogleDriveSyncManager(private val context: Context) {
             }
 
             if (syncSuccess) {
+                val syncTs = System.currentTimeMillis()
+                prefs.edit()
+                    .putBoolean("user_has_modified_local_db", false)
+                    .putLong("local_db_last_synced_ts", syncTs)
+                    .apply()
                 dao.markAllBusinessesSynced()
                 dao.markAllBooksSynced()
                 dao.markAllTransactionsSynced()

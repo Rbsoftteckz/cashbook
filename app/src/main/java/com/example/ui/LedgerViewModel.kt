@@ -787,6 +787,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun addParty(name: String, phone: String) {
         viewModelScope.launch {
+            syncManager.markLocalDbModified()
             repository.insertParty(Party(name = name, phone = phone))
             triggerCloudSync()
         }
@@ -794,6 +795,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun deleteParty(party: Party) {
         viewModelScope.launch {
+            syncManager.markLocalDbModified()
             repository.deleteParty(party)
             if (_activeParty.value?.id == party.id) {
                 _activeParty.value = null
@@ -808,6 +810,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun addPartyTransaction(partyId: Int, amount: Double, type: String, remarks: String) {
         viewModelScope.launch {
+            syncManager.markLocalDbModified()
             repository.insertPartyTransaction(
                 PartyTransaction(
                     partyId = partyId,
@@ -823,6 +826,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun deletePartyTransaction(partyTransaction: PartyTransaction) {
         viewModelScope.launch {
+            syncManager.markLocalDbModified()
             repository.deletePartyTransaction(partyTransaction)
             triggerCloudSync()
         }
@@ -833,6 +837,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     fun addTeamMember(name: String, email: String, phone: String, role: String) {
         val bizId = _activeBusiness.value?.id ?: 1
         viewModelScope.launch {
+            syncManager.markLocalDbModified()
             repository.insertTeamMember(
                 TeamMember(
                     businessId = bizId,
@@ -848,6 +853,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun deleteTeamMember(teamMember: TeamMember) {
         viewModelScope.launch {
+            syncManager.markLocalDbModified()
             repository.deleteTeamMember(teamMember)
             triggerCloudSync()
         }
