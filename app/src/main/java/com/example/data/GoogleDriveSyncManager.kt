@@ -1153,6 +1153,8 @@ class GoogleDriveSyncManager(private val context: Context) {
                     val bName = obj.getString("name")
                     val createdAt = obj.getLong("createdAt")
 
+                    if (isBusinessDeleted(bName)) continue
+
                     val defaultMatch = if (existingBizList.size == 1 && existingTxList.isEmpty() && (existingBizList[0].name.contains("@") || existingBizList[0].name == "My Business" || existingBizList[0].name == "Main Business")) existingBizList[0] else null
                     val matchedByName = existingBizList.find { it.name.equals(bName, ignoreCase = true) } ?: defaultMatch
 
@@ -1200,6 +1202,8 @@ class GoogleDriveSyncManager(private val context: Context) {
                     val phone = obj.optString("phone", "")
                     val createdAt = obj.getLong("createdAt")
 
+                    if (isBookDeleted(mappedBizId, bkName)) continue
+
                     remoteBookKeys.add("$mappedBizId:${bkName.trim().lowercase()}")
 
                     val defaultBookMatch = if (existingBooksList.size == 1 && existingTxList.isEmpty() && existingBooksList[0].businessId == mappedBizId) existingBooksList[0] else null
@@ -1244,6 +1248,8 @@ class GoogleDriveSyncManager(private val context: Context) {
                     val phone = obj.optString("phone", "")
                     val createdAt = obj.getLong("createdAt")
 
+                    if (isPartyDeleted(pName)) continue
+
                     remotePartyNames.add(pName.trim().lowercase())
 
                     val matched = existingPartiesList.find { it.name.equals(pName, ignoreCase = true) }
@@ -1283,6 +1289,8 @@ class GoogleDriveSyncManager(private val context: Context) {
                     val remarks = obj.getString("remarks")
                     val timestamp = obj.getLong("timestamp")
                     val receiptUri = if (obj.has("receiptUri")) obj.optString("receiptUri", null) else null
+
+                    if (isTransactionDeleted(timestamp)) continue
 
                     remoteTxTimestamps.add(timestamp)
 
@@ -1345,6 +1353,8 @@ class GoogleDriveSyncManager(private val context: Context) {
                     val remarks = obj.getString("remarks")
                     val timestamp = obj.getLong("timestamp")
 
+                    if (isPartyTransactionDeleted(timestamp)) continue
+
                     remotePartyTxTimestamps.add(timestamp)
 
                     val matched = existingPartyTxList.find { it.timestamp == timestamp && it.partyId == mappedPartyId }
@@ -1399,6 +1409,8 @@ class GoogleDriveSyncManager(private val context: Context) {
                     val phone = obj.getString("phone")
                     val role = obj.getString("role")
                     val createdAt = obj.getLong("createdAt")
+
+                    if (isTeamMemberDeleted(email)) continue
 
                     remoteTeamEmails.add(email.trim().lowercase())
 
@@ -1502,6 +1514,122 @@ class GoogleDriveSyncManager(private val context: Context) {
 
     private fun calculateScoreFromCounts(bizCount: Int, booksCount: Int, txCount: Int, partiesCount: Int): Int {
         return bizCount * 10 + booksCount * 5 + txCount * 15 + partiesCount * 10
+    }
+
+    // --- Tombstone Tracking for Deletions ---
+
+    fun recordDeletedTransaction(timestamp: Long) {
+        val set = prefs.getStringSet("tombstone_tx_timestamps", emptySet())?.toMutableSet() ?: mutableSetOf()
+        set.add(timestamp.toString())
+        prefs.edit().putStringSet("tombstone_tx_timestamps", set).apply()
+        markLocalDbModified()
+    }
+
+    fun isTransactionDeleted(timestamp: Long): Boolean {
+        val set = prefs.getStringSet("tombstone_tx_timestamps", emptySet())
+        return set?.contains(timestamp.toString()) == true
+    }
+
+    fun recordDeletedPartyTransaction(timestamp: Long) {
+        val set = prefs.getStringSet("tombstone_ptx_timestamps", emptySet())?.toMutableSet() ?: mutableSetOf()
+        set.add(timestamp.toString())
+        prefs.edit().putStringSet("tombstone_ptx_timestamps", set).apply()
+        markLocalDbModified()
+    }
+
+    fun isPartyTransactionDeleted(timestamp: Long): Boolean {
+        val set = prefs.getStringSet("tombstone_ptx_timestamps", emptySet())
+        return set?.contains(timestamp.toString()) == true
+    }
+
+    fun recordDeletedParty(name: String) {
+        val cleanName = name.trim().lowercase()
+        if (cleanName.isNotBlank()) {
+            val set = prefs.getStringSet("tombstone_party_names", emptySet())?.toMutableSet() ?: mutableSetOf()
+            set.add(cleanName)
+            prefs.edit().putStringSet("tombstone_party_names", set).apply()
+            markLocalDbModified()
+        }
+    }
+
+    fun removePartyFromTombstones(name: String) {
+        val cleanName = name.trim().lowercase()
+        val set = prefs.getStringSet("tombstone_party_names", emptySet())?.toMutableSet() ?: mutableSetOf()
+        if (set.remove(cleanName)) {
+            prefs.edit().putStringSet("tombstone_party_names", set).apply()
+        }
+    }
+
+    fun isPartyDeleted(name: String): Boolean {
+        val set = prefs.getStringSet("tombstone_party_names", emptySet())
+        return set?.contains(name.trim().lowercase()) == true
+    }
+
+    fun recordDeletedBook(bizId: Int, name: String) {
+        val key = "$bizId:${name.trim().lowercase()}"
+        val set = prefs.getStringSet("tombstone_book_keys", emptySet())?.toMutableSet() ?: mutableSetOf()
+        set.add(key)
+        prefs.edit().putStringSet("tombstone_book_keys", set).apply()
+        markLocalDbModified()
+    }
+
+    fun removeBookFromTombstones(bizId: Int, name: String) {
+        val key = "$bizId:${name.trim().lowercase()}"
+        val set = prefs.getStringSet("tombstone_book_keys", emptySet())?.toMutableSet() ?: mutableSetOf()
+        if (set.remove(key)) {
+            prefs.edit().putStringSet("tombstone_book_keys", set).apply()
+        }
+    }
+
+    fun isBookDeleted(bizId: Int, name: String): Boolean {
+        val set = prefs.getStringSet("tombstone_book_keys", emptySet())
+        return set?.contains("$bizId:${name.trim().lowercase()}") == true
+    }
+
+    fun recordDeletedBusiness(name: String) {
+        val cleanName = name.trim().lowercase()
+        if (cleanName.isNotBlank()) {
+            val set = prefs.getStringSet("tombstone_biz_names", emptySet())?.toMutableSet() ?: mutableSetOf()
+            set.add(cleanName)
+            prefs.edit().putStringSet("tombstone_biz_names", set).apply()
+            markLocalDbModified()
+        }
+    }
+
+    fun removeBusinessFromTombstones(name: String) {
+        val cleanName = name.trim().lowercase()
+        val set = prefs.getStringSet("tombstone_biz_names", emptySet())?.toMutableSet() ?: mutableSetOf()
+        if (set.remove(cleanName)) {
+            prefs.edit().putStringSet("tombstone_biz_names", set).apply()
+        }
+    }
+
+    fun isBusinessDeleted(name: String): Boolean {
+        val set = prefs.getStringSet("tombstone_biz_names", emptySet())
+        return set?.contains(name.trim().lowercase()) == true
+    }
+
+    fun recordDeletedTeamMember(email: String) {
+        val cleanEmail = email.trim().lowercase()
+        if (cleanEmail.isNotBlank()) {
+            val set = prefs.getStringSet("tombstone_team_emails", emptySet())?.toMutableSet() ?: mutableSetOf()
+            set.add(cleanEmail)
+            prefs.edit().putStringSet("tombstone_team_emails", set).apply()
+            markLocalDbModified()
+        }
+    }
+
+    fun removeTeamMemberFromTombstones(email: String) {
+        val cleanEmail = email.trim().lowercase()
+        val set = prefs.getStringSet("tombstone_team_emails", emptySet())?.toMutableSet() ?: mutableSetOf()
+        if (set.remove(cleanEmail)) {
+            prefs.edit().putStringSet("tombstone_team_emails", set).apply()
+        }
+    }
+
+    fun isTeamMemberDeleted(email: String): Boolean {
+        val set = prefs.getStringSet("tombstone_team_emails", emptySet())
+        return set?.contains(email.trim().lowercase()) == true
     }
 
     fun markLocalDbModified() {

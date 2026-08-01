@@ -122,6 +122,13 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     private val _activeBusiness = MutableStateFlow<Business?>(null)
     val activeBusiness: StateFlow<Business?> = _activeBusiness.asStateFlow()
 
+    // All books across all businesses
+    val allBooks: StateFlow<List<Book>> = repository.allBooks.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
     // Books automatically retrieved for the active business
     val books: StateFlow<List<Book>> = _activeBusiness
         .flatMapLatest { biz ->
@@ -441,6 +448,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     fun createBusiness(name: String) {
         val userEmail = syncManager.getEmail().trim().lowercase()
         viewModelScope.launch {
+            syncManager.removeBusinessFromTombstones(name)
             syncManager.markLocalDbModified()
             val id = repository.insertBusiness(Business(name = name, userEmail = userEmail, isSynced = false))
             val newBiz = Business(id = id.toInt(), name = name, userEmail = userEmail, isSynced = false)
@@ -466,6 +474,8 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     fun createBusinessAndBook(businessName: String, bookName: String = "") {
         val userEmail = syncManager.getEmail().trim().lowercase()
         viewModelScope.launch {
+            syncManager.removeBusinessFromTombstones(businessName)
+            if (bookName.isNotBlank()) syncManager.removeBookFromTombstones(1, bookName)
             syncManager.markLocalDbModified()
             val id = repository.insertBusiness(Business(name = businessName, userEmail = userEmail, isSynced = false))
             val newBiz = Business(id = id.toInt(), name = businessName, userEmail = userEmail, isSynced = false)
@@ -482,7 +492,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun deleteBusiness(business: Business) {
         viewModelScope.launch {
-            syncManager.markLocalDbModified()
+            syncManager.recordDeletedBusiness(business.name)
             repository.deleteBusiness(business)
             if (_activeBusiness.value?.id == business.id) {
                 _activeBusiness.value = businesses.value.firstOrNull { it.id != business.id }
@@ -497,12 +507,17 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun selectBook(book: Book) {
+        val parentBiz = businesses.value.find { it.id == book.businessId }
+        if (parentBiz != null && _activeBusiness.value?.id != parentBiz.id) {
+            _activeBusiness.value = parentBiz
+        }
         _activeBook.value = book
     }
 
     fun createBook(name: String, phone: String = "") {
         val bizId = _activeBusiness.value?.id ?: 1
         viewModelScope.launch {
+            syncManager.removeBookFromTombstones(bizId, name)
             syncManager.markLocalDbModified()
             val id = repository.insertBook(Book(businessId = bizId, name = name, phone = phone, isSynced = false))
             val newBook = Book(id = id.toInt(), businessId = bizId, name = name, phone = phone, isSynced = false)
@@ -525,7 +540,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun deleteBook(book: Book) {
         viewModelScope.launch {
-            syncManager.markLocalDbModified()
+            syncManager.recordDeletedBook(book.businessId, book.name)
             repository.deleteBook(book)
             if (_activeBook.value?.id == book.id) {
                 _activeBook.value = books.value.firstOrNull { it.id != book.id }
@@ -713,7 +728,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun deleteTransaction(transaction: Transaction) {
         viewModelScope.launch {
-            syncManager.markLocalDbModified()
+            syncManager.recordDeletedTransaction(transaction.timestamp)
             repository.deleteTransaction(transaction)
             triggerCloudSync()
         }
@@ -744,10 +759,10 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun batchDeleteSelectedTransactions() {
         viewModelScope.launch {
-            syncManager.markLocalDbModified()
             val idsToDelete = _selectedTransactionIds.value
             val txsToDelete = activeBookTransactions.value.filter { idsToDelete.contains(it.id) }
             txsToDelete.forEach { tx ->
+                syncManager.recordDeletedTransaction(tx.timestamp)
                 repository.deleteTransaction(tx)
             }
             clearTransactionSelection()
@@ -787,6 +802,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun addParty(name: String, phone: String) {
         viewModelScope.launch {
+            syncManager.removePartyFromTombstones(name)
             syncManager.markLocalDbModified()
             repository.insertParty(Party(name = name, phone = phone))
             triggerCloudSync()
@@ -795,7 +811,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun deleteParty(party: Party) {
         viewModelScope.launch {
-            syncManager.markLocalDbModified()
+            syncManager.recordDeletedParty(party.name)
             repository.deleteParty(party)
             if (_activeParty.value?.id == party.id) {
                 _activeParty.value = null
@@ -826,7 +842,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun deletePartyTransaction(partyTransaction: PartyTransaction) {
         viewModelScope.launch {
-            syncManager.markLocalDbModified()
+            syncManager.recordDeletedPartyTransaction(partyTransaction.timestamp)
             repository.deletePartyTransaction(partyTransaction)
             triggerCloudSync()
         }
@@ -837,6 +853,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     fun addTeamMember(name: String, email: String, phone: String, role: String) {
         val bizId = _activeBusiness.value?.id ?: 1
         viewModelScope.launch {
+            syncManager.removeTeamMemberFromTombstones(email)
             syncManager.markLocalDbModified()
             repository.insertTeamMember(
                 TeamMember(
@@ -853,7 +870,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun deleteTeamMember(teamMember: TeamMember) {
         viewModelScope.launch {
-            syncManager.markLocalDbModified()
+            syncManager.recordDeletedTeamMember(teamMember.email)
             repository.deleteTeamMember(teamMember)
             triggerCloudSync()
         }

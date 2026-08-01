@@ -167,6 +167,7 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
     val currentScreen by viewModel.currentScreen.collectAsStateWithLifecycle()
     val activeBook by viewModel.activeBook.collectAsStateWithLifecycle()
     val books by viewModel.books.collectAsStateWithLifecycle()
+    val allBooks by viewModel.allBooks.collectAsStateWithLifecycle()
     val businesses by viewModel.businesses.collectAsStateWithLifecycle()
     val activeBusiness by viewModel.activeBusiness.collectAsStateWithLifecycle()
     val simulatedRole by viewModel.simulatedRole.collectAsStateWithLifecycle()
@@ -790,6 +791,7 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
 
                 // Book Selector Modal Dialog
                 if (showBookSelector) {
+                    val booksToDisplay = if (allBooks.isNotEmpty()) allBooks else books
                     AlertDialog(
                         onDismissRequest = { showBookSelector = false },
                         title = { Text("Business Cashbooks", fontWeight = FontWeight.Bold) },
@@ -798,8 +800,9 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                items(books) { book ->
+                                items(booksToDisplay) { book ->
                                     val isSelected = book.id == activeBook?.id
+                                    val parentBiz = businesses.find { it.id == book.businessId }
                                     Card(
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -820,6 +823,13 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                                         ) {
                                             Column {
                                                 Text(book.name, fontWeight = FontWeight.Bold)
+                                                if (parentBiz != null) {
+                                                    Text(
+                                                        "Business: ${parentBiz.name}",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.primary
+                                                    )
+                                                }
                                                 Text(
                                                     "Created: " + SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(book.createdAt)),
                                                     style = MaterialTheme.typography.bodySmall,
@@ -828,7 +838,7 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                                             }
                                             if (isSelected) {
                                                 Icon(Icons.Default.Check, contentDescription = "Active", tint = MaterialTheme.colorScheme.primary)
-                                            } else if (books.size > 1 && hasPermission(simulatedRole, "delete_book")) {
+                                            } else if (booksToDisplay.size > 1 && hasPermission(simulatedRole, "delete_book")) {
                                                 IconButton(onClick = {
                                                     bookToDelete = book
                                                     deleteConfirmationInput = ""
@@ -8659,6 +8669,7 @@ fun SettingsScreen(viewModel: LedgerViewModel) {
 fun ManageWorkspaceScreen(viewModel: LedgerViewModel) {
     val businesses by viewModel.businesses.collectAsStateWithLifecycle()
     val books by viewModel.books.collectAsStateWithLifecycle()
+    val allBooks by viewModel.allBooks.collectAsStateWithLifecycle()
     val allTransactions by viewModel.allTransactions.collectAsStateWithLifecycle()
     val activeBusiness by viewModel.activeBusiness.collectAsStateWithLifecycle()
     val activeBook by viewModel.activeBook.collectAsStateWithLifecycle()
@@ -8758,7 +8769,7 @@ fun ManageWorkspaceScreen(viewModel: LedgerViewModel) {
         } else {
             items(businesses) { biz ->
                 val isActive = activeBusiness?.id == biz.id
-                val bizBooks = books.filter { it.businessId == biz.id }
+                val bizBooks = allBooks.filter { it.businessId == biz.id }
                 val bizBookIds = bizBooks.map { it.id }.toSet()
                 val bizTx = allTransactions.filter { bizBookIds.contains(it.bookId) }
                 val bizIn = bizTx.filter { it.type == "IN" }.sumOf { it.amount }
@@ -8852,6 +8863,117 @@ fun ManageWorkspaceScreen(viewModel: LedgerViewModel) {
                             }
                         }
 
+                        // List books for this Business
+                        if (bizBooks.isNotEmpty()) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 4.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    "Books / Customers under ${biz.name}:",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = Color(0xFF475569)
+                                )
+                                bizBooks.forEach { bk ->
+                                    val isBkActive = activeBook?.id == bk.id && isActive
+                                    val bkTx = allTransactions.filter { it.bookId == bk.id }
+                                    val bkIn = bkTx.filter { it.type == "IN" }.sumOf { it.amount }
+                                    val bkOut = bkTx.filter { it.type == "OUT" }.sumOf { it.amount }
+                                    val bkNet = bkIn - bkOut
+
+                                    Card(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { viewModel.selectBook(bk) },
+                                        colors = CardDefaults.cardColors(
+                                            containerColor = if (isBkActive) GreenIn.copy(alpha = 0.08f) else Color.White
+                                        ),
+                                        border = BorderStroke(
+                                            width = if (isBkActive) 1.5.dp else 1.dp,
+                                            color = if (isBkActive) GreenIn else Color(0xFFE2E8F0)
+                                        ),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                modifier = Modifier.weight(1f)
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.Book,
+                                                    contentDescription = null,
+                                                    tint = if (isBkActive) GreenIn else Color(0xFF64748B),
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                                Column {
+                                                    Text(
+                                                        bk.name,
+                                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                                        color = if (isBkActive) GreenIn else Color(0xFF0F172A)
+                                                    )
+                                                    Text(
+                                                        "Net: Rs. ${String.format("%,.0f", bkNet)}",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = if (bkNet >= 0) GreenIn else RedOut
+                                                    )
+                                                }
+                                            }
+
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                            ) {
+                                                if (isBkActive) {
+                                                    AssistChip(
+                                                        onClick = {},
+                                                        label = { Text("Active Book", fontSize = 10.sp, fontWeight = FontWeight.Bold) },
+                                                        leadingIcon = { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(10.dp)) },
+                                                        colors = AssistChipDefaults.assistChipColors(
+                                                            labelColor = GreenIn,
+                                                            leadingIconContentColor = GreenIn
+                                                        )
+                                                    )
+                                                } else {
+                                                    TextButton(
+                                                        onClick = { viewModel.selectBook(bk) },
+                                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                                    ) {
+                                                        Text("Select", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = GreenIn)
+                                                    }
+                                                }
+
+                                                IconButton(
+                                                    onClick = {
+                                                        bookToRename = bk
+                                                        renameBookName = bk.name
+                                                    },
+                                                    modifier = Modifier.size(28.dp)
+                                                ) {
+                                                    Icon(Icons.Default.Edit, contentDescription = "Rename Book", tint = Color(0xFF475569), modifier = Modifier.size(14.dp))
+                                                }
+
+                                                IconButton(
+                                                    onClick = { bookToDelete = bk },
+                                                    modifier = Modifier.size(28.dp)
+                                                ) {
+                                                    Icon(Icons.Default.Delete, contentDescription = "Delete Book", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(14.dp))
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -8897,7 +9019,7 @@ fun ManageWorkspaceScreen(viewModel: LedgerViewModel) {
             }
         }
 
-        // Section 2: Books of Active Business
+        // Section 2: All Cashbooks across all businesses
         item {
             Divider(color = Color(0xFFE2E8F0), modifier = Modifier.padding(vertical = 8.dp))
             Row(
@@ -8907,12 +9029,12 @@ fun ManageWorkspaceScreen(viewModel: LedgerViewModel) {
             ) {
                 Column {
                     Text(
-                        text = "Cashbooks",
+                        text = "All Cashbooks / Customers",
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "For: ${activeBusiness?.name ?: "No Active Business"}",
+                        text = "Total ${allBooks.size} cashbooks across ${businesses.size} businesses",
                         style = MaterialTheme.typography.bodySmall,
                         color = Color(0xFF64748B)
                     )
@@ -8929,7 +9051,7 @@ fun ManageWorkspaceScreen(viewModel: LedgerViewModel) {
             }
         }
 
-        if (books.isEmpty()) {
+        if (allBooks.isEmpty()) {
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -8954,8 +9076,9 @@ fun ManageWorkspaceScreen(viewModel: LedgerViewModel) {
                 }
             }
         } else {
-            items(books) { bk ->
+            items(allBooks) { bk ->
                 val isActive = activeBook?.id == bk.id
+                val parentBiz = businesses.find { it.id == bk.businessId }
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -8984,11 +9107,20 @@ fun ManageWorkspaceScreen(viewModel: LedgerViewModel) {
                                     contentDescription = null,
                                     tint = if (isActive) GreenIn else Color(0xFF64748B)
                                 )
-                                Text(
-                                    text = bk.name,
-                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                    color = if (isActive) GreenIn else Color(0xFF0F172A)
-                                )
+                                Column {
+                                    Text(
+                                        text = bk.name,
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = if (isActive) GreenIn else Color(0xFF0F172A)
+                                    )
+                                    if (parentBiz != null) {
+                                        Text(
+                                            text = "Business: ${parentBiz.name}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
                                 TransactionSyncCheckIndicator(isSynced = bk.isSynced)
                             }
                             if (isActive) {
