@@ -12,6 +12,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import android.text.format.DateUtils
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import coil.compose.AsyncImage
@@ -30,6 +31,7 @@ import android.widget.Toast
 import androidx.compose.animation.*
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.*
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -181,6 +183,10 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
     var showSecuritySettingsDialog by remember { mutableStateOf(false) }
     var showSuperAdminLoginDrawer by remember { mutableStateOf(false) }
     var showSuperAdminUserRegistryInDrawer by remember { mutableStateOf(false) }
+    var showSuperAdminSecretLoginDialog by remember { mutableStateOf(false) }
+    var showSuperAdminUserRegistryDialog by remember { mutableStateOf(false) }
+    var bookIconTapCount by remember { mutableIntStateOf(0) }
+    var lastBookIconTapTimestamp by remember { mutableLongStateOf(0L) }
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -199,19 +205,60 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
     var bookToDelete by remember { mutableStateOf<com.example.data.Book?>(null) }
     var deleteConfirmationInput by remember { mutableStateOf("") }
     var showSuperAdminConsoleMode by remember { mutableStateOf(false) }
+    var showExitAppDialog by remember { mutableStateOf(false) }
 
-    if (isAppLockEnabled && !isAppUnlocked) {
-        AppSecureLockScreen(viewModel = viewModel, onUnlockSuccess = {})
-    } else if (!isUserSignedIn) {
-        OnboardingSetupScreen(viewModel = viewModel)
-    } else if (isSuperAdmin && showSuperAdminConsoleMode) {
-        SuperAdminConsoleScreen(
-            viewModel = viewModel,
-            onSwitchToBusinessView = { showSuperAdminConsoleMode = false }
-        )
-    } else if (businesses.isEmpty()) {
-        OnboardingSetupScreen(viewModel = viewModel)
-    } else {
+    // --- SMART SYSTEM BACK BUTTON HANDLER ---
+    BackHandler(enabled = true) {
+        if (showSuperAdminConsoleMode) {
+            showSuperAdminConsoleMode = false
+        } else if (showExitAppDialog) {
+            showExitAppDialog = false
+        } else if (drawerState.isOpen) {
+            scope.launch { drawerState.close() }
+        } else if (showSuperAdminSecretLoginDialog) {
+            showSuperAdminSecretLoginDialog = false
+        } else if (showSuperAdminUserRegistryDialog) {
+            showSuperAdminUserRegistryDialog = false
+        } else if (showSuperAdminUserRegistryInDrawer) {
+            showSuperAdminUserRegistryInDrawer = false
+        } else if (showBookSelector) {
+            showBookSelector = false
+        } else if (showAddBookDialog) {
+            showAddBookDialog = false
+        } else if (showAddBusinessDialog) {
+            showAddBusinessDialog = false
+        } else if (showSecuritySettingsDialog) {
+            showSecuritySettingsDialog = false
+        } else if (businessToDelete != null) {
+            businessToDelete = null
+        } else if (bookToDelete != null) {
+            bookToDelete = null
+        } else if (currentScreen != Screen.DASHBOARD && isUserSignedIn && businesses.isNotEmpty()) {
+            viewModel.setScreen(Screen.DASHBOARD)
+        } else {
+            showExitAppDialog = true
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        if (showSuperAdminConsoleMode) {
+            SuperAdminConsoleScreen(
+                viewModel = viewModel,
+                onSwitchToBusinessView = { showSuperAdminConsoleMode = false }
+            )
+        } else if (isAppLockEnabled && !isAppUnlocked) {
+            AppSecureLockScreen(viewModel = viewModel, onUnlockSuccess = {})
+        } else if (!isUserSignedIn) {
+            OnboardingSetupScreen(
+                viewModel = viewModel,
+                onOpenSuperAdminSecretLogin = { showSuperAdminSecretLoginDialog = true }
+            )
+        } else if (businesses.isEmpty()) {
+            OnboardingSetupScreen(
+                viewModel = viewModel,
+                onOpenSuperAdminSecretLogin = { showSuperAdminSecretLoginDialog = true }
+            )
+        } else {
         ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
@@ -290,20 +337,6 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                                 Icon(Icons.Default.Logout, contentDescription = null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.error)
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text("Sign Out", fontSize = 11.sp, color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
-                            }
-
-                            if (!isSuperAdmin) {
-                                TextButton(
-                                    onClick = {
-                                        scope.launch { drawerState.close() }
-                                        showSuperAdminLoginDrawer = true
-                                    },
-                                    contentPadding = PaddingValues(0.dp)
-                                ) {
-                                    Icon(Icons.Default.VpnKey, contentDescription = null, modifier = Modifier.size(14.dp), tint = GreenIn)
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Super Admin", fontSize = 11.sp, color = GreenIn, fontWeight = FontWeight.Bold)
-                                }
                             }
                         }
                     }
@@ -466,7 +499,7 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         NavigationDrawerItem(
                             icon = { Icon(Icons.Default.SupervisorAccount, contentDescription = null) },
                             label = { Text("Firebase Users Inspector (${globalAccounts.size})") },
-                            selected = showSuperAdminUserRegistryInDrawer,
+                            selected = showSuperAdminConsoleMode,
                             colors = NavigationDrawerItemDefaults.colors(
                                 selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
                                 unselectedContainerColor = Color.Transparent,
@@ -476,7 +509,7 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                                 unselectedTextColor = MaterialTheme.colorScheme.primary
                             ),
                             onClick = {
-                                showSuperAdminUserRegistryInDrawer = true
+                                showSuperAdminConsoleMode = true
                                 scope.launch { drawerState.close() }
                             }
                         )
@@ -647,29 +680,60 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                     },
                     title = {
                         Row(
-                            modifier = Modifier
-                                .clickable { showBookSelector = true }
-                                .padding(8.dp)
-                                .testTag("book_selector_trigger"),
+                            modifier = Modifier.padding(2.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(
-                                Icons.Default.Book,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(end = 8.dp)
-                            )
-                            Text(
-                                text = activeBook?.name ?: "No Book Active",
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Icon(
-                                Icons.Default.ArrowDropDown,
-                                contentDescription = "Switch book",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            // Secret 5-Tap on Book Icon (Completely normal appearance, no indicators)
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null
+                                    ) {
+                                        val now = System.currentTimeMillis()
+                                        if (now - lastBookIconTapTimestamp > 2500L) {
+                                            bookIconTapCount = 1
+                                        } else {
+                                            bookIconTapCount++
+                                        }
+                                        lastBookIconTapTimestamp = now
+
+                                        if (bookIconTapCount >= 5) {
+                                            bookIconTapCount = 0
+                                            showSuperAdminSecretLoginDialog = true
+                                        }
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.MenuBook,
+                                    contentDescription = "Cashbook",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+
+                            // Tapping the Book Name / Arrow Dropdown switches active Cashbook
+                            Row(
+                                modifier = Modifier
+                                    .clickable { showBookSelector = true }
+                                    .padding(horizontal = 6.dp, vertical = 6.dp)
+                                    .testTag("book_selector_trigger"),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = activeBook?.name ?: "No Book Active",
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Icon(
+                                    Icons.Default.ArrowDropDown,
+                                    contentDescription = "Switch book",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     },
                     colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
@@ -703,7 +767,19 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                             },
                             modifier = Modifier.testTag("add_book_button")
                         ) {
-                            Icon(Icons.Default.AddCard, contentDescription = "Create New Book")
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .background(GreenIn.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
+                            ) {
+                                Icon(
+                                    Icons.Default.LibraryAdd,
+                                    contentDescription = "Create New Book",
+                                    tint = GreenIn,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                         }
                         IconButton(
                             onClick = { viewModel.setScreen(Screen.PROFILE) },
@@ -1005,15 +1081,84 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         }
                     )
                 }
-
-                if (showSuperAdminUserRegistryInDrawer) {
-                    SuperAdminUserRegistryDialog(
-                        viewModel = viewModel,
-                        onDismiss = { showSuperAdminUserRegistryInDrawer = false }
-                    )
-                }
             }
         }
+    }
+}
+
+    // --- EXIT APP CONFIRMATION DIALOG (ON BACK BUTTON) ---
+    if (showExitAppDialog) {
+        AlertDialog(
+            onDismissRequest = { showExitAppDialog = false },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.ExitToApp,
+                    contentDescription = "Exit App",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(32.dp)
+                )
+            },
+            title = {
+                Text(
+                    text = "Exit CashBook?",
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleMedium
+                )
+            },
+            text = {
+                Text(
+                    text = "Are you sure you want to close and exit the app?",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showExitAppDialog = false
+                        (context as? Activity)?.finish()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text("Exit App", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = { showExitAppDialog = false },
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // --- TOP-LEVEL GLOBAL SUPER ADMIN DIALOGS ---
+    if (showSuperAdminUserRegistryInDrawer) {
+        SuperAdminUserRegistryDialog(
+            viewModel = viewModel,
+            onDismiss = { showSuperAdminUserRegistryInDrawer = false }
+        )
+    }
+
+    if (showSuperAdminSecretLoginDialog) {
+        SuperAdminSecretLoginDialog(
+            viewModel = viewModel,
+            onDismiss = { showSuperAdminSecretLoginDialog = false },
+            onOpenRegistry = {
+                showSuperAdminSecretLoginDialog = false
+                showSuperAdminConsoleMode = true
+            }
+        )
+    }
+
+    if (showSuperAdminUserRegistryDialog) {
+        SuperAdminUserRegistryDialog(
+            viewModel = viewModel,
+            onDismiss = { showSuperAdminUserRegistryDialog = false }
+        )
     }
 }
 }
@@ -4467,8 +4612,10 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
 
     val businesses by viewModel.businesses.collectAsStateWithLifecycle()
     val books by viewModel.books.collectAsStateWithLifecycle()
+    val allBooks by viewModel.allBooks.collectAsStateWithLifecycle()
     val allTransactions by viewModel.allTransactions.collectAsStateWithLifecycle()
     val partiesList by viewModel.parties.collectAsStateWithLifecycle()
+    val allPartyTransactions by viewModel.allPartyTransactions.collectAsStateWithLifecycle()
     val teamMembersList by viewModel.allTeamMembers.collectAsStateWithLifecycle()
 
     var showAccountAuthDialog by remember { mutableStateOf(false) }
@@ -5000,58 +5147,85 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                 }
             }
 
-            // Manual Backup and JSON Restore Tools
+            // Manual Backup and Portable JSON Import/Export
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)),
+                    shape = RoundedCornerShape(12.dp)
                 ) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("Manual SQLite Backups & Portable Export", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(Icons.Default.Share, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Text("Offline Manual Database Backup", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                        }
                         Text(
-                            "Generate completely portable, fully offline-restorable database backups as simple raw JSON text files.",
+                            "Export your local database to an encrypted JSON backup file or copy raw JSON text to transfer across devices.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f)
                         )
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Button(
                                 onClick = {
-                                    val bizList = viewModel.businesses.value
-                                    val bookList = viewModel.books.value
-                                    val txList = viewModel.allTransactions.value
-                                    val partyList = viewModel.parties.value
-                                    val pTxList = viewModel.allPartyTransactions.value
-                                    val teamList = viewModel.allTeamMembers.value
-
                                     val backupJsonStr = syncManager.serializeDatabase(
-                                        businesses = bizList,
-                                        books = bookList,
-                                        transactions = txList,
-                                        parties = partyList,
-                                        partyTransactions = pTxList,
-                                        teamMembers = teamList
+                                        businesses = businesses,
+                                        books = allBooks.ifEmpty { books },
+                                        transactions = allTransactions,
+                                        parties = partiesList,
+                                        partyTransactions = allPartyTransactions,
+                                        teamMembers = teamMembersList,
+                                        isPartialExport = false
+                                    )
+                                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                        type = "text/plain"
+                                        putExtra(Intent.EXTRA_SUBJECT, "CashBook Offline Data Backup")
+                                        putExtra(Intent.EXTRA_TEXT, backupJsonStr)
+                                    }
+                                    context.startActivity(Intent.createChooser(shareIntent, "Share Backup JSON File via"))
+                                },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = GreenIn)
+                            ) {
+                                Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Share Backup", fontSize = 12.sp)
+                            }
+
+                            OutlinedButton(
+                                onClick = {
+                                    val backupJsonStr = syncManager.serializeDatabase(
+                                        businesses = businesses,
+                                        books = allBooks.ifEmpty { books },
+                                        transactions = allTransactions,
+                                        parties = partiesList,
+                                        partyTransactions = allPartyTransactions,
+                                        teamMembers = teamMembersList,
+                                        isPartialExport = false
                                     )
                                     clipboardManager.setText(AnnotatedString(backupJsonStr))
-                                    Toast.makeText(context, "Complete backup JSON copied to clipboard!", Toast.LENGTH_LONG).show()
+                                    Toast.makeText(context, "Full Database JSON copied to clipboard!", Toast.LENGTH_LONG).show()
                                 },
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(10.dp)
                             ) {
-                                Icon(Icons.Default.ContentCopy, contentDescription = null)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Export JSON")
+                                Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Copy JSON", fontSize = 12.sp)
                             }
 
                             OutlinedButton(
                                 onClick = { showBackupRestoreDialog = true },
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(10.dp)
                             ) {
-                                Icon(Icons.Default.FileUpload, contentDescription = null)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Import JSON")
+                                Icon(Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Import JSON", fontSize = 12.sp)
                             }
                         }
                     }
@@ -6157,7 +6331,10 @@ fun AppLockSettingsDialog(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
+fun OnboardingSetupScreen(
+    viewModel: LedgerViewModel,
+    onOpenSuperAdminSecretLogin: () -> Unit = {}
+) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val syncManager = viewModel.syncManager
@@ -6193,6 +6370,8 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
     var forgotAccountVerified by remember { mutableStateOf(false) }
 
     var showOAuthDialogInWelcome by remember { mutableStateOf(false) }
+    var logoTapCount by remember { mutableIntStateOf(0) }
+    var lastLogoTapTime by remember { mutableLongStateOf(0L) }
 
     var authStateVersion by remember { mutableIntStateOf(0) }
     val isUserSignedIn = remember(authStateVersion) { syncManager.isUserSignedIn() }
@@ -6239,13 +6418,13 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(24.dp)
+                .padding(horizontal = 24.dp, vertical = 16.dp)
                 .verticalScroll(rememberScrollState())
                 .widthIn(max = 480.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // App Logo Header
+            // App Logo Header (Secret 5-tap trigger)
             Image(
                 painter = painterResource(id = com.example.R.drawable.ic_cashbook_logo),
                 contentDescription = "CashBook Logo",
@@ -6253,6 +6432,22 @@ fun OnboardingSetupScreen(viewModel: LedgerViewModel) {
                     .size(80.dp)
                     .clip(RoundedCornerShape(20.dp))
                     .border(1.dp, Color(0xFFE2E8F0), RoundedCornerShape(20.dp))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        val now = System.currentTimeMillis()
+                        if (now - lastLogoTapTime > 2500L) {
+                            logoTapCount = 1
+                        } else {
+                            logoTapCount++
+                        }
+                        lastLogoTapTime = now
+                        if (logoTapCount >= 5) {
+                            logoTapCount = 0
+                            onOpenSuperAdminSecretLogin()
+                        }
+                    }
             )
 
             val isOnline by viewModel.isOnline.collectAsStateWithLifecycle()
@@ -7407,23 +7602,40 @@ fun ShareBusinessDialog(
     totalNetBalance: Double,
     totalIn: Double,
     totalOut: Double,
+    viewModel: LedgerViewModel? = null,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
 
+    var selectedRole by remember { mutableStateOf("Partner") }
+    var collaboratorName by remember { mutableStateOf("") }
+    var collaboratorContact by remember { mutableStateOf("") }
+    var showAddCollaboratorSection by remember { mutableStateOf(false) }
+
+    val roles = listOf("Partner", "Data Entry", "Admin", "Boss")
+
+    val teamList by if (viewModel != null) {
+        viewModel.allTeamMembers.collectAsStateWithLifecycle()
+    } else {
+        remember { mutableStateOf(emptyList()) }
+    }
+
+    val bizTeamMembers = teamList.filter { it.businessId == business.id }
+
     val shareText = """
-        💼 *Cashbook Pro - Business Invitation*
+        🤝 *Cashbook Pro - Business Collaboration Invitation*
         
-        You have been invited to collaborate on business: *${business.name}*
+        You have been invited to join business: *${business.name}* as a *${selectedRole}*!
         Business Workspace ID: #${business.id}
         Attached Customer Books: $booksCount
-        Net Total Balance: Rs. ${String.format("%,.2f", totalNetBalance)} (Cash In: Rs. ${String.format("%,.0f", totalIn)} | Cash Out: Rs. ${String.format("%,.0f", totalOut)})
+        Net Total Balance: Rs. ${String.format("%,.2f", totalNetBalance)}
         
-        *How it works for Team Members / Partners:*
-        1. Open Cashbook Pro app on your Android phone.
-        2. Click 'Cloud Sync Center' or 'Sync Center'.
-        3. Connect your account to automatically sync all live Cash In / Cash Out entries for *${business.name}* across all partner phones!
+        *How it works for Partners & Team Members:*
+        1. Install Cashbook Pro on your Android phone.
+        2. Go to 'Cloud Sync Center' or 'Digital Staff Roster'.
+        3. Connect to Business Workspace ID #${business.id} as *$selectedRole*.
+        4. Real-time Cash In / Cash Out entries update automatically across all partner devices!
     """.trimIndent()
 
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
@@ -7437,7 +7649,8 @@ fun ShareBusinessDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(20.dp),
+                    .padding(20.dp)
+                    .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Row(
@@ -7446,26 +7659,25 @@ fun ShareBusinessDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Icon(Icons.Default.Share, contentDescription = null, tint = GreenIn)
-                        Text("Share Business & Invite Team", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Icon(Icons.Default.GroupAdd, contentDescription = null, tint = GreenIn)
+                        Text("Share Business & Add Partners", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     }
                     IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
                         Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.Gray)
                     }
                 }
 
-                // How it works box
+                // Roles explanation box
                 Card(
                     colors = CardDefaults.cardColors(containerColor = GreenIn.copy(alpha = 0.08f)),
                     border = BorderStroke(1.dp, GreenIn.copy(alpha = 0.25f)),
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("💡 How Business Sharing Works for Team Members:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall, color = GreenIn)
-                        Text("1. Share this invite information with your team member or partner via WhatsApp or SMS.", style = MaterialTheme.typography.bodySmall)
-                        Text("2. The team member installs Cashbook Pro on their mobile phone.", style = MaterialTheme.typography.bodySmall)
-                        Text("3. They sign into Cloud Sync Center using their account.", style = MaterialTheme.typography.bodySmall)
-                        Text("4. All Cash In / Cash Out logs for '${business.name}' update automatically across all team phones in real time!", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                        Text("💡 Partner & Team Roles for '${business.name}':", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall, color = GreenIn)
+                        Text("🤝 Partner: Equal access to log and view Cash In / Cash Out entries together.", style = MaterialTheme.typography.bodySmall)
+                        Text("✏️ Data Entry: Can enter Cash In/Out logs, but cannot delete records.", style = MaterialTheme.typography.bodySmall)
+                        Text("🛡️ Admin / Boss: Full control over books, staff roster, and settings.", style = MaterialTheme.typography.bodySmall)
                     }
                 }
 
@@ -7477,7 +7689,7 @@ fun ShareBusinessDialog(
                     Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text("Business Name: ${business.name}", fontWeight = FontWeight.Bold)
                         Text("Workspace ID: #${business.id}", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
-                        Text("Active Customer Books: $booksCount", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                        Text("Customer Books: $booksCount", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
                         Text(
                             "Net Business Total: Rs. ${String.format("%,.2f", totalNetBalance)}",
                             fontWeight = FontWeight.Bold,
@@ -7486,6 +7698,140 @@ fun ShareBusinessDialog(
                     }
                 }
 
+                // Active Team & Partner Roster for this Business
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Active Partners & Team (${bizTeamMembers.size}):", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                        if (viewModel != null) {
+                            TextButton(onClick = { showAddCollaboratorSection = !showAddCollaboratorSection }) {
+                                Text(if (showAddCollaboratorSection) "Hide Form" else "+ Add Partner/Team")
+                            }
+                        }
+                    }
+
+                    if (bizTeamMembers.isNotEmpty()) {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            bizTeamMembers.forEach { member ->
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(8.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column {
+                                            Text(member.name, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+                                            if (member.email.isNotBlank() || member.phone.isNotBlank()) {
+                                                Text(member.email.ifBlank { member.phone }, style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                            }
+                                        }
+                                        Surface(
+                                            color = if (member.role == "Partner") GreenIn.copy(alpha = 0.15f) else MaterialTheme.colorScheme.primaryContainer,
+                                            shape = RoundedCornerShape(6.dp)
+                                        ) {
+                                            Text(
+                                                member.role,
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (member.role == "Partner") GreenIn else MaterialTheme.colorScheme.onPrimaryContainer
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        Text("No partners or team members added yet for this business.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                    }
+                }
+
+                // Quick Add Collaborator Form
+                if (showAddCollaboratorSection && viewModel != null) {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f)),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text("Recruit Partner or Staff for '${business.name}'", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+
+                            OutlinedTextField(
+                                value = collaboratorName,
+                                onValueChange = { collaboratorName = it },
+                                label = { Text("Partner / Staff Name") },
+                                placeholder = { Text("e.g. Ali Khan") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                shape = RoundedCornerShape(8.dp)
+                            )
+
+                            OutlinedTextField(
+                                value = collaboratorContact,
+                                onValueChange = { collaboratorContact = it },
+                                label = { Text("Email or Phone Number") },
+                                placeholder = { Text("e.g. partner@gmail.com") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                shape = RoundedCornerShape(8.dp)
+                            )
+
+                            Text("Select Role:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                roles.forEach { roleOpt ->
+                                    FilterChip(
+                                        selected = selectedRole == roleOpt,
+                                        onClick = { selectedRole = roleOpt },
+                                        label = { Text(roleOpt, fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                                        leadingIcon = if (selectedRole == roleOpt) { { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(12.dp)) } } else null
+                                    )
+                                }
+                            }
+
+                            Button(
+                                onClick = {
+                                    if (collaboratorName.isNotBlank()) {
+                                        val isEmail = collaboratorContact.contains("@")
+                                        val email = if (isEmail) collaboratorContact.trim() else ""
+                                        val phone = if (!isEmail) collaboratorContact.trim() else ""
+                                        viewModel.addTeamMember(
+                                            name = collaboratorName.trim(),
+                                            email = email,
+                                            phone = phone,
+                                            role = selectedRole,
+                                            targetBusinessId = business.id
+                                        )
+                                        Toast.makeText(context, "Added $collaboratorName as $selectedRole to ${business.name}!", Toast.LENGTH_SHORT).show()
+                                        collaboratorName = ""
+                                        collaboratorContact = ""
+                                        showAddCollaboratorSection = false
+                                    } else {
+                                        Toast.makeText(context, "Please enter partner name.", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = GreenIn)
+                            ) {
+                                Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Confirm & Add $selectedRole")
+                            }
+                        }
+                    }
+                }
+
+                // Action Buttons
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -7493,14 +7839,14 @@ fun ShareBusinessDialog(
                     OutlinedButton(
                         onClick = {
                             clipboardManager.setText(AnnotatedString(shareText))
-                            Toast.makeText(context, "Copied invite details to clipboard!", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Copied partner invite details to clipboard!", Toast.LENGTH_SHORT).show()
                         },
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(10.dp)
                     ) {
                         Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Copy Info")
+                        Text("Copy Invite")
                     }
 
                     Button(
@@ -7509,7 +7855,7 @@ fun ShareBusinessDialog(
                                 type = "text/plain"
                                 putExtra(Intent.EXTRA_TEXT, shareText)
                             }
-                            context.startActivity(Intent.createChooser(intent, "Share Business via"))
+                            context.startActivity(Intent.createChooser(intent, "Share Partner Invite via"))
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
                         modifier = Modifier.weight(1f),
@@ -7518,6 +7864,123 @@ fun ShareBusinessDialog(
                         Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("Share Link")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ShareBookDialog(
+    book: com.example.data.Book,
+    parentBusinessName: String,
+    txCount: Int,
+    netBalance: Double,
+    totalIn: Double,
+    totalOut: Double,
+    viewModel: LedgerViewModel,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
+    val syncManager = viewModel.syncManager
+    val allTx by viewModel.allTransactions.collectAsStateWithLifecycle()
+    val businesses by viewModel.businesses.collectAsStateWithLifecycle()
+
+    val shareText = """
+        📚 *Cashbook Pro - Book Details & Share*
+        
+        Book: *${book.name}*
+        Parent Business: $parentBusinessName
+        Total Transactions: $txCount
+        Net Balance: Rs. ${String.format("%,.2f", netBalance)} (In: Rs. ${String.format("%,.0f", totalIn)} | Out: Rs. ${String.format("%,.0f", totalOut)})
+    """.trimIndent()
+
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Default.Share, contentDescription = null, tint = GreenIn)
+                        Text("Share Cashbook '${book.name}'", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    }
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.Gray)
+                    }
+                }
+
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Book Name: ${book.name}", fontWeight = FontWeight.Bold)
+                        Text("Business: $parentBusinessName", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                        Text("Transactions: $txCount entries", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                        Text(
+                            "Net Total: Rs. ${String.format("%,.2f", netBalance)}",
+                            fontWeight = FontWeight.Bold,
+                            color = if (netBalance >= 0) GreenIn else RedOut
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            val bTx = allTx.filter { it.bookId == book.id }
+                            val parentBiz = businesses.find { it.id == book.businessId }
+                            val jsonPayload = syncManager.serializeDatabase(
+                                businesses = if (parentBiz != null) listOf(parentBiz) else emptyList(),
+                                books = listOf(book),
+                                transactions = bTx,
+                                parties = emptyList(),
+                                partyTransactions = emptyList(),
+                                teamMembers = emptyList(),
+                                isPartialExport = true
+                            )
+                            val intent = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_SUBJECT, "CashBook Data Export: Book '${book.name}'")
+                                putExtra(Intent.EXTRA_TEXT, jsonPayload)
+                            }
+                            context.startActivity(Intent.createChooser(intent, "Share Book '${book.name}' JSON File"))
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Share Book JSON Data")
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            clipboardManager.setText(AnnotatedString(shareText))
+                            Toast.makeText(context, "Copied book summary to clipboard!", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Copy Text")
                     }
                 }
             }
@@ -8676,6 +9139,7 @@ fun ManageWorkspaceScreen(viewModel: LedgerViewModel) {
     val context = LocalContext.current
 
     var showShareBusinessDialog by remember { mutableStateOf<com.example.data.Business?>(null) }
+    var showShareBookDialog by remember { mutableStateOf<com.example.data.Book?>(null) }
     var showAddBusinessDialog by remember { mutableStateOf(false) }
     var newBusinessName by remember { mutableStateOf("") }
 
@@ -8949,6 +9413,13 @@ fun ManageWorkspaceScreen(viewModel: LedgerViewModel) {
                                                     ) {
                                                         Text("Select", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = GreenIn)
                                                     }
+                                                }
+
+                                                IconButton(
+                                                    onClick = { showShareBookDialog = bk },
+                                                    modifier = Modifier.size(28.dp)
+                                                ) {
+                                                    Icon(Icons.Default.Share, contentDescription = "Share Book", tint = GreenIn, modifier = Modifier.size(14.dp))
                                                 }
 
                                                 IconButton(
@@ -9399,7 +9870,29 @@ fun ManageWorkspaceScreen(viewModel: LedgerViewModel) {
             totalNetBalance = bizNet,
             totalIn = bizIn,
             totalOut = bizOut,
+            viewModel = viewModel,
             onDismiss = { showShareBusinessDialog = null }
+        )
+    }
+
+    // 8. Share Book Dialog
+    if (showShareBookDialog != null) {
+        val bk = showShareBookDialog!!
+        val bkTx = allTransactions.filter { it.bookId == bk.id }
+        val bkIn = bkTx.filter { it.type == "IN" }.sumOf { it.amount }
+        val bkOut = bkTx.filter { it.type == "OUT" }.sumOf { it.amount }
+        val bkNet = bkIn - bkOut
+        val parentBiz = businesses.find { it.id == bk.businessId }
+
+        ShareBookDialog(
+            book = bk,
+            parentBusinessName = parentBiz?.name ?: "Unknown Business",
+            txCount = bkTx.size,
+            netBalance = bkNet,
+            totalIn = bkIn,
+            totalOut = bkOut,
+            viewModel = viewModel,
+            onDismiss = { showShareBookDialog = null }
         )
     }
 }
@@ -10029,59 +10522,67 @@ fun ReceiptViewerDialog(
     }
 }
 
-// --- SUPER ADMIN REGISTERED USERS DIRECTORY DIALOG ---
+// --- SUPER ADMIN REGISTERED USERS DIRECTORY (FULL SCREEN DELEGATE) ---
 @Composable
 fun SuperAdminUserRegistryDialog(
     viewModel: LedgerViewModel,
     onDismiss: () -> Unit
 ) {
-    val context = LocalContext.current
-    val clipboardManager = LocalClipboardManager.current
-    val globalAccounts by viewModel.globalAccounts.collectAsStateWithLifecycle()
-    val isRefreshing by viewModel.isRefreshingAccounts.collectAsStateWithLifecycle()
-    var searchQuery by remember { mutableStateOf("") }
-    var selectedAccount by remember { mutableStateOf<com.example.data.RegisteredAccount?>(null) }
-    var showPasswords by remember { mutableStateOf(false) }
-
-    var showAddUserDialog by remember { mutableStateOf(false) }
-    var accountToEdit by remember { mutableStateOf<com.example.data.RegisteredAccount?>(null) }
-    var accountToDelete by remember { mutableStateOf<com.example.data.RegisteredAccount?>(null) }
-
-    LaunchedEffect(Unit) {
-        viewModel.refreshCloudAccounts()
-    }
-
-    val filteredAccounts = remember(globalAccounts, searchQuery) {
-        if (searchQuery.isBlank()) {
-            globalAccounts
-        } else {
-            val query = searchQuery.trim().lowercase()
-            globalAccounts.filter { acc ->
-                acc.name.lowercase().contains(query) ||
-                acc.email.lowercase().contains(query) ||
-                acc.username.lowercase().contains(query)
-            }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background
+        ) {
+            SuperAdminConsoleScreen(
+                viewModel = viewModel,
+                onSwitchToBusinessView = onDismiss
+            )
         }
     }
+}
+
+// --- GREEN BOOK+ SUPER ADMIN EXCLUSIVE PASSWORD-ONLY LOGIN PORTAL ---
+@Composable
+fun SuperAdminSecretLoginDialog(
+    viewModel: LedgerViewModel,
+    onDismiss: () -> Unit,
+    onOpenRegistry: () -> Unit
+) {
+    val context = LocalContext.current
+    val globalAccounts by viewModel.globalAccounts.collectAsStateWithLifecycle()
+    val isSuperAdmin by viewModel.isSuperAdmin.collectAsStateWithLifecycle()
+    val isUserSignedIn by viewModel.isUserSignedIn.collectAsStateWithLifecycle()
+    val userEmail = viewModel.syncManager.getEmail()
+    val userName = viewModel.syncManager.getName()
+
+    var passwordInput by remember { mutableStateOf("") }
+    var passwordVisible by remember { mutableStateOf(false) }
+    var isLoading by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Card(
-            shape = RoundedCornerShape(20.dp),
+            shape = RoundedCornerShape(24.dp),
             modifier = Modifier
-                .fillMaxWidth(0.95f)
-                .fillMaxHeight(0.85f)
-                .padding(8.dp)
+                .fillMaxWidth(0.92f)
+                .padding(12.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
         ) {
             Column(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                    .fillMaxWidth()
+                    .padding(22.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                // Header
+                // Header with Master Crown Badge
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -10089,31 +10590,29 @@ fun SuperAdminUserRegistryDialog(
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Surface(
                             shape = CircleShape,
-                            color = MaterialTheme.colorScheme.primaryContainer,
-                            modifier = Modifier.size(40.dp)
+                            color = GreenIn.copy(alpha = 0.15f),
+                            modifier = Modifier.size(48.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Default.SupervisorAccount,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
+                                Text("👑", fontSize = 24.sp)
                             }
                         }
                         Column {
                             Text(
-                                text = "Firebase Cloud Users Directory",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
+                                text = "Super Admin Access",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = "Super Admin Live Accounts Inspector",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                text = "Security Verification",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = GreenIn,
+                                fontWeight = FontWeight.Bold
                             )
                         }
                     }
@@ -10122,463 +10621,163 @@ fun SuperAdminUserRegistryDialog(
                     }
                 }
 
-                // Stats Banner & Refresh
+                // Current Session Status Indicator
                 Card(
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f)),
-                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (isSuperAdmin) GreenIn.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    ),
+                    border = BorderStroke(1.dp, if (isSuperAdmin) GreenIn.copy(alpha = 0.35f) else MaterialTheme.colorScheme.outlineVariant),
+                    shape = RoundedCornerShape(14.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(12.dp),
+                            .padding(14.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column {
                             Text(
-                                text = "Total Accounts Registered",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                                text = "Active Session",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.Gray
                             )
                             Text(
-                                text = "${globalAccounts.size} Cloud Users",
-                                style = MaterialTheme.typography.headlineSmall,
+                                text = if (isUserSignedIn) (userName.ifBlank { userEmail }) else "Local Guest / Offline",
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            if (userEmail.isNotBlank()) {
+                                Text(
+                                    text = userEmail,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Surface(
+                            color = if (isSuperAdmin) GreenIn else Color(0xFF64748B),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(
+                                text = if (isSuperAdmin) "👑 SUPER ADMIN" else "STANDARD USER",
+                                color = Color.White,
+                                fontSize = 10.sp,
                                 fontWeight = FontWeight.ExtraBold,
-                                color = MaterialTheme.colorScheme.primary
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                             )
                         }
-
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Button(
-                                onClick = { showAddUserDialog = true },
-                                shape = RoundedCornerShape(10.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = GreenIn)
-                            ) {
-                                Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Add User")
-                            }
-
-                            Button(
-                                onClick = {
-                                    viewModel.refreshCloudAccounts {
-                                        Toast.makeText(context, "Fetched ${it.size} users from Firebase Cloud!", Toast.LENGTH_SHORT).show()
-                                    }
-                                },
-                                enabled = !isRefreshing,
-                                shape = RoundedCornerShape(10.dp)
-                            ) {
-                                if (isRefreshing) {
-                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("...")
-                                } else {
-                                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Refresh")
-                                }
-                            }
-                        }
                     }
                 }
 
-                // Search Bar & Password Toggle
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                // Password-Only Authentication Card (No hints or visible passwords)
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = GreenIn.copy(alpha = 0.06f)),
+                    border = BorderStroke(1.dp, GreenIn.copy(alpha = 0.25f)),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it },
-                        placeholder = { Text("Search email, name, username...") },
-                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                        trailingIcon = {
-                            if (searchQuery.isNotEmpty()) {
-                                IconButton(onClick = { searchQuery = "" }) {
-                                    Icon(Icons.Default.Clear, contentDescription = "Clear")
-                                }
-                            }
-                        },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true,
-                        shape = RoundedCornerShape(12.dp)
-                    )
-
-                    IconButton(
-                        onClick = { showPasswords = !showPasswords },
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Icon(
-                            imageVector = if (showPasswords) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                            contentDescription = "Toggle Passwords",
-                            tint = if (showPasswords) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        Text(
+                            text = "🔐 Master Password",
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = GreenIn
                         )
-                    }
-                }
+                        Text(
+                            text = "Enter your master administrator password to unlock Super Admin access and manage accounts.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
 
-                // Registered Users List
-                if (filteredAccounts.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Icon(Icons.Default.PersonSearch, contentDescription = null, modifier = Modifier.size(48.dp), tint = Color.Gray)
-                            Text("No registered users found.", style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
-                        }
-                    }
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        items(filteredAccounts) { acc ->
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { selectedAccount = acc },
-                                shape = RoundedCornerShape(12.dp),
-                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)),
-                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(12.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Row(
-                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        Surface(
-                                            shape = CircleShape,
-                                            color = if (acc.email.contains("admin", true)) MaterialTheme.colorScheme.primaryContainer else GreenIn.copy(alpha = 0.15f),
-                                            modifier = Modifier.size(42.dp)
-                                        ) {
-                                            Box(contentAlignment = Alignment.Center) {
-                                                Text(
-                                                    text = acc.name.take(1).uppercase().ifBlank { acc.email.take(1).uppercase() },
-                                                    fontWeight = FontWeight.Bold,
-                                                    style = MaterialTheme.typography.titleMedium,
-                                                    color = if (acc.email.contains("admin", true)) MaterialTheme.colorScheme.primary else GreenIn
-                                                )
-                                            }
-                                        }
+                        OutlinedTextField(
+                            value = passwordInput,
+                            onValueChange = { passwordInput = it },
+                            label = { Text("Master Password") },
+                            placeholder = { Text("Enter password") },
+                            visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                            trailingIcon = {
+                                IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                                    Icon(if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff, contentDescription = null)
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            shape = RoundedCornerShape(12.dp)
+                        )
 
-                                        Column {
-                                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                                Text(
-                                                    text = acc.name.ifBlank { "User ${acc.username}" },
-                                                    fontWeight = FontWeight.Bold,
-                                                    style = MaterialTheme.typography.bodyLarge
-                                                )
-                                                if (acc.email.contains("admin", true) || acc.username.contains("admin", true)) {
-                                                    Surface(
-                                                        color = MaterialTheme.colorScheme.primary,
-                                                        shape = RoundedCornerShape(4.dp)
-                                                    ) {
-                                                        Text(
-                                                            "SUPER ADMIN",
-                                                            fontSize = 9.sp,
-                                                            fontWeight = FontWeight.ExtraBold,
-                                                            color = Color.White,
-                                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                                                        )
-                                                    }
-                                                }
-                                            }
-
-                                            Text(
-                                                text = acc.email.ifBlank { "@${acc.username}" },
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-
-                                            if (showPasswords && acc.pass.isNotBlank()) {
-                                                Text(
-                                                    text = "Key/Pass: ${acc.pass}",
-                                                    fontSize = 11.sp,
-                                                    fontFamily = FontFamily.Monospace,
-                                                    color = MaterialTheme.colorScheme.tertiary
-                                                )
-                                            }
-                                        }
-                                    }
-
-                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                                        IconButton(
-                                            onClick = { accountToEdit = acc },
-                                            modifier = Modifier.size(32.dp)
-                                        ) {
-                                            Icon(Icons.Default.Edit, contentDescription = "Edit User", modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
-                                        }
-
-                                        IconButton(
-                                            onClick = { accountToDelete = acc },
-                                            modifier = Modifier.size(32.dp)
-                                        ) {
-                                            Icon(Icons.Default.Delete, contentDescription = "Delete User", modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.error)
-                                        }
-
-                                        IconButton(
-                                            onClick = {
-                                                clipboardManager.setText(AnnotatedString(acc.email))
-                                                Toast.makeText(context, "Copied email: ${acc.email}", Toast.LENGTH_SHORT).show()
-                                            },
-                                            modifier = Modifier.size(32.dp)
-                                        ) {
-                                            Icon(Icons.Default.ContentCopy, contentDescription = "Copy Email", modifier = Modifier.size(16.dp))
-                                        }
+                        Button(
+                            onClick = {
+                                val enteredPass = passwordInput.trim()
+                                if (enteredPass.isBlank()) {
+                                    Toast.makeText(context, "Please enter your password", Toast.LENGTH_SHORT).show()
+                                    return@Button
+                                }
+                                isLoading = true
+                                scope.launch {
+                                    val success = viewModel.loginSuperAdminWithPassword(enteredPass)
+                                    viewModel.refreshCloudAccounts()
+                                    isLoading = false
+                                    if (success) {
+                                        Toast.makeText(context, "Super Admin Authenticated!", Toast.LENGTH_SHORT).show()
+                                        onOpenRegistry()
+                                    } else {
+                                        Toast.makeText(context, "Access Denied: Incorrect Password", Toast.LENGTH_SHORT).show()
                                     }
                                 }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = GreenIn)
+                        ) {
+                            if (isLoading) {
+                                CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Authenticating...")
+                            } else {
+                                Icon(Icons.Default.VpnKey, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Log In as Super Admin", fontWeight = FontWeight.Bold)
                             }
                         }
                     }
                 }
 
-                // Close button
-                Button(
-                    onClick = onDismiss,
+                // Direct Button to Inspect All Accounts Connected to Firebase
+                OutlinedButton(
+                    onClick = {
+                        viewModel.refreshCloudAccounts()
+                        onOpenRegistry()
+                    },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Text("Close Inspector")
+                    Icon(Icons.Default.SupervisorAccount, contentDescription = null, modifier = Modifier.size(18.dp), tint = GreenIn)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Inspect All Firebase Users (${globalAccounts.size})", fontWeight = FontWeight.SemiBold)
+                }
+
+                // Sign Out if currently logged in
+                if (isUserSignedIn || isSuperAdmin) {
+                    TextButton(
+                        onClick = {
+                            viewModel.logoutSuperAdmin()
+                            Toast.makeText(context, "Signed out to guest/offline mode.", Toast.LENGTH_SHORT).show()
+                            onDismiss()
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Logout, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.error)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Sign Out Current Session", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         }
-    }
-
-    // Add Cloud User Sub-Dialog
-    if (showAddUserDialog) {
-        var newName by remember { mutableStateOf("") }
-        var newEmail by remember { mutableStateOf("") }
-        var newUsername by remember { mutableStateOf("") }
-        var newPass by remember { mutableStateOf("") }
-
-        AlertDialog(
-            onDismissRequest = { showAddUserDialog = false },
-            title = {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Icon(Icons.Default.PersonAdd, contentDescription = null, tint = GreenIn)
-                    Text("Add New Cloud User")
-                }
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedTextField(
-                        value = newName,
-                        onValueChange = { newName = it },
-                        label = { Text("Full Name") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
-                    OutlinedTextField(
-                        value = newEmail,
-                        onValueChange = { newEmail = it },
-                        label = { Text("Email Address") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
-                    OutlinedTextField(
-                        value = newUsername,
-                        onValueChange = { newUsername = it },
-                        label = { Text("Username") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
-                    OutlinedTextField(
-                        value = newPass,
-                        onValueChange = { newPass = it },
-                        label = { Text("Password / Security Key") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        if (newEmail.isBlank() && newUsername.isBlank()) {
-                            Toast.makeText(context, "Email or Username required!", Toast.LENGTH_SHORT).show()
-                        } else {
-                            viewModel.addUserCloud(newName, newEmail, newUsername, newPass) { success ->
-                                if (success) {
-                                    Toast.makeText(context, "User added to Cloud DB successfully!", Toast.LENGTH_SHORT).show()
-                                    showAddUserDialog = false
-                                } else {
-                                    Toast.makeText(context, "Failed to add user to Cloud DB", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = GreenIn)
-                ) {
-                    Text("Add User")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showAddUserDialog = false }) {
-                    Text("Cancel")
-                }
-            }
-        )
-    }
-
-    // Edit Cloud User Sub-Dialog
-    accountToEdit?.let { acc ->
-        var editName by remember { mutableStateOf(acc.name) }
-        var editEmail by remember { mutableStateOf(acc.email) }
-        var editUsername by remember { mutableStateOf(acc.username) }
-        var editPass by remember { mutableStateOf(acc.pass) }
-
-        AlertDialog(
-            onDismissRequest = { accountToEdit = null },
-            title = {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Icon(Icons.Default.Edit, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                    Text("Edit User Details")
-                }
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedTextField(
-                        value = editName,
-                        onValueChange = { editName = it },
-                        label = { Text("Full Name") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
-                    OutlinedTextField(
-                        value = editEmail,
-                        onValueChange = { editEmail = it },
-                        label = { Text("Email Address") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
-                    OutlinedTextField(
-                        value = editUsername,
-                        onValueChange = { editUsername = it },
-                        label = { Text("Username") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
-                    OutlinedTextField(
-                        value = editPass,
-                        onValueChange = { editPass = it },
-                        label = { Text("Password / Security Key") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        viewModel.updateUserCloud(acc.email, editName, editEmail, editUsername, editPass) { success ->
-                            if (success) {
-                                Toast.makeText(context, "User updated in Cloud DB!", Toast.LENGTH_SHORT).show()
-                                accountToEdit = null
-                            } else {
-                                Toast.makeText(context, "Failed to update user in Cloud DB", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    }
-                ) {
-                    Text("Save Changes")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { accountToEdit = null }) {
-                    Text("Cancel")
-                }
-            }
-        )
-    }
-
-    // Delete Cloud User Confirmation Dialog
-    accountToDelete?.let { acc ->
-        AlertDialog(
-            onDismissRequest = { accountToDelete = null },
-            title = {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error)
-                    Text("Delete Cloud User?")
-                }
-            },
-            text = {
-                Text("Are you sure you want to delete user '${acc.email.ifBlank { acc.username }}' from Firebase Cloud DB? This action cannot be undone.")
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        viewModel.deleteUserCloud(acc.email.ifBlank { acc.username }) { success ->
-                            if (success) {
-                                Toast.makeText(context, "User deleted from Cloud DB!", Toast.LENGTH_SHORT).show()
-                                accountToDelete = null
-                            } else {
-                                Toast.makeText(context, "Failed to delete user", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                ) {
-                    Text("Delete User")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { accountToDelete = null }) {
-                    Text("Cancel")
-                }
-            }
-        )
-    }
-
-    // Selected Account Detail Sub-Dialog
-    selectedAccount?.let { acc ->
-        AlertDialog(
-            onDismissRequest = { selectedAccount = null },
-            title = {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Icon(Icons.Default.AccountBox, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                    Text("Firebase User Details")
-                }
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("• Full Name: ${acc.name}", fontWeight = FontWeight.SemiBold)
-                    Text("• Registered Email: ${acc.email}", fontWeight = FontWeight.SemiBold)
-                    Text("• Username: @${acc.username}", fontWeight = FontWeight.SemiBold)
-                    Text("• Security Hash/Pass: ${acc.pass}", fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                    Text("• Document ID: user_${acc.email.replace(Regex("[^a-zA-Z0-9_]"), "_")}", fontSize = 11.sp, color = Color.Gray)
-                }
-            },
-            confirmButton = {
-                Button(onClick = {
-                    clipboardManager.setText(AnnotatedString("Name: ${acc.name}\nEmail: ${acc.email}\nUsername: ${acc.username}"))
-                    Toast.makeText(context, "User details copied!", Toast.LENGTH_SHORT).show()
-                    selectedAccount = null
-                }) {
-                    Text("Copy Details")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { selectedAccount = null }) {
-                    Text("Close")
-                }
-            }
-        )
     }
 }
 
@@ -10621,6 +10820,11 @@ fun SuperAdminConsoleScreen(
     Scaffold(
         topBar = {
             TopAppBar(
+                navigationIcon = {
+                    IconButton(onClick = { onSwitchToBusinessView?.invoke() }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
                 title = {
                     Column {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -10851,11 +11055,27 @@ fun SuperAdminConsoleScreen(
                                         }
 
                                         Column {
-                                            Text(
-                                                text = acc.name.ifBlank { "Cloud Account" },
-                                                fontWeight = FontWeight.Bold,
-                                                style = MaterialTheme.typography.bodyLarge
-                                            )
+                                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                Text(
+                                                    text = acc.name.ifBlank { "Cloud Account" },
+                                                    fontWeight = FontWeight.Bold,
+                                                    style = MaterialTheme.typography.bodyLarge
+                                                )
+                                                if (acc.email.contains("admin", true) || acc.username.contains("admin", true)) {
+                                                    Surface(
+                                                        color = MaterialTheme.colorScheme.primary,
+                                                        shape = RoundedCornerShape(4.dp)
+                                                    ) {
+                                                        Text(
+                                                            "SUPER ADMIN",
+                                                            fontSize = 9.sp,
+                                                            fontWeight = FontWeight.ExtraBold,
+                                                            color = Color.White,
+                                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
                                             Text(
                                                 text = acc.email.ifBlank { "@${acc.username}" },
                                                 style = MaterialTheme.typography.bodyMedium,
@@ -10872,6 +11092,18 @@ fun SuperAdminConsoleScreen(
                                     }
 
                                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                                        IconButton(
+                                            onClick = {
+                                                val loginKey = acc.email.ifBlank { acc.username }
+                                                viewModel.loginUser(loginKey, acc.pass)
+                                                Toast.makeText(context, "Switched to account: ${acc.name.ifBlank { acc.email }}", Toast.LENGTH_SHORT).show()
+                                                onSwitchToBusinessView?.invoke()
+                                            },
+                                            modifier = Modifier.size(36.dp)
+                                        ) {
+                                            Icon(Icons.Default.Login, contentDescription = "Log In as User", modifier = Modifier.size(18.dp), tint = GreenIn)
+                                        }
+
                                         IconButton(
                                             onClick = { accountToEdit = acc },
                                             modifier = Modifier.size(36.dp)

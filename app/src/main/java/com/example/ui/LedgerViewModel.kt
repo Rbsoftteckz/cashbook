@@ -591,6 +591,32 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         return success
     }
 
+    fun loginSuperAdminWithPassword(pass: String): Boolean {
+        val success = syncManager.loginSuperAdminWithPassword(pass)
+        if (success) {
+            updateAuthState()
+            _simulatedRole.value = "Boss"
+            viewModelScope.launch {
+                syncManager.loginUserCloud("admin", pass)
+                triggerCloudSync()
+            }
+        }
+        return success
+    }
+
+    fun loginUser(userOrEmail: String, pass: String): Boolean {
+        val success = syncManager.loginUser(userOrEmail, pass)
+        if (success) {
+            updateAuthState()
+            _simulatedRole.value = "Boss"
+            viewModelScope.launch {
+                syncManager.loginUserCloud(userOrEmail, pass)
+                triggerCloudSync()
+            }
+        }
+        return success
+    }
+
     fun logoutSuperAdmin() {
         syncManager.logoutSuperAdmin()
         updateAuthState()
@@ -850,8 +876,8 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
     // --- Digital Team Management Actions ---
 
-    fun addTeamMember(name: String, email: String, phone: String, role: String) {
-        val bizId = _activeBusiness.value?.id ?: 1
+    fun addTeamMember(name: String, email: String, phone: String, role: String, targetBusinessId: Int? = null) {
+        val bizId = targetBusinessId ?: _activeBusiness.value?.id ?: 1
         viewModelScope.launch {
             syncManager.removeTeamMemberFromTombstones(email)
             syncManager.markLocalDbModified()
