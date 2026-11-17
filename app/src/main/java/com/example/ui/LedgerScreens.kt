@@ -1173,10 +1173,12 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
     val activeBook by viewModel.activeBook.collectAsStateWithLifecycle()
     val allTransactions by viewModel.allTransactions.collectAsStateWithLifecycle()
     val simulatedRole by viewModel.simulatedRole.collectAsStateWithLifecycle()
+    val wasooliDueDates by viewModel.wasooliDueDates.collectAsStateWithLifecycle()
 
     var showTransactionDialog by remember { mutableStateOf<String?>(null) }
     var showAddBookDialog by remember { mutableStateOf(false) }
     var showBusinessSelectorDialog by remember { mutableStateOf(false) }
+    var showHomeBookSelector by remember { mutableStateOf(false) }
     var showAddBusinessDialog by remember { mutableStateOf(false) }
     var newBusinessName by remember { mutableStateOf("") }
     var dashboardSearchQuery by remember { mutableStateOf("") }
@@ -1311,6 +1313,95 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
             dismissButton = {
                 TextButton(onClick = { showAddBusinessDialog = false }) {
                     Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (showHomeBookSelector) {
+        AlertDialog(
+            onDismissRequest = { showHomeBookSelector = false },
+            title = {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Select Active Book", fontWeight = FontWeight.Bold)
+                    TextButton(onClick = {
+                        showHomeBookSelector = false
+                        showAddBookDialog = true
+                    }) {
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("New Book")
+                    }
+                }
+            },
+            text = {
+                if (books.isEmpty()) {
+                    Text("No books found in this business yet.")
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(books) { book ->
+                            val isSelected = book.id == activeBook?.id
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        viewModel.selectBook(book)
+                                        showHomeBookSelector = false
+                                    },
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+                                )
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(14.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.MenuBook,
+                                            contentDescription = null,
+                                            tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Column {
+                                            Text(
+                                                book.name,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                            )
+                                            if (book.phone.isNotBlank()) {
+                                                Text(
+                                                    book.phone,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+                                    }
+                                    if (isSelected) {
+                                        Icon(Icons.Default.Check, contentDescription = "Selected", tint = MaterialTheme.colorScheme.primary)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showHomeBookSelector = false }) {
+                    Text("Close")
                 }
             }
         )
@@ -1579,21 +1670,67 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                             }
                         }
 
-                        // Open Book Detail action
-                        if (activeBook != null) {
-                            FilledTonalButton(
-                                onClick = { viewModel.setScreen(Screen.UDHAR) },
+                        // Open Book Detail & Switch actions
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = { showHomeBookSelector = true },
                                 shape = RoundedCornerShape(10.dp),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                                modifier = Modifier.testTag("home_switch_active_book_btn")
                             ) {
-                                Text("Open Ledger", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Icon(Icons.Default.ArrowForward, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Icon(Icons.Default.SwapHoriz, contentDescription = "Switch Active Book", modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text("Switch", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                            }
+                            if (activeBook != null) {
+                                FilledTonalButton(
+                                    onClick = { viewModel.setScreen(Screen.UDHAR) },
+                                    shape = RoundedCornerShape(10.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                    modifier = Modifier.testTag("home_open_active_ledger_btn")
+                                ) {
+                                    Text("Open Ledger", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Icon(Icons.Default.ArrowForward, contentDescription = null, modifier = Modifier.size(14.dp))
+                                }
                             }
                         }
                     }
 
                     if (activeBook != null) {
+                        val activeDueMillis = wasooliDueDates[activeBook!!.id]
+                        if (activeDueMillis != null) {
+                            val dueFmt = SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(activeDueMillis))
+                            val isOverdueOrToday = activeDueMillis <= System.currentTimeMillis()
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (isOverdueOrToday) Color(0xFFFEE2E2) else Color(0xFFE0F2FE),
+                                modifier = Modifier.clickable { viewModel.setScreen(Screen.UDHAR) }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.EventAvailable,
+                                        contentDescription = "Wasooli Due Date",
+                                        tint = if (isOverdueOrToday) RedOut else Color(0xFF0284C7),
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Text(
+                                        text = if (isOverdueOrToday) "Wasooli Due: $dueFmt" else "Wasooli Scheduled: $dueFmt",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = if (isOverdueOrToday) RedOut else Color(0xFF0369A1)
+                                    )
+                                }
+                            }
+                        }
+
                         Spacer(modifier = Modifier.height(10.dp))
                         Surface(
                             shape = RoundedCornerShape(10.dp),
@@ -2034,11 +2171,17 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
     val selectedPaymentMethod by viewModel.selectedPaymentMethod.collectAsStateWithLifecycle()
     val selectedIds by viewModel.selectedTransactionIds.collectAsStateWithLifecycle()
     val simulatedRole by viewModel.simulatedRole.collectAsStateWithLifecycle()
+    val wasooliDueDates by viewModel.wasooliDueDates.collectAsStateWithLifecycle()
 
     var showTransactionDialog by remember { mutableStateOf<String?>(null) }
+    var prefillAmountForDialog by remember { mutableStateOf("") }
+    var prefillRemarksForDialog by remember { mutableStateOf("") }
     var selectedTxForEdit by remember { mutableStateOf<Transaction?>(null) }
     var showShareDialog by remember { mutableStateOf(false) }
     var showEditBookDialog by remember { mutableStateOf(false) }
+    var showWasooliDialog by remember { mutableStateOf(false) }
+    var showSearchBar by remember { mutableStateOf(false) }
+    var txTypeFilter by remember { mutableStateOf("ALL") } // "ALL", "IN", "OUT"
 
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
@@ -2047,15 +2190,24 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
     val totalIn = activeBookTransactions.filter { it.type == "IN" }.sumOf { it.amount }
     val totalOut = activeBookTransactions.filter { it.type == "OUT" }.sumOf { it.amount }
     val netBalance = totalIn - totalOut
+    val activeWasooliDueDate = activeBook?.id?.let { wasooliDueDates[it] }
 
     val inCategories = listOf("General", "Goods / Items", "Cash Received", "Payment", "Other")
     val outCategories = listOf("General", "Goods / Items", "Cash Paid", "Expense", "Other")
     val paymentMethods = listOf("Cash", "Online", "Bank")
 
-    val groupedTransactions = remember(filteredTransactions) {
+    val displayTransactions = remember(filteredTransactions, txTypeFilter) {
+        when (txTypeFilter) {
+            "IN" -> filteredTransactions.filter { it.type == "IN" }
+            "OUT" -> filteredTransactions.filter { it.type == "OUT" }
+            else -> filteredTransactions
+        }
+    }
+
+    val groupedTransactions = remember(displayTransactions) {
         val sdfKey = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
         val sdfHeader = SimpleDateFormat("EEEE, dd MMM yyyy", Locale.getDefault())
-        filteredTransactions.groupBy { tx ->
+        displayTransactions.groupBy { tx ->
             sdfKey.format(Date(tx.timestamp))
         }.entries.map { (dateKey, txList) ->
             val firstTimestamp = txList.firstOrNull()?.timestamp ?: System.currentTimeMillis()
@@ -2260,6 +2412,35 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                                 color = Color(0xFF64748B),
                                 fontWeight = FontWeight.Medium
                             )
+                            if (activeWasooliDueDate != null) {
+                                val dueStr = SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(activeWasooliDueDate))
+                                val isOverdue = activeWasooliDueDate <= System.currentTimeMillis()
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (isOverdue) Color(0xFFFEE2E2) else Color(0xFFE0F2FE),
+                                    modifier = Modifier.clickable { showWasooliDialog = true }
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.EventAvailable,
+                                            contentDescription = "Wasooli Date",
+                                            tint = if (isOverdue) RedOut else Color(0xFF0284C7),
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                        Text(
+                                            text = if (isOverdue) "Wasooli Due: $dueStr" else "Wasooli: $dueStr",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isOverdue) RedOut else Color(0xFF0369A1)
+                                        )
+                                    }
+                                }
+                            }
                         }
 
                         // Orange REMIND Button
@@ -2267,7 +2448,10 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                             onClick = {
                                 val phone = activeBook?.phone ?: ""
                                 val customerName = activeBook?.name ?: "Customer"
-                                val remMsg = "Assalam-o-Alaikum $customerName, aap ki taraf Rs. ${String.format("%,.0f", kotlin.math.abs(netBalance))} ka Udhar baqi hai. Baraye meherbani jald ada karein. Shukriya!"
+                                val dueLine = if (activeWasooliDueDate != null) {
+                                    " Wasooli tareekh: ${SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(activeWasooliDueDate))}."
+                                } else ""
+                                val remMsg = "Assalam-o-Alaikum $customerName, aap ki taraf Rs. ${String.format("%,.0f", kotlin.math.abs(netBalance))} ka Udhar baqi hai.$dueLine Baraye meherbani jald ada karein. Shukriya!"
                                 val sendIntent = Intent().apply {
                                     action = Intent.ACTION_SEND
                                     putExtra(Intent.EXTRA_TEXT, remMsg)
@@ -2284,11 +2468,12 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C)),
                             shape = RoundedCornerShape(20.dp),
-                            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 8.dp)
+                            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 8.dp),
+                            modifier = Modifier.testTag("remind_button")
                         ) {
                             Text("REMIND", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.White)
                             Spacer(modifier = Modifier.width(4.dp))
-                            Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                            Icon(Icons.Default.Send, contentDescription = null, tint = Color.White, modifier = Modifier.size(15.dp))
                         }
                     }
 
@@ -2296,29 +2481,72 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                     HorizontalDivider(color = Color(0xFFF1F5F9))
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // 4 Quick Feature Icons (Wasooli, Easypaisa/Easypay, Pay bills, Vouchers)
+                    // 4 Real Working Khata Quick Actions (Wasooli, Call, Settle, Search)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceAround
                     ) {
-                        listOf(
-                            Triple("Wasooli", Icons.Default.CalendarToday, Color(0xFF0284C7)),
-                            Triple("Easyload", Icons.Default.ElectricBolt, Color(0xFF0284C7)),
-                            Triple("Pay bills", Icons.Default.ReceiptLong, Color(0xFFD97706)),
-                            Triple("Vouchers", Icons.Default.ConfirmationNumber, Color(0xFF0D9488))
-                        ).forEach { (label, icon, color) ->
+                        val isSearchActive = showSearchBar || searchQuery.isNotBlank() || txTypeFilter != "ALL"
+                        val actions = listOf(
+                            Triple("Wasooli", Icons.Default.EventAvailable, Color(0xFF0284C7)),
+                            Triple("Call", Icons.Default.Call, Color(0xFF0D9488)),
+                            Triple("Settle", Icons.Default.CheckCircleOutline, Color(0xFF16A34A)),
+                            Triple("Search", Icons.Default.Search, Color(0xFFD97706))
+                        )
+                        actions.forEach { (label, icon, color) ->
+                            val highlighted = (label == "Wasooli" && activeWasooliDueDate != null) ||
+                                    (label == "Search" && isSearchActive)
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 modifier = Modifier
+                                    .minimumInteractiveComponentSize()
                                     .clickable {
-                                        Toast.makeText(context, "$label feature active", Toast.LENGTH_SHORT).show()
+                                        when (label) {
+                                            "Wasooli" -> {
+                                                if (activeBook == null) {
+                                                    Toast.makeText(context, "Select a customer book first", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    showWasooliDialog = true
+                                                }
+                                            }
+                                            "Call" -> {
+                                                val phone = activeBook?.phone?.trim() ?: ""
+                                                if (phone.isBlank()) {
+                                                    Toast.makeText(context, "Add customer phone number to call", Toast.LENGTH_SHORT).show()
+                                                    showEditBookDialog = true
+                                                } else {
+                                                    try {
+                                                        val dialIntent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phone"))
+                                                        context.startActivity(dialIntent)
+                                                    } catch (e: Exception) {
+                                                        Toast.makeText(context, "Unable to open phone dialer", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                }
+                                            }
+                                            "Settle" -> {
+                                                if (!hasPermission(simulatedRole, "add_transaction")) {
+                                                    Toast.makeText(context, "Unauthorized role: Read-only partners cannot add entries.", Toast.LENGTH_SHORT).show()
+                                                } else if (kotlin.math.abs(netBalance) < 0.5) {
+                                                    Toast.makeText(context, "Khata balance is already Rs. 0 (Settled)", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    val absBal = kotlin.math.abs(netBalance)
+                                                    prefillAmountForDialog = if (absBal % 1.0 == 0.0) absBal.toLong().toString() else String.format(Locale.US, "%.2f", absBal)
+                                                    prefillRemarksForDialog = "Full Settlement / Khata Clear"
+                                                    showTransactionDialog = if (netBalance < 0) "IN" else "OUT"
+                                                }
+                                            }
+                                            "Search" -> {
+                                                showSearchBar = !showSearchBar
+                                            }
+                                        }
                                     }
                                     .padding(4.dp)
+                                    .testTag("quick_action_${label.lowercase()}")
                             ) {
                                 Surface(
                                     shape = CircleShape,
-                                    color = Color.White,
-                                    border = BorderStroke(1.5.dp, color.copy(alpha = 0.5f)),
+                                    color = if (highlighted) color.copy(alpha = 0.14f) else Color.White,
+                                    border = BorderStroke(if (highlighted) 2.dp else 1.5.dp, if (highlighted) color else color.copy(alpha = 0.5f)),
                                     modifier = Modifier.size(44.dp)
                                 ) {
                                     Box(contentAlignment = Alignment.Center) {
@@ -2326,8 +2554,61 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                                     }
                                 }
                                 Spacer(modifier = Modifier.height(4.dp))
-                                Text(label, style = MaterialTheme.typography.labelSmall, color = Color(0xFF475569))
+                                Text(
+                                    label,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (highlighted) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (highlighted) color else Color(0xFF475569)
+                                )
                             }
+                        }
+                    }
+                }
+            }
+
+            // Expandable Search & Filter Bar
+            AnimatedVisibility(visible = showSearchBar || searchQuery.isNotBlank() || txTypeFilter != "ALL") {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { viewModel.setSearchQuery(it) },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                        trailingIcon = {
+                            if (searchQuery.isNotEmpty() || showSearchBar) {
+                                IconButton(onClick = {
+                                    viewModel.setSearchQuery("")
+                                    txTypeFilter = "ALL"
+                                    showSearchBar = false
+                                }) {
+                                    Icon(Icons.Default.Close, contentDescription = "Close search")
+                                }
+                            }
+                        },
+                        placeholder = { Text("Search remarks or category...") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("search_field"),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf("ALL" to "All", "IN" to "Maine Liye", "OUT" to "Maine Diye").forEach { (key, title) ->
+                            FilterChip(
+                                selected = txTypeFilter == key,
+                                onClick = { txTypeFilter = key },
+                                label = { Text(title, fontSize = 12.sp) },
+                                leadingIcon = if (txTypeFilter == key) {
+                                    { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(14.dp)) }
+                                } else null
+                            )
                         }
                     }
                 }
@@ -2356,7 +2637,7 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
             }
 
             // Ledger Entries List Daywise
-            if (filteredTransactions.isEmpty()) {
+            if (displayTransactions.isEmpty()) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -2479,6 +2760,8 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                 Button(
                     onClick = {
                         if (hasPermission(simulatedRole, "add_transaction")) {
+                            prefillAmountForDialog = ""
+                            prefillRemarksForDialog = ""
                             showTransactionDialog = "IN"
                         } else {
                             Toast.makeText(context, "Unauthorized role: Read-only partners cannot add entries.", Toast.LENGTH_SHORT).show()
@@ -2500,6 +2783,8 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                 Button(
                     onClick = {
                         if (hasPermission(simulatedRole, "add_transaction")) {
+                            prefillAmountForDialog = ""
+                            prefillRemarksForDialog = ""
                             showTransactionDialog = "OUT"
                         } else {
                             Toast.makeText(context, "Unauthorized role: Read-only partners cannot add entries.", Toast.LENGTH_SHORT).show()
@@ -2528,10 +2813,21 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                 type = type,
                 categories = categories,
                 paymentMethods = paymentMethods,
-                onDismiss = { showTransactionDialog = null },
+                initialAmount = prefillAmountForDialog,
+                initialRemarks = prefillRemarksForDialog,
+                onDismiss = {
+                    showTransactionDialog = null
+                    prefillAmountForDialog = ""
+                    prefillRemarksForDialog = ""
+                },
                 onSave = { amount, category, method, remarks, receiptUri, timestamp ->
                     viewModel.addTransaction(amount, type, category, method, remarks, receiptUri, timestamp)
+                    if (prefillRemarksForDialog.contains("Settlement") && activeBook != null) {
+                        viewModel.setWasooliDueDate(activeBook!!.id, null)
+                    }
                     showTransactionDialog = null
+                    prefillAmountForDialog = ""
+                    prefillRemarksForDialog = ""
                 }
             )
         }
@@ -2590,7 +2886,205 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                 }
             )
         }
+
+        // Wasooli Collection Scheduler Dialog
+        if (showWasooliDialog && activeBook != null) {
+            WasooliScheduleDialog(
+                customerName = activeBook!!.name,
+                customerPhone = activeBook!!.phone,
+                netBalance = netBalance,
+                currentDueDate = activeWasooliDueDate,
+                onDismiss = { showWasooliDialog = false },
+                onSaveDueDate = { millis ->
+                    viewModel.setWasooliDueDate(activeBook!!.id, millis)
+                    showWasooliDialog = false
+                    if (millis == null) {
+                        Toast.makeText(context, "Wasooli due date cleared", Toast.LENGTH_SHORT).show()
+                    } else {
+                        val fmt = SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(millis))
+                        Toast.makeText(context, "Wasooli date saved: $fmt", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                onRecordCollectionNow = {
+                    showWasooliDialog = false
+                    if (hasPermission(simulatedRole, "add_transaction")) {
+                        val absBal = kotlin.math.abs(netBalance)
+                        prefillAmountForDialog = if (absBal > 0) {
+                            if (absBal % 1.0 == 0.0) absBal.toLong().toString() else String.format(Locale.US, "%.2f", absBal)
+                        } else ""
+                        prefillRemarksForDialog = "Wasooli Collection"
+                        showTransactionDialog = "IN"
+                    } else {
+                        Toast.makeText(context, "Unauthorized role", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            )
+        }
     }
+}
+
+@Composable
+fun WasooliScheduleDialog(
+    customerName: String,
+    customerPhone: String,
+    netBalance: Double,
+    currentDueDate: Long?,
+    onDismiss: () -> Unit,
+    onSaveDueDate: (Long?) -> Unit,
+    onRecordCollectionNow: () -> Unit
+) {
+    val context = LocalContext.current
+    var selectedDateMillis by remember(currentDueDate) {
+        mutableStateOf(
+            currentDueDate ?: Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, 7) }.timeInMillis
+        )
+    }
+
+    val calendar = remember(selectedDateMillis) {
+        Calendar.getInstance().apply { timeInMillis = selectedDateMillis }
+    }
+    val datePicker = remember(context, selectedDateMillis) {
+        DatePickerDialog(
+            context,
+            { _, year, month, dayOfMonth ->
+                val cal = Calendar.getInstance().apply {
+                    set(Calendar.YEAR, year)
+                    set(Calendar.MONTH, month)
+                    set(Calendar.DAY_OF_MONTH, dayOfMonth)
+                    set(Calendar.HOUR_OF_DAY, 23)
+                    set(Calendar.MINUTE, 59)
+                }
+                selectedDateMillis = cal.timeInMillis
+            },
+            calendar.get(Calendar.YEAR),
+            calendar.get(Calendar.MONTH),
+            calendar.get(Calendar.DAY_OF_MONTH)
+        )
+    }
+
+    val formattedSelected = SimpleDateFormat("EEE, dd MMM yyyy", Locale.getDefault()).format(Date(selectedDateMillis))
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(Icons.Default.EventAvailable, contentDescription = null, tint = Color(0xFF0284C7))
+                Text("Wasooli Schedule", fontWeight = FontWeight.Bold)
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    text = "Set payment collection date for $customerName (Balance: Rs. ${String.format("%,.0f", kotlin.math.abs(netBalance))})",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                // Selected date preview & calendar button
+                OutlinedCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { datePicker.show() }
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text("Collection Date", style = MaterialTheme.typography.labelSmall, color = Color(0xFF0284C7))
+                            Text(formattedSelected, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
+                        }
+                        Icon(Icons.Default.CalendarMonth, contentDescription = "Pick Date", tint = Color(0xFF0284C7))
+                    }
+                }
+
+                // Quick presets
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf("Tomorrow" to 1, "In 7 Days" to 7, "In 30 Days" to 30).forEach { (lbl, days) ->
+                        AssistChip(
+                            onClick = {
+                                val cal = Calendar.getInstance().apply {
+                                    add(Calendar.DAY_OF_YEAR, days)
+                                    set(Calendar.HOUR_OF_DAY, 23)
+                                    set(Calendar.MINUTE, 59)
+                                }
+                                selectedDateMillis = cal.timeInMillis
+                            },
+                            label = { Text(lbl, fontSize = 11.sp) }
+                        )
+                    }
+                }
+
+                // Quick actions: Send Reminder with Date OR Collect Now
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            val dateOnly = SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(selectedDateMillis))
+                            val msg = "Assalam-o-Alaikum $customerName, aap ki Wasooli tareekh $dateOnly muqarrar hai. Baqi raqam: Rs. ${String.format("%,.0f", kotlin.math.abs(netBalance))}. Shukriya!"
+                            val sendIntent = Intent().apply {
+                                action = Intent.ACTION_SEND
+                                putExtra(Intent.EXTRA_TEXT, msg)
+                                type = "text/plain"
+                                if (customerPhone.isNotBlank()) {
+                                    putExtra("jid", "${customerPhone.replace("+", "").replace("-", "").replace(" ", "")}@s.whatsapp.net")
+                                }
+                            }
+                            try {
+                                context.startActivity(Intent.createChooser(sendIntent, "Send Wasooli Reminder"))
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Could not open sharing app", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                    ) {
+                        Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Remind", fontSize = 12.sp)
+                    }
+
+                    FilledTonalButton(
+                        onClick = onRecordCollectionNow,
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                    ) {
+                        Icon(Icons.Default.Payments, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Collect Now", fontSize = 12.sp)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSaveDueDate(selectedDateMillis) },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7))
+            ) {
+                Text("Save Date")
+            }
+        },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (currentDueDate != null) {
+                    TextButton(onClick = { onSaveDueDate(null) }) {
+                        Text("Clear", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Cancel")
+                }
+            }
+        }
+    )
 }
 
 @Composable
@@ -2740,15 +3234,28 @@ fun TransactionItemCard(
                             }
                         }
 
-                        // Right-hand Amount display with green/red formatting
+                        // Right-hand Amount display with green/red formatting & Liye/Diye tag
                         Column(horizontalAlignment = Alignment.End) {
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = if (transaction.type == "IN") Color(0xFFDCFCE7) else Color(0xFFFFEDD5)
+                            ) {
+                                Text(
+                                    text = if (transaction.type == "IN") "MAINE LIYE" else "MAINE DIYE",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (transaction.type == "IN") Color(0xFF15803D) else Color(0xFFC2410C),
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
                             Text(
                                 text = "Rs. ${String.format("%,.0f", transaction.amount)}",
                                 fontWeight = FontWeight.ExtraBold,
                                 style = MaterialTheme.typography.titleMedium,
                                 color = if (transaction.type == "IN") Color(0xFF16A34A) else Color(0xFFEA580C)
                             )
-                            Spacer(modifier = Modifier.height(4.dp))
+                            Spacer(modifier = Modifier.height(2.dp))
                             TransactionSyncCheckIndicator(isSynced = transaction.isSynced)
                         }
                     }

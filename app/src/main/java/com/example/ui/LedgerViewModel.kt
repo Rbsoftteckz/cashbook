@@ -1066,6 +1066,36 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         _securityAnswer.value = ""
         _isAppUnlocked.value = true
     }
+
+    // --- WASOOLI (COLLECTION DUE DATES) PER BOOK ---
+    private val wasooliPrefs = getApplication<Application>().getSharedPreferences("wasooli_due_dates", android.content.Context.MODE_PRIVATE)
+
+    private fun loadWasooliDueDates(): Map<Int, Long> {
+        val result = mutableMapOf<Int, Long>()
+        for ((key, value) in wasooliPrefs.all) {
+            val bookId = key.removePrefix("book_").toIntOrNull()
+            val timestamp = (value as? Long)
+            if (bookId != null && timestamp != null && timestamp > 0L) {
+                result[bookId] = timestamp
+            }
+        }
+        return result
+    }
+
+    private val _wasooliDueDates = MutableStateFlow(loadWasooliDueDates())
+    val wasooliDueDates: StateFlow<Map<Int, Long>> = _wasooliDueDates.asStateFlow()
+
+    fun setWasooliDueDate(bookId: Int, dueDateMillis: Long?) {
+        val editor = wasooliPrefs.edit()
+        if (dueDateMillis == null || dueDateMillis <= 0L) {
+            editor.remove("book_$bookId")
+            _wasooliDueDates.value = _wasooliDueDates.value - bookId
+        } else {
+            editor.putLong("book_$bookId", dueDateMillis)
+            _wasooliDueDates.value = _wasooliDueDates.value + (bookId to dueDateMillis)
+        }
+        editor.apply()
+    }
 }
 
 data class ChatMessage(
