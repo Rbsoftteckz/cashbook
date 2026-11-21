@@ -10,6 +10,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 data class RegisteredAccount(
@@ -19,8 +21,31 @@ data class RegisteredAccount(
     val pass: String
 )
 
+data class TeamInviteRecord(
+    val inviteCode: String,
+    val ownerEmail: String,
+    val ownerDocId: String,
+    val businessName: String,
+    val businessCreatedAt: Long,
+    val invitedEmail: String,
+    val invitedName: String,
+    val role: String,
+    val status: String = "PENDING",
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+data class SharedWorkspaceRef(
+    val ownerDocId: String,
+    val ownerEmail: String,
+    val businessName: String,
+    val businessCreatedAt: Long,
+    val role: String,
+    val inviteCode: String
+)
+
 class GoogleDriveSyncManager(private val context: Context) {
 
+    private val syncMutex = Mutex()
     private val prefs = context.getSharedPreferences("google_drive_sync_prefs", Context.MODE_PRIVATE)
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -479,18 +504,18 @@ class GoogleDriveSyncManager(private val context: Context) {
             ?: getGlobalAccounts().find { it.email.lowercase() == cleanEmail || (cleanUser.isNotBlank() && it.username.lowercase() == cleanUser) }
 
         if (existingAcc != null) {
-            Log.i("GoogleDriveSyncManager", "Account already exists for $cleanEmail. Restoring existing account data instead of creating default.")
-            registerUser(existingAcc.name, existingAcc.email, existingAcc.username, if (cleanPass.isNotBlank()) cleanPass else existingAcc.pass)
+            val storedPass = existingAcc.pass.trim()
+            if (storedPass.isNotBlank() && storedPass != cleanPass) {
+                return@withContext Pair(false, "An account with email '$cleanEmail' already exists. Please switch to Sign In with your password (or use Forgot Password).")
+            }
+            Log.i("GoogleDriveSyncManager", "Existing account verified for $cleanEmail. Restoring account session.")
+            registerUser(existingAcc.name.ifBlank { name.trim() }, existingAcc.email, existingAcc.username, cleanPass.ifBlank { storedPass })
             return@withContext Pair(true, "EXISTING_ACCOUNT_RESTORED")
         }
 
         val acc = RegisteredAccount(name.trim(), cleanEmail, cleanUser, cleanPass)
 
-        // 4. Register locally & push to Online Cloud Master Database
-        registerUser(name.trim(), cleanEmail, cleanUser, cleanPass)
-        syncUserToMasterCloud(acc)
-
-        // 5. Try Firebase Auth API
+        // 4. Try Firebase Auth API first so existing Auth emails cannot be overwritten silently
         try {
             val url = "https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=$firebaseApiKey"
             val payload = JSONObject().apply {
@@ -499,6 +524,7 @@ class GoogleDriveSyncManager(private val context: Context) {
                 put("returnSecureToken", true)
             }.toString().toRequestBody("application/json".toMediaType())
             val req = Request.Builder().url(url).post(payload).build()
+            var authEmailAlreadyExists = false
             client.newCall(req).execute().use { response ->
                 val bodyStr = response.body?.string() ?: ""
                 if (response.isSuccessful) {
@@ -507,11 +533,44 @@ class GoogleDriveSyncManager(private val context: Context) {
                     if (idToken.isNotBlank()) {
                         prefs.edit().putString("firebase_auth_token", idToken).apply()
                     }
+                } else if (bodyStr.contains("EMAIL_EXISTS")) {
+                    authEmailAlreadyExists = true
                 }
+            }
+            if (authEmailAlreadyExists) {
+                // Verify credentials via signInWithPassword before restoring
+                val signInUrl = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=$firebaseApiKey"
+                val signInPayload = JSONObject().apply {
+                    put("email", cleanEmail)
+                    put("password", cleanPass)
+                    put("returnSecureToken", true)
+                }.toString().toRequestBody("application/json".toMediaType())
+                var verifiedExisting = false
+                client.newCall(Request.Builder().url(signInUrl).post(signInPayload).build()).execute().use { res ->
+                    val b = res.body?.string() ?: ""
+                    if (res.isSuccessful && b.isNotBlank()) {
+                        val json = JSONObject(b)
+                        val idToken = json.optString("idToken", "")
+                        if (idToken.isNotBlank()) {
+                            prefs.edit().putString("firebase_auth_token", idToken).apply()
+                        }
+                        verifiedExisting = true
+                    }
+                }
+                if (!verifiedExisting) {
+                    return@withContext Pair(false, "An account with email '$cleanEmail' already exists. Please switch to Sign In with your password (or use Forgot Password).")
+                }
+                registerUser(name.trim(), cleanEmail, cleanUser, cleanPass)
+                syncUserToMasterCloud(acc)
+                return@withContext Pair(true, "EXISTING_ACCOUNT_RESTORED")
             }
         } catch (e: Exception) {
             Log.e("GoogleDriveSyncManager", "Firebase Auth sign up notice", e)
         }
+
+        // 5. Register locally & push to Online Cloud Master Database
+        registerUser(name.trim(), cleanEmail, cleanUser, cleanPass)
+        syncUserToMasterCloud(acc)
 
         // 6. Push to Firestore
         val docId = "user_" + cleanEmail.replace(Regex("[^a-zA-Z0-9_]"), "_")
@@ -586,18 +645,23 @@ class GoogleDriveSyncManager(private val context: Context) {
         val matched = cloudAccounts.find { acc ->
             val accEmail = acc.email.trim().lowercase()
             val accUser = acc.username.trim().lowercase()
-            val accName = acc.name.trim().lowercase()
             accEmail == cleanInput ||
             accUser == cleanInput ||
-            accName == cleanInput ||
             (accEmail.contains("@") && accEmail.substringBefore("@") == cleanInput)
         }
 
         if (matched != null) {
             // Strict password check
-            val passMatches = matched.pass.trim() == cleanPass ||
-                              (matched.pass.isBlank() && cleanPass.isBlank()) ||
-                              (cleanInput == "admin" && (cleanPass == "admin123" || cleanPass == "superadmin123"))
+            val isAdminAccount = matched.email.equals("admin@cashbook.com", ignoreCase = true) ||
+                matched.username.equals("admin", ignoreCase = true) ||
+                matched.username.equals("superadmin", ignoreCase = true)
+            val passMatches = if (isAdminAccount) {
+                cleanPass == getSuperAdminMasterPassword() ||
+                    (matched.pass.isNotBlank() && cleanPass == matched.pass.trim())
+            } else {
+                matched.pass.trim() == cleanPass ||
+                    (matched.pass.isBlank() && cleanPass.isBlank())
+            }
             if (passMatches) {
                 val passToUse = if (cleanPass.isNotBlank()) cleanPass else matched.pass
                 registerUser(matched.name, matched.email, matched.username, passToUse)
@@ -612,6 +676,9 @@ class GoogleDriveSyncManager(private val context: Context) {
 
     suspend fun resetPasswordCloud(userOrEmail: String, newPass: String): Boolean = withContext(Dispatchers.IO) {
         val cleanInput = userOrEmail.trim().lowercase()
+        if (cleanInput == "admin" || cleanInput == "superadmin" || cleanInput == "admin@cashbook.com") {
+            return@withContext false
+        }
         val cloudAccounts = fetchFirebaseAccountsCloud()
         val targetAcc = cloudAccounts.find { it.email.lowercase() == cleanInput || it.username.lowercase() == cleanInput }
                        ?: getGlobalAccounts().find { it.email.lowercase() == cleanInput || it.username.lowercase() == cleanInput }
@@ -671,10 +738,53 @@ class GoogleDriveSyncManager(private val context: Context) {
         }
 
         if (list.none { it.email.equals("admin@cashbook.com", ignoreCase = true) || it.username.equals("admin", ignoreCase = true) }) {
-            list.add(0, RegisteredAccount("Admin", "admin@cashbook.com", "admin", "superadmin123"))
+            list.add(0, RegisteredAccount("Admin", "admin@cashbook.com", "admin", getSuperAdminMasterPassword()))
         }
 
         return list
+    }
+
+    fun getSuperAdminMasterPassword(): String {
+        val customMaster = prefs.getString("super_admin_master_password", "")?.trim() ?: ""
+        if (customMaster.isNotBlank()) return customMaster
+        // Check if admin account already has a password persisted in registered_accounts_json
+        val jsonStr = prefs.getString("registered_accounts_json", "[]") ?: "[]"
+        try {
+            val arr = JSONArray(jsonStr)
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                val e = obj.optString("email", "")
+                val u = obj.optString("username", "")
+                val p = obj.optString("pass", "").trim()
+                if ((e.equals("admin@cashbook.com", ignoreCase = true) || u.equals("admin", ignoreCase = true)) && p.isNotBlank()) {
+                    return p
+                }
+            }
+        } catch (_: Exception) { }
+        return "superadmin123"
+    }
+
+    fun setSuperAdminMasterPassword(newPass: String): Boolean {
+        val trimmed = newPass.trim()
+        if (trimmed.length < 4) return false
+        prefs.edit().putString("super_admin_master_password", trimmed).apply()
+
+        val accounts = getGlobalAccounts().toMutableList()
+        val idx = accounts.indexOfFirst {
+            it.email.equals("admin@cashbook.com", ignoreCase = true) || it.username.equals("admin", ignoreCase = true)
+        }
+        if (idx >= 0) {
+            val existing = accounts[idx]
+            accounts[idx] = existing.copy(pass = trimmed)
+        } else {
+            accounts.add(0, RegisteredAccount("Super Admin", "admin@cashbook.com", "admin", trimmed))
+        }
+        saveGlobalAccounts(accounts)
+
+        if (isSuperAdminLoggedIn()) {
+            prefs.edit().putString("user_password", trimmed).apply()
+        }
+        return true
     }
 
     fun saveGlobalAccounts(accounts: List<RegisteredAccount>) {
@@ -808,18 +918,22 @@ class GoogleDriveSyncManager(private val context: Context) {
         val matchedAccount = globalAccounts.firstOrNull { acc ->
             val accEmail = acc.email.trim().lowercase()
             val accUser = acc.username.trim().lowercase()
-            val accName = acc.name.trim().lowercase()
 
             trimmedUser == accEmail ||
             (accEmail.contains("@") && trimmedUser == accEmail.substringBefore("@")) ||
-            trimmedUser == accUser ||
-            trimmedUser == accName
+            trimmedUser == accUser
         }
 
         if (matchedAccount != null) {
-            val passMatches = matchedAccount.pass.trim() == trimmedPass ||
-                              (matchedAccount.pass.isBlank() && trimmedPass.isBlank()) ||
-                              (trimmedUser == "admin" && (trimmedPass == "admin123" || trimmedPass == "superadmin123"))
+            val isAdminEntry = matchedAccount.email.equals("admin@cashbook.com", ignoreCase = true) ||
+                matchedAccount.username.equals("admin", ignoreCase = true)
+            val passMatches = if (isAdminEntry) {
+                trimmedPass == getSuperAdminMasterPassword() ||
+                    (matchedAccount.pass.isNotBlank() && trimmedPass == matchedAccount.pass.trim())
+            } else {
+                matchedAccount.pass.trim() == trimmedPass ||
+                    (matchedAccount.pass.isBlank() && trimmedPass.isBlank())
+            }
 
             if (passMatches) {
                 registerUser(matchedAccount.name, matchedAccount.email, matchedAccount.username, if (trimmedPass.isNotBlank()) trimmedPass else matchedAccount.pass)
@@ -829,8 +943,8 @@ class GoogleDriveSyncManager(private val context: Context) {
         }
 
         if ((trimmedUser == "admin" || trimmedUser == "superadmin" || trimmedUser == "admin@cashbook.com") &&
-            (trimmedPass == "admin123" || trimmedPass == "superadmin123" || trimmedPass.isBlank())) {
-            registerUser("Admin", "admin@cashbook.com", "admin", if (trimmedPass.isNotBlank()) trimmedPass else "superadmin123")
+            trimmedPass == getSuperAdminMasterPassword()) {
+            registerUser("Super Admin", "admin@cashbook.com", "admin", trimmedPass)
             return true
         }
 
@@ -841,17 +955,22 @@ class GoogleDriveSyncManager(private val context: Context) {
 
     fun loginSuperAdminWithPassword(pass: String): Boolean {
         val trimmed = pass.trim()
-        val globalAccounts = getGlobalAccounts()
-        val adminAccount = globalAccounts.firstOrNull { it.username.equals("admin", true) || it.email.contains("admin", true) }
+        if (trimmed.isBlank()) return false
 
-        val isValid = if (adminAccount != null && adminAccount.pass.isNotBlank()) {
-            trimmed == adminAccount.pass || trimmed.equals("admin123", true) || trimmed.equals("superadmin123", true) || trimmed.equals("admin", true) || trimmed == "123456"
+        val masterPass = getSuperAdminMasterPassword()
+        val globalAccounts = getGlobalAccounts()
+        val adminAccount = globalAccounts.firstOrNull {
+            it.email.equals("admin@cashbook.com", ignoreCase = true) || it.username.equals("admin", ignoreCase = true)
+        }
+        val hasCustomMaster = !prefs.getString("super_admin_master_password", "").isNullOrBlank()
+        val isValid = if (hasCustomMaster) {
+            trimmed == masterPass
         } else {
-            trimmed.equals("admin123", true) || trimmed.equals("superadmin123", true) || trimmed.equals("admin", true) || trimmed == "123456" || (trimmed.isNotBlank() && trimmed.length >= 4)
+            trimmed == masterPass || (adminAccount != null && adminAccount.pass.isNotBlank() && trimmed == adminAccount.pass.trim())
         }
 
         if (isValid) {
-            registerUser("Super Admin", "admin@cashbook.com", "admin", if (trimmed.isNotBlank()) trimmed else "admin123")
+            registerUser("Super Admin", "admin@cashbook.com", "admin", masterPass)
             return true
         }
         return false
@@ -862,6 +981,9 @@ class GoogleDriveSyncManager(private val context: Context) {
         prefs.edit()
             .putBoolean("is_user_logged_in", false)
             .putBoolean("is_super_admin", false)
+            .putBoolean("user_has_modified_local_db", false)
+            .putLong("local_db_last_modified_ts", 0L)
+            .putLong("local_db_last_synced_ts", 0L)
             .remove("user_email")
             .remove("username")
             .remove("user_name")
@@ -908,12 +1030,6 @@ class GoogleDriveSyncManager(private val context: Context) {
         // 4. Static admin identifiers
         if (target == "admin@cashbook.com" || target == "admin" || target == "superadmin") return true
 
-        // 5. Team members list
-        if (teamMembers.any {
-            val tmEmail = it.email.trim().lowercase()
-            target == tmEmail || (tmEmail.contains("@") && target == tmEmail.substringBefore("@"))
-        }) return true
-
         return false
     }
 
@@ -921,6 +1037,7 @@ class GoogleDriveSyncManager(private val context: Context) {
         val trimmed = userOrEmail.trim().lowercase()
         val newTrimmedPass = newPass.trim()
         if (trimmed.isBlank() || newTrimmedPass.isBlank()) return false
+        if (trimmed == "admin" || trimmed == "superadmin" || trimmed == "admin@cashbook.com") return false
 
         val globalAccounts = getGlobalAccounts().toMutableList()
         val index = globalAccounts.indexOfFirst { acc ->
@@ -931,12 +1048,16 @@ class GoogleDriveSyncManager(private val context: Context) {
             trimmed == accEmail ||
             (accEmail.contains("@") && trimmed == accEmail.substringBefore("@")) ||
             trimmed == accUser ||
-            trimmed == accName ||
-            trimmed == "admin" || trimmed == "superadmin" || trimmed == "admin@cashbook.com"
+            trimmed == accName
         }
 
         if (index >= 0) {
             val existing = globalAccounts[index]
+            if (existing.email.equals("admin@cashbook.com", ignoreCase = true) ||
+                existing.username.equals("admin", ignoreCase = true) ||
+                existing.username.equals("superadmin", ignoreCase = true)) {
+                return false
+            }
             val updated = RegisteredAccount(existing.name, existing.email, existing.username, newTrimmedPass)
             globalAccounts[index] = updated
             saveGlobalAccounts(globalAccounts)
@@ -951,7 +1072,7 @@ class GoogleDriveSyncManager(private val context: Context) {
 
         val savedUser = (prefs.getString("username", "") ?: "").trim().lowercase()
         val savedEmail = (prefs.getString("user_email", "") ?: "").trim().lowercase()
-        if (trimmed == savedUser || trimmed == savedEmail || trimmed == "admin" || trimmed == "superadmin" || trimmed == "admin@cashbook.com") {
+        if (trimmed == savedUser || trimmed == savedEmail) {
             val finalEmail = if (savedEmail.isNotBlank()) savedEmail else if (trimmed.contains("@")) trimmed else "$trimmed@cashbook.local"
             val finalName = if (trimmed.contains("@")) trimmed.substringBefore("@").replaceFirstChar { it.uppercase() } else trimmed.replaceFirstChar { it.uppercase() }
             val finalUser = if (savedUser.isNotBlank()) savedUser else trimmed
@@ -1010,6 +1131,7 @@ class GoogleDriveSyncManager(private val context: Context) {
             bizArray.put(JSONObject().apply {
                 put("id", biz.id)
                 put("name", biz.name)
+                put("userEmail", biz.userEmail)
                 put("createdAt", biz.createdAt)
                 put("isSynced", biz.isSynced)
             })
@@ -1090,19 +1212,60 @@ class GoogleDriveSyncManager(private val context: Context) {
         }
         root.put("team_members", teamArray)
 
+        // Synced Tombstones (timestamped so deletions replicate without resurrecting and allow re-creation later)
+        if (!isPartialExport) {
+            root.put("tombstones", exportTombstonesJson())
+        }
+
         return root.toString(2)
     }
 
+    private fun isOfflineBusinessOrEmail(email: String?, name: String?): Boolean {
+        val cleanEmail = (email ?: "").trim().lowercase()
+        val cleanName = (name ?: "").trim().lowercase()
+        return cleanEmail == "offline@cashbook.local" ||
+            cleanEmail == "offline_user@cashbook.local" ||
+            cleanEmail.endsWith(".local") ||
+            cleanName == "offline user's business" ||
+            cleanName == "offline business"
+    }
+
     suspend fun serializeDatabaseFromDao(dao: LedgerDao): String = withContext(Dispatchers.IO) {
-        val businesses = dao.getAllBusinessesList()
-        val books = dao.getAllBooksList()
-        val transactions = dao.getAllTransactionsList()
+        val activeEmail = getEmail().trim().lowercase()
+        val isCloudSession = isRealCloudAccount()
+        val allBusinesses = dao.getAllBusinessesList()
+        val allTeam = dao.getAllTeamMembersList()
+
+        val ownedOrRelevantBusinesses = when {
+            isCloudSession -> {
+                allBusinesses.filter { biz ->
+                    val owner = biz.userEmail.trim().lowercase()
+                    if (isOfflineBusinessOrEmail(owner, biz.name)) {
+                        false
+                    } else {
+                        owner == activeEmail || (owner.isBlank() && !isBusinessDeleted(biz.name, biz.createdAt))
+                    }
+                }
+            }
+            activeEmail == "offline@cashbook.local" -> {
+                allBusinesses.filter { biz ->
+                    val owner = biz.userEmail.trim().lowercase()
+                    owner == "offline@cashbook.local" || owner.isBlank()
+                }
+            }
+            else -> allBusinesses
+        }
+
+        val exportedBizIds = ownedOrRelevantBusinesses.map { it.id }.toSet()
+        val books = dao.getAllBooksList().filter { it.businessId in exportedBizIds }
+        val exportedBookIds = books.map { it.id }.toSet()
+        val transactions = dao.getAllTransactionsList().filter { it.bookId in exportedBookIds }
         val parties = dao.getAllPartiesList()
         val partyTransactions = dao.getAllPartyTransactionsList()
-        val teamMembers = dao.getAllTeamMembersList()
+        val teamMembers = allTeam.filter { it.businessId in exportedBizIds }
 
         serializeDatabase(
-            businesses = businesses,
+            businesses = ownedOrRelevantBusinesses,
             books = books,
             transactions = transactions,
             parties = parties,
@@ -1115,24 +1278,8 @@ class GoogleDriveSyncManager(private val context: Context) {
         try {
             val root = JSONObject(jsonString)
 
-            // Restore Account Credentials Metadata from Drive
-            if (root.has("account_info")) {
-                val acc = root.getJSONObject("account_info")
-                val restoredUsername = acc.optString("username", "")
-                val restoredEmail = acc.optString("user_email", "")
-                val restoredName = acc.optString("user_name", "")
-                val restoredPassword = acc.optString("user_password", "")
-                if (restoredUsername.isNotBlank()) {
-                    prefs.edit()
-                        .putString("username", restoredUsername)
-                        .putString("user_email", restoredEmail)
-                        .putString("user_name", restoredName)
-                        .putString("user_password", restoredPassword)
-                        .putBoolean("is_user_logged_in", true)
-                        .putBoolean("is_super_admin", true)
-                        .apply()
-                }
-            }
+            // Never overwrite active user identity or elevate Super Admin privileges from synced/restored JSON data.
+            // Ledger restore only merges business/book/transaction/party records for the signed-in session.
 
             if (root.has("global_accounts")) {
                 val accArr = root.getJSONArray("global_accounts")
@@ -1154,6 +1301,30 @@ class GoogleDriveSyncManager(private val context: Context) {
             }
 
             val isPartialExport = root.optBoolean("is_partial_export", false)
+            val remoteTimestamp = root.optLong("timestamp", 0L)
+            val sessionEmail = getEmail().trim().lowercase()
+            val isCloudSession = isRealCloudAccount()
+            val localModifiedTs = prefs.getLong("local_db_last_modified_ts", 0L)
+
+            if (!isPartialExport && root.has("tombstones")) {
+                importTombstonesJson(root.getJSONObject("tombstones"))
+            }
+
+            // Purge any locally remaining offline or tombstoned businesses before merge
+            if (isCloudSession) {
+                val toPurge = dao.getAllBusinessesList().filter { localBiz ->
+                    val deletedByTombstone = isBusinessDeleted(localBiz.name, localBiz.createdAt)
+                    val isOfflineLeaked = isOfflineBusinessOrEmail(localBiz.userEmail, localBiz.name) &&
+                        !localBiz.userEmail.equals(sessionEmail, ignoreCase = true) &&
+                        isBusinessDeleted(localBiz.name, 0L)
+                    deletedByTombstone || isOfflineLeaked
+                }
+                toPurge.forEach { localBiz ->
+                    dao.deleteBooksForBusiness(localBiz.id)
+                    dao.deleteTeamMembersForBusiness(localBiz.id)
+                    dao.deleteBusiness(localBiz)
+                }
+            }
 
             var existingBizList = dao.getAllBusinessesList().toMutableList()
             var existingBooksList = dao.getAllBooksList().toMutableList()
@@ -1169,44 +1340,81 @@ class GoogleDriveSyncManager(private val context: Context) {
             // Restore/Merge Businesses
             if (root.has("businesses")) {
                 val bizArray = root.getJSONArray("businesses")
+                val docAccountEmail = root.optJSONObject("account_info")?.optString("user_email", "")?.trim()?.lowercase() ?: ""
                 for (i in 0 until bizArray.length()) {
                     val obj = bizArray.getJSONObject(i)
                     val oldId = obj.getInt("id")
                     val bName = obj.getString("name")
+                    val rawBizEmail = obj.optString("userEmail", "").trim().lowercase()
                     val createdAt = obj.getLong("createdAt")
 
-                    if (isBusinessDeleted(bName)) continue
+                    if (isCloudSession && isOfflineBusinessOrEmail(rawBizEmail, bName)) continue
+                    if (isBusinessDeleted(bName, createdAt)) continue
 
-                    val defaultMatch = if (existingBizList.size == 1 && existingTxList.isEmpty() && (existingBizList[0].name.contains("@") || existingBizList[0].name == "My Business" || existingBizList[0].name == "Main Business")) existingBizList[0] else null
-                    val matchedByName = existingBizList.find { it.name.equals(bName, ignoreCase = true) } ?: defaultMatch
+                    val ownerEmail = when {
+                        rawBizEmail.isNotBlank() -> rawBizEmail
+                        docAccountEmail.isNotBlank() && !docAccountEmail.endsWith(".local") -> docAccountEmail
+                        isCloudSession -> sessionEmail
+                        else -> sessionEmail
+                    }
+
+                    val defaultMatch = if (existingBizList.size == 1 && existingTxList.isEmpty() &&
+                        (existingBizList[0].userEmail.isBlank() || existingBizList[0].userEmail.equals(ownerEmail, ignoreCase = true)) &&
+                        (existingBizList[0].name.contains("@") || existingBizList[0].name == "My Business" || existingBizList[0].name == "Main Business")) {
+                        existingBizList[0]
+                    } else null
+
+                    val matchedByName = existingBizList.find {
+                        it.name.equals(bName, ignoreCase = true) &&
+                            (it.userEmail.isBlank() || it.userEmail.equals(ownerEmail, ignoreCase = true))
+                    } ?: defaultMatch
 
                     if (matchedByName != null) {
                         bizIdMap[oldId] = matchedByName.id
-                        if (!matchedByName.name.equals(bName, ignoreCase = true) && bName.isNotBlank()) {
-                            val updatedBiz = matchedByName.copy(name = bName, isSynced = true)
+                        val needsEmailFix = matchedByName.userEmail.isBlank() && ownerEmail.isNotBlank()
+                        val needsNameFix = !matchedByName.name.equals(bName, ignoreCase = true) && bName.isNotBlank()
+                        if (needsEmailFix || needsNameFix) {
+                            val updatedBiz = matchedByName.copy(
+                                name = if (needsNameFix) bName else matchedByName.name,
+                                userEmail = if (needsEmailFix) ownerEmail else matchedByName.userEmail,
+                                isSynced = true
+                            )
                             dao.updateBusiness(updatedBiz)
                             val idx = existingBizList.indexOfFirst { it.id == matchedByName.id }
                             if (idx >= 0) existingBizList[idx] = updatedBiz
                         }
                     } else {
-                        val newBiz = Business(id = 0, name = bName, createdAt = createdAt, isSynced = true)
+                        val newBiz = Business(
+                            id = 0,
+                            name = bName,
+                            userEmail = ownerEmail,
+                            createdAt = createdAt,
+                            isSynced = true
+                        )
                         val newId = dao.insertBusiness(newBiz).toInt()
                         bizIdMap[oldId] = newId
                         existingBizList.add(newBiz.copy(id = newId))
                     }
                 }
 
-                // Delete local businesses that were deleted on remote (Skip for partial export share)
-                if (!isPartialExport) {
+                // Delete local businesses owned by this user that were deleted on remote (Skip for partial export or when local has newer edits)
+                if (!isPartialExport && remoteTimestamp > localModifiedTs) {
                     val remoteBizIdsInLocal = bizIdMap.values.toSet()
                     val remoteBizNames = mutableSetOf<String>()
                     for (i in 0 until bizArray.length()) {
                         remoteBizNames.add(bizArray.getJSONObject(i).getString("name").trim().lowercase())
                     }
                     val bizToDelete = existingBizList.filter { localBiz ->
-                        localBiz.isSynced && !remoteBizIdsInLocal.contains(localBiz.id) && !remoteBizNames.contains(localBiz.name.trim().lowercase())
+                        val belongsToSession = if (isCloudSession) {
+                            localBiz.userEmail.equals(sessionEmail, ignoreCase = true)
+                        } else {
+                            localBiz.userEmail.equals(sessionEmail, ignoreCase = true) || localBiz.userEmail.isBlank()
+                        }
+                        belongsToSession && localBiz.isSynced && !remoteBizIdsInLocal.contains(localBiz.id) && !remoteBizNames.contains(localBiz.name.trim().lowercase())
                     }
                     bizToDelete.forEach { localBiz ->
+                        dao.deleteBooksForBusiness(localBiz.id)
+                        dao.deleteTeamMembersForBusiness(localBiz.id)
                         dao.deleteBusiness(localBiz)
                         existingBizList.remove(localBiz)
                     }
@@ -1548,120 +1756,261 @@ class GoogleDriveSyncManager(private val context: Context) {
         return bizCount * 10 + booksCount * 5 + txCount * 15 + partiesCount * 10
     }
 
-    // --- Tombstone Tracking for Deletions ---
+    // --- Tombstone Tracking for Deletions (Timestamped, Account-Scoped & Cloud-Synced) ---
+
+    private fun getTombstoneScopeKey(): String {
+        val clean = getEmail().trim().lowercase().ifBlank { "default" }
+        return clean.replace(Regex("[^a-z0-9_]"), "_")
+    }
+
+    private fun readTombstoneMap(prefKey: String): MutableMap<String, Long> {
+        val result = mutableMapOf<String, Long>()
+        val raw = prefs.getString(prefKey, "") ?: ""
+        if (raw.isNotBlank()) {
+            try {
+                val obj = JSONObject(raw)
+                val keys = obj.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    result[k] = obj.optLong(k, System.currentTimeMillis())
+                }
+            } catch (_: Exception) { }
+        }
+        return result
+    }
+
+    private fun writeTombstoneMap(prefKey: String, map: Map<String, Long>) {
+        val obj = JSONObject()
+        map.forEach { (k, v) -> obj.put(k, v) }
+        prefs.edit().putString(prefKey, obj.toString()).apply()
+    }
+
+    private fun exportTombstonesJson(): JSONObject {
+        val scope = getTombstoneScopeKey()
+        val obj = JSONObject()
+        val bizMapObj = JSONObject()
+        readTombstoneMap("tombstone_biz_map_$scope").forEach { (k, v) -> bizMapObj.put(k, v) }
+        obj.put("deleted_businesses", bizMapObj)
+
+        val bookMapObj = JSONObject()
+        readTombstoneMap("tombstone_book_map_$scope").forEach { (k, v) -> bookMapObj.put(k, v) }
+        obj.put("deleted_books", bookMapObj)
+
+        val partyMapObj = JSONObject()
+        readTombstoneMap("tombstone_party_map_$scope").forEach { (k, v) -> partyMapObj.put(k, v) }
+        obj.put("deleted_parties", partyMapObj)
+
+        val teamMapObj = JSONObject()
+        readTombstoneMap("tombstone_team_map_$scope").forEach { (k, v) -> teamMapObj.put(k, v) }
+        obj.put("deleted_team_emails", teamMapObj)
+
+        val txArr = JSONArray()
+        (prefs.getStringSet("tombstone_tx_ts_$scope", emptySet()) ?: emptySet()).forEach { txArr.put(it) }
+        obj.put("deleted_transactions", txArr)
+
+        val ptxArr = JSONArray()
+        (prefs.getStringSet("tombstone_ptx_ts_$scope", emptySet()) ?: emptySet()).forEach { ptxArr.put(it) }
+        obj.put("deleted_party_transactions", ptxArr)
+
+        return obj
+    }
+
+    private fun importTombstonesJson(tObj: JSONObject) {
+        val scope = getTombstoneScopeKey()
+        fun mergeMap(jsonKey: String, prefKey: String) {
+            val remoteObj = tObj.optJSONObject(jsonKey) ?: return
+            val localMap = readTombstoneMap(prefKey)
+            var changed = false
+            val keys = remoteObj.keys()
+            while (keys.hasNext()) {
+                val k = keys.next()
+                val rTs = remoteObj.optLong(k, 0L)
+                val lTs = localMap[k] ?: 0L
+                if (rTs > lTs) {
+                    localMap[k] = rTs
+                    changed = true
+                }
+            }
+            if (changed) writeTombstoneMap(prefKey, localMap)
+        }
+        mergeMap("deleted_businesses", "tombstone_biz_map_$scope")
+        mergeMap("deleted_books", "tombstone_book_map_$scope")
+        mergeMap("deleted_parties", "tombstone_party_map_$scope")
+        mergeMap("deleted_team_emails", "tombstone_team_map_$scope")
+
+        tObj.optJSONArray("deleted_transactions")?.let { arr ->
+            val set = prefs.getStringSet("tombstone_tx_ts_$scope", emptySet())?.toMutableSet() ?: mutableSetOf()
+            for (i in 0 until arr.length()) set.add(arr.optString(i, ""))
+            set.remove("")
+            prefs.edit().putStringSet("tombstone_tx_ts_$scope", set).apply()
+        }
+        tObj.optJSONArray("deleted_party_transactions")?.let { arr ->
+            val set = prefs.getStringSet("tombstone_ptx_ts_$scope", emptySet())?.toMutableSet() ?: mutableSetOf()
+            for (i in 0 until arr.length()) set.add(arr.optString(i, ""))
+            set.remove("")
+            prefs.edit().putStringSet("tombstone_ptx_ts_$scope", set).apply()
+        }
+    }
 
     fun recordDeletedTransaction(timestamp: Long) {
-        val set = prefs.getStringSet("tombstone_tx_timestamps", emptySet())?.toMutableSet() ?: mutableSetOf()
+        val scope = getTombstoneScopeKey()
+        val set = prefs.getStringSet("tombstone_tx_ts_$scope", emptySet())?.toMutableSet() ?: mutableSetOf()
         set.add(timestamp.toString())
-        prefs.edit().putStringSet("tombstone_tx_timestamps", set).apply()
+        prefs.edit().putStringSet("tombstone_tx_ts_$scope", set).apply()
         markLocalDbModified()
     }
 
     fun isTransactionDeleted(timestamp: Long): Boolean {
-        val set = prefs.getStringSet("tombstone_tx_timestamps", emptySet())
-        return set?.contains(timestamp.toString()) == true
+        val scope = getTombstoneScopeKey()
+        val scoped = prefs.getStringSet("tombstone_tx_ts_$scope", emptySet())
+        if (scoped?.contains(timestamp.toString()) == true) return true
+        val legacy = prefs.getStringSet("tombstone_tx_timestamps", emptySet())
+        return legacy?.contains(timestamp.toString()) == true
     }
 
     fun recordDeletedPartyTransaction(timestamp: Long) {
-        val set = prefs.getStringSet("tombstone_ptx_timestamps", emptySet())?.toMutableSet() ?: mutableSetOf()
+        val scope = getTombstoneScopeKey()
+        val set = prefs.getStringSet("tombstone_ptx_ts_$scope", emptySet())?.toMutableSet() ?: mutableSetOf()
         set.add(timestamp.toString())
-        prefs.edit().putStringSet("tombstone_ptx_timestamps", set).apply()
+        prefs.edit().putStringSet("tombstone_ptx_ts_$scope", set).apply()
         markLocalDbModified()
     }
 
     fun isPartyTransactionDeleted(timestamp: Long): Boolean {
-        val set = prefs.getStringSet("tombstone_ptx_timestamps", emptySet())
-        return set?.contains(timestamp.toString()) == true
+        val scope = getTombstoneScopeKey()
+        val scoped = prefs.getStringSet("tombstone_ptx_ts_$scope", emptySet())
+        if (scoped?.contains(timestamp.toString()) == true) return true
+        val legacy = prefs.getStringSet("tombstone_ptx_timestamps", emptySet())
+        return legacy?.contains(timestamp.toString()) == true
     }
 
     fun recordDeletedParty(name: String) {
         val cleanName = name.trim().lowercase()
         if (cleanName.isNotBlank()) {
-            val set = prefs.getStringSet("tombstone_party_names", emptySet())?.toMutableSet() ?: mutableSetOf()
-            set.add(cleanName)
-            prefs.edit().putStringSet("tombstone_party_names", set).apply()
+            val scope = getTombstoneScopeKey()
+            val map = readTombstoneMap("tombstone_party_map_$scope")
+            map[cleanName] = System.currentTimeMillis()
+            writeTombstoneMap("tombstone_party_map_$scope", map)
             markLocalDbModified()
         }
     }
 
     fun removePartyFromTombstones(name: String) {
         val cleanName = name.trim().lowercase()
-        val set = prefs.getStringSet("tombstone_party_names", emptySet())?.toMutableSet() ?: mutableSetOf()
-        if (set.remove(cleanName)) {
-            prefs.edit().putStringSet("tombstone_party_names", set).apply()
+        val scope = getTombstoneScopeKey()
+        val map = readTombstoneMap("tombstone_party_map_$scope")
+        if (map.remove(cleanName) != null) {
+            writeTombstoneMap("tombstone_party_map_$scope", map)
         }
     }
 
     fun isPartyDeleted(name: String): Boolean {
-        val set = prefs.getStringSet("tombstone_party_names", emptySet())
-        return set?.contains(name.trim().lowercase()) == true
+        val cleanName = name.trim().lowercase()
+        val scope = getTombstoneScopeKey()
+        val map = readTombstoneMap("tombstone_party_map_$scope")
+        return map.containsKey(cleanName)
     }
 
     fun recordDeletedBook(bizId: Int, name: String) {
         val key = "$bizId:${name.trim().lowercase()}"
-        val set = prefs.getStringSet("tombstone_book_keys", emptySet())?.toMutableSet() ?: mutableSetOf()
-        set.add(key)
-        prefs.edit().putStringSet("tombstone_book_keys", set).apply()
+        val scope = getTombstoneScopeKey()
+        val map = readTombstoneMap("tombstone_book_map_$scope")
+        map[key] = System.currentTimeMillis()
+        writeTombstoneMap("tombstone_book_map_$scope", map)
         markLocalDbModified()
     }
 
     fun removeBookFromTombstones(bizId: Int, name: String) {
         val key = "$bizId:${name.trim().lowercase()}"
-        val set = prefs.getStringSet("tombstone_book_keys", emptySet())?.toMutableSet() ?: mutableSetOf()
-        if (set.remove(key)) {
-            prefs.edit().putStringSet("tombstone_book_keys", set).apply()
+        val scope = getTombstoneScopeKey()
+        val map = readTombstoneMap("tombstone_book_map_$scope")
+        if (map.remove(key) != null) {
+            writeTombstoneMap("tombstone_book_map_$scope", map)
         }
     }
 
     fun isBookDeleted(bizId: Int, name: String): Boolean {
-        val set = prefs.getStringSet("tombstone_book_keys", emptySet())
-        return set?.contains("$bizId:${name.trim().lowercase()}") == true
+        val key = "$bizId:${name.trim().lowercase()}"
+        val scope = getTombstoneScopeKey()
+        val map = readTombstoneMap("tombstone_book_map_$scope")
+        return map.containsKey(key)
     }
 
-    fun recordDeletedBusiness(name: String) {
+    fun recordDeletedBusiness(name: String, ownerEmail: String = "") {
         val cleanName = name.trim().lowercase()
         if (cleanName.isNotBlank()) {
-            val set = prefs.getStringSet("tombstone_biz_names", emptySet())?.toMutableSet() ?: mutableSetOf()
-            set.add(cleanName)
-            prefs.edit().putStringSet("tombstone_biz_names", set).apply()
+            val now = System.currentTimeMillis()
+            val scope = getTombstoneScopeKey()
+            val map = readTombstoneMap("tombstone_biz_map_$scope")
+            map[cleanName] = now
+            writeTombstoneMap("tombstone_biz_map_$scope", map)
+
+            if (isOfflineBusinessOrEmail(ownerEmail, name) || getEmail().trim().lowercase() == "offline@cashbook.local") {
+                val offlineMap = readTombstoneMap("tombstone_offline_biz_map")
+                offlineMap[cleanName] = now
+                writeTombstoneMap("tombstone_offline_biz_map", offlineMap)
+            }
             markLocalDbModified()
         }
     }
 
     fun removeBusinessFromTombstones(name: String) {
         val cleanName = name.trim().lowercase()
-        val set = prefs.getStringSet("tombstone_biz_names", emptySet())?.toMutableSet() ?: mutableSetOf()
-        if (set.remove(cleanName)) {
-            prefs.edit().putStringSet("tombstone_biz_names", set).apply()
+        val scope = getTombstoneScopeKey()
+        val map = readTombstoneMap("tombstone_biz_map_$scope")
+        if (map.remove(cleanName) != null) {
+            writeTombstoneMap("tombstone_biz_map_$scope", map)
+        }
+        val offlineMap = readTombstoneMap("tombstone_offline_biz_map")
+        if (offlineMap.remove(cleanName) != null) {
+            writeTombstoneMap("tombstone_offline_biz_map", offlineMap)
+        }
+        val legacy = prefs.getStringSet("tombstone_biz_names", emptySet())?.toMutableSet() ?: mutableSetOf()
+        if (legacy.remove(cleanName)) {
+            prefs.edit().putStringSet("tombstone_biz_names", legacy).apply()
         }
     }
 
-    fun isBusinessDeleted(name: String): Boolean {
-        val set = prefs.getStringSet("tombstone_biz_names", emptySet())
-        return set?.contains(name.trim().lowercase()) == true
+    fun isBusinessDeleted(name: String, itemCreatedAt: Long = 0L): Boolean {
+        val cleanName = name.trim().lowercase()
+        val scope = getTombstoneScopeKey()
+        val scopedMap = readTombstoneMap("tombstone_biz_map_$scope")
+        val deletedAt = scopedMap[cleanName]
+        if (deletedAt != null && (itemCreatedAt <= 0L || deletedAt >= itemCreatedAt)) {
+            return true
+        }
+        val offlineMap = readTombstoneMap("tombstone_offline_biz_map")
+        val offlineDeletedAt = offlineMap[cleanName]
+        if (offlineDeletedAt != null && (itemCreatedAt <= 0L || offlineDeletedAt >= itemCreatedAt)) {
+            return true
+        }
+        return false
     }
 
     fun recordDeletedTeamMember(email: String) {
         val cleanEmail = email.trim().lowercase()
         if (cleanEmail.isNotBlank()) {
-            val set = prefs.getStringSet("tombstone_team_emails", emptySet())?.toMutableSet() ?: mutableSetOf()
-            set.add(cleanEmail)
-            prefs.edit().putStringSet("tombstone_team_emails", set).apply()
+            val scope = getTombstoneScopeKey()
+            val map = readTombstoneMap("tombstone_team_map_$scope")
+            map[cleanEmail] = System.currentTimeMillis()
+            writeTombstoneMap("tombstone_team_map_$scope", map)
             markLocalDbModified()
         }
     }
 
     fun removeTeamMemberFromTombstones(email: String) {
         val cleanEmail = email.trim().lowercase()
-        val set = prefs.getStringSet("tombstone_team_emails", emptySet())?.toMutableSet() ?: mutableSetOf()
-        if (set.remove(cleanEmail)) {
-            prefs.edit().putStringSet("tombstone_team_emails", set).apply()
+        val scope = getTombstoneScopeKey()
+        val map = readTombstoneMap("tombstone_team_map_$scope")
+        if (map.remove(cleanEmail) != null) {
+            writeTombstoneMap("tombstone_team_map_$scope", map)
         }
     }
 
     fun isTeamMemberDeleted(email: String): Boolean {
-        val set = prefs.getStringSet("tombstone_team_emails", emptySet())
-        return set?.contains(email.trim().lowercase()) == true
+        val scope = getTombstoneScopeKey()
+        val map = readTombstoneMap("tombstone_team_map_$scope")
+        return map.containsKey(email.trim().lowercase())
     }
 
     fun markLocalDbModified() {
@@ -1678,6 +2027,814 @@ class GoogleDriveSyncManager(private val context: Context) {
         } catch (e: Exception) {
             0L
         }
+    }
+
+    // --- Cloud Team Invites & Shared Workspace Collaboration Engine ---
+
+    private fun sanitizeDocKey(raw: String): String {
+        return raw.trim().lowercase().replace(Regex("[^a-z0-9_]"), "_")
+    }
+
+    private fun invitePrefKey(businessName: String, invitedEmail: String): String {
+        return "invite_code_${sanitizeDocKey(businessName)}_${sanitizeDocKey(invitedEmail)}"
+    }
+
+    fun getSavedInviteCode(businessName: String, invitedEmail: String): String {
+        return prefs.getString(invitePrefKey(businessName, invitedEmail), "") ?: ""
+    }
+
+    fun getOrGenerateInviteCode(businessName: String, invitedEmail: String): String {
+        val cleanEmail = invitedEmail.trim().lowercase()
+        val key = invitePrefKey(businessName, cleanEmail)
+        val existing = prefs.getString(key, "") ?: ""
+        if (existing.isNotBlank()) return existing
+
+        val prefixRaw = businessName.trim().uppercase().replace(Regex("[^A-Z0-9]"), "").take(4).ifBlank { "CB" }
+        val seed = "$prefixRaw:$cleanEmail:${businessName.trim().lowercase()}".hashCode().let { kotlin.math.abs(it) }
+        val alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+        val suffix = buildString {
+            var v = seed
+            repeat(4) {
+                append(alphabet[v % alphabet.length])
+                v = (v / alphabet.length) + 7
+            }
+        }
+        val code = "$prefixRaw-$suffix"
+        prefs.edit().putString(key, code).apply()
+        return code
+    }
+
+    private fun sharedWorkspacesPrefKey(email: String = getEmail()): String {
+        val clean = email.trim().lowercase().ifBlank { "default" }
+        return "shared_workspaces_${sanitizeDocKey(clean)}"
+    }
+
+    fun getSharedWorkspaces(email: String = getEmail()): List<SharedWorkspaceRef> {
+        val list = mutableListOf<SharedWorkspaceRef>()
+        val raw = prefs.getString(sharedWorkspacesPrefKey(email), "[]") ?: "[]"
+        try {
+            val arr = JSONArray(raw)
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                val ownerDocId = o.optString("ownerDocId", "")
+                val bizName = o.optString("businessName", "")
+                if (ownerDocId.isNotBlank() && bizName.isNotBlank()) {
+                    list.add(
+                        SharedWorkspaceRef(
+                            ownerDocId = ownerDocId,
+                            ownerEmail = o.optString("ownerEmail", ""),
+                            businessName = bizName,
+                            businessCreatedAt = o.optLong("businessCreatedAt", 0L),
+                            role = o.optString("role", "Data Entry"),
+                            inviteCode = o.optString("inviteCode", "")
+                        )
+                    )
+                }
+            }
+        } catch (_: Exception) { }
+        return list
+    }
+
+    private fun saveSharedWorkspaces(list: List<SharedWorkspaceRef>, email: String = getEmail()) {
+        val arr = JSONArray()
+        list.forEach { ref ->
+            arr.put(JSONObject().apply {
+                put("ownerDocId", ref.ownerDocId)
+                put("ownerEmail", ref.ownerEmail)
+                put("businessName", ref.businessName)
+                put("businessCreatedAt", ref.businessCreatedAt)
+                put("role", ref.role)
+                put("inviteCode", ref.inviteCode)
+            })
+        }
+        prefs.edit().putString(sharedWorkspacesPrefKey(email), arr.toString()).apply()
+    }
+
+    fun addOrUpdateSharedWorkspace(ref: SharedWorkspaceRef, email: String = getEmail()) {
+        val current = getSharedWorkspaces(email).toMutableList()
+        val idx = current.indexOfFirst {
+            it.ownerDocId == ref.ownerDocId && it.businessName.equals(ref.businessName, ignoreCase = true)
+        }
+        if (idx >= 0) {
+            current[idx] = ref
+        } else {
+            current.add(ref)
+        }
+        saveSharedWorkspaces(current, email)
+    }
+
+    fun removeSharedWorkspace(ownerEmail: String, businessName: String, email: String = getEmail()) {
+        val current = getSharedWorkspaces(email).toMutableList()
+        current.removeAll {
+            it.ownerEmail.equals(ownerEmail, ignoreCase = true) && it.businessName.equals(businessName, ignoreCase = true)
+        }
+        saveSharedWorkspaces(current, email)
+    }
+
+    private fun teamInviteToJson(inv: TeamInviteRecord): JSONObject {
+        return JSONObject().apply {
+            put("inviteCode", inv.inviteCode)
+            put("ownerEmail", inv.ownerEmail)
+            put("ownerDocId", inv.ownerDocId)
+            put("businessName", inv.businessName)
+            put("businessCreatedAt", inv.businessCreatedAt)
+            put("invitedEmail", inv.invitedEmail)
+            put("invitedName", inv.invitedName)
+            put("role", inv.role)
+            put("status", inv.status)
+            put("createdAt", inv.createdAt)
+        }
+    }
+
+    private fun jsonToTeamInvite(obj: JSONObject): TeamInviteRecord? {
+        val code = obj.optString("inviteCode", "")
+        val ownerDocId = obj.optString("ownerDocId", "")
+        val bizName = obj.optString("businessName", "")
+        if (code.isBlank() || ownerDocId.isBlank() || bizName.isBlank()) return null
+        return TeamInviteRecord(
+            inviteCode = code,
+            ownerEmail = obj.optString("ownerEmail", ""),
+            ownerDocId = ownerDocId,
+            businessName = bizName,
+            businessCreatedAt = obj.optLong("businessCreatedAt", 0L),
+            invitedEmail = obj.optString("invitedEmail", ""),
+            invitedName = obj.optString("invitedName", ""),
+            role = obj.optString("role", "Data Entry"),
+            status = obj.optString("status", "PENDING"),
+            createdAt = obj.optLong("createdAt", System.currentTimeMillis())
+        )
+    }
+
+    private fun patchOrPostFirestoreDoc(collection: String, docId: String, payloadJson: JSONObject, idToken: String?): Boolean {
+        val projId = getFirebaseProjectId()
+        val apiKey = getFirebaseApiKey()
+        val body = payloadJson.toString().toRequestBody("application/json".toMediaType())
+
+        val fieldsObj = payloadJson.optJSONObject("fields")
+        val maskParams = buildString {
+            if (fieldsObj != null) {
+                val keys = fieldsObj.keys()
+                while (keys.hasNext()) {
+                    append("updateMask.fieldPaths=${keys.next()}&")
+                }
+            }
+        }
+        val patchUrl = "https://firestore.googleapis.com/v1/projects/$projId/databases/(default)/documents/$collection/$docId?${maskParams}key=$apiKey"
+        val patchBuilder = Request.Builder().url(patchUrl)
+        if (!idToken.isNullOrBlank()) patchBuilder.addHeader("Authorization", "Bearer $idToken")
+
+        try {
+            client.newCall(patchBuilder.patch(body).build()).execute().use { res ->
+                if (res.isSuccessful) return true
+                if (res.code == 404) {
+                    val postUrl = "https://firestore.googleapis.com/v1/projects/$projId/databases/(default)/documents/$collection?documentId=$docId&key=$apiKey"
+                    val postBuilder = Request.Builder().url(postUrl)
+                    if (!idToken.isNullOrBlank()) postBuilder.addHeader("Authorization", "Bearer $idToken")
+                    client.newCall(postBuilder.post(body).build()).execute().use { postRes ->
+                        return postRes.isSuccessful
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("GoogleDriveSyncManager", "Firestore write error for $collection/$docId", e)
+        }
+        return false
+    }
+
+    private fun fetchFirestoreFields(collection: String, docId: String, idToken: String?): JSONObject? {
+        val projId = getFirebaseProjectId()
+        val apiKey = getFirebaseApiKey()
+        val url = "https://firestore.googleapis.com/v1/projects/$projId/databases/(default)/documents/$collection/$docId?key=$apiKey"
+        val reqBuilder = Request.Builder().url(url)
+        if (!idToken.isNullOrBlank()) reqBuilder.addHeader("Authorization", "Bearer $idToken")
+        return try {
+            client.newCall(reqBuilder.get().build()).execute().use { res ->
+                if (res.isSuccessful) {
+                    val bodyStr = res.body?.string() ?: ""
+                    if (bodyStr.isNotBlank()) JSONObject(bodyStr).optJSONObject("fields") else null
+                } else null
+            }
+        } catch (e: Exception) {
+            Log.e("GoogleDriveSyncManager", "Firestore read error for $collection/$docId", e)
+            null
+        }
+    }
+
+    suspend fun publishTeamInviteCloud(
+        business: Business,
+        member: TeamMember,
+        dao: LedgerDao
+    ): Pair<TeamInviteRecord, Boolean> = withContext(Dispatchers.IO) {
+        val ownerEmail = business.userEmail.trim().lowercase().ifBlank { getEmail().trim().lowercase() }
+        val ownerDocId = "cashbook_" + sanitizeDocKey(ownerEmail)
+        val invitedEmail = member.email.trim().lowercase()
+        val code = getOrGenerateInviteCode(business.name, invitedEmail.ifBlank { member.name })
+        val invite = TeamInviteRecord(
+            inviteCode = code,
+            ownerEmail = ownerEmail,
+            ownerDocId = ownerDocId,
+            businessName = business.name,
+            businessCreatedAt = business.createdAt,
+            invitedEmail = invitedEmail,
+            invitedName = member.name.trim(),
+            role = member.role,
+            status = "PENDING",
+            createdAt = System.currentTimeMillis()
+        )
+
+        if (!isRealCloudAccount()) {
+            return@withContext Pair(invite, false)
+        }
+
+        // First push owner's latest business snapshot so the shared business is immediately downloadable
+        try {
+            syncWithCloud(dao)
+        } catch (_: Exception) { }
+
+        val idToken = getFirebaseAuthToken()
+        val codeDocKey = code.trim().uppercase().replace(Regex("[^A-Z0-9_-]"), "_")
+        val inviteJsonStr = teamInviteToJson(invite).toString()
+        val invitePayload = buildFirestoreFields(
+            "inviteCode" to invite.inviteCode,
+            "ownerEmail" to invite.ownerEmail,
+            "ownerDocId" to invite.ownerDocId,
+            "businessName" to invite.businessName,
+            "businessCreatedAt" to invite.businessCreatedAt,
+            "invitedEmail" to invite.invitedEmail,
+            "invitedName" to invite.invitedName,
+            "role" to invite.role,
+            "status" to invite.status,
+            "createdAt" to invite.createdAt,
+            "inviteJson" to inviteJsonStr
+        )
+
+        val savedDirect = patchOrPostFirestoreDoc("team_invites", codeDocKey, invitePayload, idToken)
+        val savedMirror = patchOrPostFirestoreDoc("cashbooks", "invite_$codeDocKey", invitePayload, idToken)
+
+        var savedUserIdx = false
+        if (invitedEmail.contains("@")) {
+            val emailKey = sanitizeDocKey(invitedEmail)
+            val existingInvites = fetchInvitesForEmailCloud(invitedEmail).toMutableList()
+            existingInvites.removeAll {
+                it.ownerDocId == invite.ownerDocId && it.businessName.equals(invite.businessName, ignoreCase = true)
+            }
+            existingInvites.add(invite)
+            val arr = JSONArray()
+            existingInvites.forEach { arr.put(teamInviteToJson(it)) }
+            val userInvPayload = buildFirestoreFields(
+                "invitedEmail" to invitedEmail,
+                "invitesJson" to arr.toString(),
+                "updatedAt" to System.currentTimeMillis()
+            )
+            val a = patchOrPostFirestoreDoc("user_invites", emailKey, userInvPayload, idToken)
+            val b = patchOrPostFirestoreDoc("cashbooks", "userinvites_$emailKey", userInvPayload, idToken)
+            savedUserIdx = a || b
+        }
+
+        Pair(invite, savedDirect || savedMirror || savedUserIdx)
+    }
+
+    suspend fun revokeTeamInviteCloud(business: Business, invitedEmail: String) = withContext(Dispatchers.IO) {
+        if (!isRealCloudAccount()) return@withContext
+        val cleanInvited = invitedEmail.trim().lowercase()
+        val ownerEmail = business.userEmail.trim().lowercase().ifBlank { getEmail().trim().lowercase() }
+        val ownerDocId = "cashbook_" + sanitizeDocKey(ownerEmail)
+        val code = getSavedInviteCode(business.name, cleanInvited)
+        val idToken = getFirebaseAuthToken()
+
+        if (code.isNotBlank()) {
+            val codeDocKey = code.trim().uppercase().replace(Regex("[^A-Z0-9_-]"), "_")
+            val revokedPayload = buildFirestoreFields(
+                "inviteCode" to code,
+                "status" to "REVOKED",
+                "inviteJson" to JSONObject().apply {
+                    put("inviteCode", code)
+                    put("ownerEmail", ownerEmail)
+                    put("ownerDocId", ownerDocId)
+                    put("businessName", business.name)
+                    put("invitedEmail", cleanInvited)
+                    put("status", "REVOKED")
+                }.toString()
+            )
+            patchOrPostFirestoreDoc("team_invites", codeDocKey, revokedPayload, idToken)
+            patchOrPostFirestoreDoc("cashbooks", "invite_$codeDocKey", revokedPayload, idToken)
+            prefs.edit().remove(invitePrefKey(business.name, cleanInvited)).apply()
+        }
+
+        if (cleanInvited.contains("@")) {
+            val emailKey = sanitizeDocKey(cleanInvited)
+            val existingInvites = fetchInvitesForEmailCloud(cleanInvited).toMutableList()
+            existingInvites.removeAll {
+                it.ownerDocId == ownerDocId && it.businessName.equals(business.name, ignoreCase = true)
+            }
+            val arr = JSONArray()
+            existingInvites.forEach { arr.put(teamInviteToJson(it)) }
+            val userInvPayload = buildFirestoreFields(
+                "invitedEmail" to cleanInvited,
+                "invitesJson" to arr.toString(),
+                "updatedAt" to System.currentTimeMillis()
+            )
+            patchOrPostFirestoreDoc("user_invites", emailKey, userInvPayload, idToken)
+            patchOrPostFirestoreDoc("cashbooks", "userinvites_$emailKey", userInvPayload, idToken)
+        }
+    }
+
+    suspend fun lookupInviteByCodeCloud(rawCode: String): TeamInviteRecord? = withContext(Dispatchers.IO) {
+        val codeDocKey = rawCode.trim().uppercase().replace(Regex("[^A-Z0-9_-]"), "_")
+        if (codeDocKey.length < 3) return@withContext null
+        val idToken = getFirebaseAuthToken()
+
+        val fields = fetchFirestoreFields("team_invites", codeDocKey, idToken)
+            ?: fetchFirestoreFields("cashbooks", "invite_$codeDocKey", idToken)
+            ?: return@withContext null
+
+        val status = fields.optJSONObject("status")?.optString("stringValue", "PENDING") ?: "PENDING"
+        if (status.equals("REVOKED", ignoreCase = true)) return@withContext null
+
+        val rawJson = fields.optJSONObject("inviteJson")?.optString("stringValue", "") ?: ""
+        if (rawJson.isNotBlank()) {
+            try {
+                val parsed = jsonToTeamInvite(JSONObject(rawJson))
+                if (parsed != null && !parsed.status.equals("REVOKED", ignoreCase = true)) return@withContext parsed
+            } catch (_: Exception) { }
+        }
+
+        val code = fields.optJSONObject("inviteCode")?.optString("stringValue", "") ?: codeDocKey
+        val ownerEmail = fields.optJSONObject("ownerEmail")?.optString("stringValue", "") ?: ""
+        val ownerDocId = fields.optJSONObject("ownerDocId")?.optString("stringValue", "") ?: ""
+        val businessName = fields.optJSONObject("businessName")?.optString("stringValue", "") ?: ""
+        if (ownerDocId.isBlank() || businessName.isBlank()) return@withContext null
+
+        TeamInviteRecord(
+            inviteCode = code,
+            ownerEmail = ownerEmail,
+            ownerDocId = ownerDocId,
+            businessName = businessName,
+            businessCreatedAt = fields.optJSONObject("businessCreatedAt")?.optString("integerValue", "0")?.toLongOrNull() ?: 0L,
+            invitedEmail = fields.optJSONObject("invitedEmail")?.optString("stringValue", "") ?: "",
+            invitedName = fields.optJSONObject("invitedName")?.optString("stringValue", "") ?: "",
+            role = fields.optJSONObject("role")?.optString("stringValue", "Data Entry") ?: "Data Entry",
+            status = status,
+            createdAt = fields.optJSONObject("createdAt")?.optString("integerValue", "0")?.toLongOrNull() ?: System.currentTimeMillis()
+        )
+    }
+
+    suspend fun fetchInvitesForEmailCloud(email: String): List<TeamInviteRecord> = withContext(Dispatchers.IO) {
+        val cleanEmail = email.trim().lowercase()
+        if (!cleanEmail.contains("@")) return@withContext emptyList()
+        val emailKey = sanitizeDocKey(cleanEmail)
+        val idToken = getFirebaseAuthToken()
+
+        val fields = fetchFirestoreFields("user_invites", emailKey, idToken)
+            ?: fetchFirestoreFields("cashbooks", "userinvites_$emailKey", idToken)
+            ?: return@withContext emptyList()
+
+        val rawArr = fields.optJSONObject("invitesJson")?.optString("stringValue", "[]") ?: "[]"
+        val result = mutableListOf<TeamInviteRecord>()
+        try {
+            val arr = JSONArray(rawArr)
+            for (i in 0 until arr.length()) {
+                val inv = jsonToTeamInvite(arr.getJSONObject(i))
+                if (inv != null && !inv.status.equals("REVOKED", ignoreCase = true)) {
+                    result.add(inv)
+                }
+            }
+        } catch (_: Exception) { }
+        result
+    }
+
+    suspend fun redeemInviteCodeCloud(
+        rawCode: String,
+        acceptorEmail: String,
+        dao: LedgerDao
+    ): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        val cleanAcceptor = acceptorEmail.trim().lowercase()
+        val invite = lookupInviteByCodeCloud(rawCode)
+            ?: return@withContext Pair(false, "Invite code '${rawCode.trim().uppercase()}' not found or has been revoked. Ask the business owner to re-send the invite.")
+
+        if (invite.ownerEmail.equals(cleanAcceptor, ignoreCase = true)) {
+            return@withContext Pair(false, "You are already the owner of '${invite.businessName}'.")
+        }
+
+        if (invite.invitedEmail.isNotBlank() && cleanAcceptor.isNotBlank() && !invite.invitedEmail.equals(cleanAcceptor, ignoreCase = true)) {
+            return@withContext Pair(false, "This invite was issued for '${invite.invitedEmail}'. Please Sign In or Sign Up with '${invite.invitedEmail}' to join '${invite.businessName}'.")
+        }
+
+        removeBusinessFromTombstones(invite.businessName)
+        val ref = SharedWorkspaceRef(
+            ownerDocId = invite.ownerDocId,
+            ownerEmail = invite.ownerEmail,
+            businessName = invite.businessName,
+            businessCreatedAt = invite.businessCreatedAt,
+            role = invite.role,
+            inviteCode = invite.inviteCode
+        )
+        addOrUpdateSharedWorkspace(ref, cleanAcceptor.ifBlank { getEmail() })
+
+        val idToken = getFirebaseAuthToken()
+        val acceptedInvite = invite.copy(status = "ACCEPTED")
+        val codeDocKey = invite.inviteCode.trim().uppercase().replace(Regex("[^A-Z0-9_-]"), "_")
+        val acceptedPayload = buildFirestoreFields(
+            "inviteCode" to acceptedInvite.inviteCode,
+            "ownerEmail" to acceptedInvite.ownerEmail,
+            "ownerDocId" to acceptedInvite.ownerDocId,
+            "businessName" to acceptedInvite.businessName,
+            "businessCreatedAt" to acceptedInvite.businessCreatedAt,
+            "invitedEmail" to acceptedInvite.invitedEmail,
+            "invitedName" to acceptedInvite.invitedName,
+            "role" to acceptedInvite.role,
+            "status" to "ACCEPTED",
+            "createdAt" to acceptedInvite.createdAt,
+            "inviteJson" to teamInviteToJson(acceptedInvite).toString()
+        )
+        patchOrPostFirestoreDoc("team_invites", codeDocKey, acceptedPayload, idToken)
+        patchOrPostFirestoreDoc("cashbooks", "invite_$codeDocKey", acceptedPayload, idToken)
+
+        val pulled = syncSingleSharedWorkspace(ref, cleanAcceptor, dao, idToken)
+        if (pulled) {
+            Pair(true, "Joined '${invite.businessName}' as ${invite.role}!")
+        } else {
+            Pair(false, "Invite verified, but owner's cloud data is not synced yet. Ask the owner to tap 'Verify & Sync Cloud' and retry.")
+        }
+    }
+
+    private suspend fun syncSingleSharedWorkspace(
+        ref: SharedWorkspaceRef,
+        sessionEmail: String,
+        dao: LedgerDao,
+        idToken: String?
+    ): Boolean {
+        val ownerFields = fetchFirestoreFields("cashbooks", ref.ownerDocId, idToken) ?: return false
+        val ownerJsonStr = ownerFields.optJSONObject("dataJson")?.optString("stringValue", "") ?: ""
+        if (ownerJsonStr.isBlank()) return false
+
+        val ownerRoot = try { JSONObject(ownerJsonStr) } catch (_: Exception) { return false }
+        val ownerBizArr = ownerRoot.optJSONArray("businesses") ?: return false
+
+        // Find the specific shared business in the owner's doc
+        var sharedBizObj: JSONObject? = null
+        for (i in 0 until ownerBizArr.length()) {
+            val b = ownerBizArr.getJSONObject(i)
+            val bName = b.optString("name", "")
+            val bCreated = b.optLong("createdAt", 0L)
+            if (bName.equals(ref.businessName, ignoreCase = true) || (ref.businessCreatedAt > 0L && bCreated == ref.businessCreatedAt)) {
+                sharedBizObj = b
+                break
+            }
+        }
+
+        // Verify business still exists and teammate is still on team roster
+        if (sharedBizObj == null) {
+            val localMatch = dao.getAllBusinessesList().find {
+                it.name.equals(ref.businessName, ignoreCase = true) && it.userEmail.equals(ref.ownerEmail, ignoreCase = true)
+            }
+            if (localMatch != null) {
+                dao.deleteBooksForBusiness(localMatch.id)
+                dao.deleteTeamMembersForBusiness(localMatch.id)
+                dao.deleteBusiness(localMatch)
+            }
+            removeSharedWorkspace(ref.ownerEmail, ref.businessName, sessionEmail)
+            return false
+        }
+
+        val remoteBizOldId = sharedBizObj.getInt("id")
+        val remoteBizName = sharedBizObj.getString("name")
+        val ownerTeamArr = ownerRoot.optJSONArray("team_members") ?: JSONArray()
+        val scopedTeamArr = JSONArray()
+        var activeRoleFromOwner: String? = null
+        for (i in 0 until ownerTeamArr.length()) {
+            val tm = ownerTeamArr.getJSONObject(i)
+            if (tm.optInt("businessId", -1) == remoteBizOldId) {
+                scopedTeamArr.put(tm)
+                if (tm.optString("email", "").trim().equals(sessionEmail, ignoreCase = true)) {
+                    activeRoleFromOwner = tm.optString("role", ref.role)
+                }
+            }
+        }
+
+        if (activeRoleFromOwner == null) {
+            // Owner removed this team member
+            val localMatch = dao.getAllBusinessesList().find {
+                it.name.equals(remoteBizName, ignoreCase = true) && it.userEmail.equals(ref.ownerEmail, ignoreCase = true)
+            }
+            if (localMatch != null) {
+                dao.deleteBooksForBusiness(localMatch.id)
+                dao.deleteTeamMembersForBusiness(localMatch.id)
+                dao.deleteBusiness(localMatch)
+            }
+            removeSharedWorkspace(ref.ownerEmail, ref.businessName, sessionEmail)
+            return false
+        }
+
+        if (activeRoleFromOwner != ref.role || remoteBizName != ref.businessName) {
+            addOrUpdateSharedWorkspace(ref.copy(role = activeRoleFromOwner, businessName = remoteBizName), sessionEmail)
+        }
+
+        // Import owner tombstones for deleted books/transactions so deleted entries vanish cleanly
+        val ownerTombstones = ownerRoot.optJSONObject("tombstones")
+        val ownerDeletedTxTs = mutableSetOf<String>()
+        ownerTombstones?.optJSONArray("deleted_transactions")?.let { arr ->
+            for (i in 0 until arr.length()) ownerDeletedTxTs.add(arr.optString(i, ""))
+        }
+
+        val ownerBooksArr = ownerRoot.optJSONArray("books") ?: JSONArray()
+        val ownerTxArr = ownerRoot.optJSONArray("transactions") ?: JSONArray()
+
+        val remoteSharedBookOldIds = mutableSetOf<Int>()
+        val remoteSharedBookNames = mutableSetOf<String>()
+        val ownerBookOldIdToName = mutableMapOf<Int, String>()
+        var maxRemoteBookId = 0
+        for (i in 0 until ownerBooksArr.length()) {
+            val bk = ownerBooksArr.getJSONObject(i)
+            val id = bk.getInt("id")
+            if (id > maxRemoteBookId) maxRemoteBookId = id
+            if (bk.optInt("businessId", -1) == remoteBizOldId) {
+                remoteSharedBookOldIds.add(id)
+                val bName = bk.getString("name")
+                remoteSharedBookNames.add(bName.trim().lowercase())
+                ownerBookOldIdToName[id] = bName.trim().lowercase()
+            }
+        }
+
+        // 1. PULL: Ensure local Room DB has the shared Business, Books, Transactions, and TeamMembers
+        var localBiz = dao.getAllBusinessesList().find {
+            it.name.equals(remoteBizName, ignoreCase = true) && it.userEmail.equals(ref.ownerEmail, ignoreCase = true)
+        }
+        val localBizId = if (localBiz != null) {
+            if (!localBiz.isSynced) {
+                localBiz = localBiz.copy(isSynced = true)
+                dao.updateBusiness(localBiz)
+            }
+            localBiz.id
+        } else {
+            val created = Business(
+                id = 0,
+                name = remoteBizName,
+                userEmail = ref.ownerEmail.trim().lowercase(),
+                createdAt = sharedBizObj.optLong("createdAt", System.currentTimeMillis()),
+                isSynced = true
+            )
+            dao.insertBusiness(created).toInt()
+        }
+
+        val existingLocalBooks = dao.getAllBooksList().filter { it.businessId == localBizId }.toMutableList()
+        val bookOldToLocalId = mutableMapOf<Int, Int>()
+        for (i in 0 until ownerBooksArr.length()) {
+            val bkObj = ownerBooksArr.getJSONObject(i)
+            if (bkObj.optInt("businessId", -1) != remoteBizOldId) continue
+            val oldBookId = bkObj.getInt("id")
+            val bkName = bkObj.getString("name")
+            val bkPhone = bkObj.optString("phone", "")
+            val bkCreatedAt = bkObj.optLong("createdAt", System.currentTimeMillis())
+
+            val matched = existingLocalBooks.find { it.name.equals(bkName, ignoreCase = true) }
+            if (matched != null) {
+                bookOldToLocalId[oldBookId] = matched.id
+                if (!matched.isSynced || matched.phone != bkPhone) {
+                    val upd = matched.copy(phone = bkPhone, isSynced = true)
+                    dao.updateBook(upd)
+                    val idx = existingLocalBooks.indexOfFirst { it.id == matched.id }
+                    if (idx >= 0) existingLocalBooks[idx] = upd
+                }
+            } else {
+                val nb = Book(0, localBizId, bkName, bkPhone, bkCreatedAt, true)
+                val newId = dao.insertBook(nb).toInt()
+                bookOldToLocalId[oldBookId] = newId
+                existingLocalBooks.add(nb.copy(id = newId))
+            }
+        }
+
+        // Remove synced local books under this shared biz that owner deleted remotely
+        existingLocalBooks.filter { it.isSynced && !remoteSharedBookNames.contains(it.name.trim().lowercase()) }
+            .forEach { delBk ->
+                dao.deleteBook(delBk)
+                existingLocalBooks.remove(delBk)
+            }
+
+        val localBookIds = existingLocalBooks.map { it.id }.toSet()
+        val existingLocalTxs = dao.getAllTransactionsList().filter { it.bookId in localBookIds }.toMutableList()
+        val remoteTxTsSet = mutableSetOf<Long>()
+
+        for (i in 0 until ownerTxArr.length()) {
+            val txObj = ownerTxArr.getJSONObject(i)
+            val oldBookId = txObj.getInt("bookId")
+            if (oldBookId !in remoteSharedBookOldIds) continue
+            val mappedBookId = bookOldToLocalId[oldBookId] ?: continue
+            val ts = txObj.getLong("timestamp")
+            if (ownerDeletedTxTs.contains(ts.toString())) continue
+            remoteTxTsSet.add(ts)
+
+            val amount = txObj.getDouble("amount")
+            val type = txObj.getString("type")
+            val category = txObj.getString("category")
+            val paymentMethod = txObj.getString("paymentMethod")
+            val remarks = txObj.getString("remarks")
+            val receiptUri = if (txObj.has("receiptUri")) txObj.optString("receiptUri", null) else null
+
+            val matched = existingLocalTxs.find { it.timestamp == ts && it.bookId == mappedBookId }
+            if (matched != null) {
+                if (matched.amount != amount || matched.type != type || matched.category != category ||
+                    matched.paymentMethod != paymentMethod || matched.remarks != remarks || !matched.isSynced) {
+                    val upd = matched.copy(
+                        amount = amount,
+                        type = type,
+                        category = category,
+                        paymentMethod = paymentMethod,
+                        remarks = remarks,
+                        receiptUri = receiptUri,
+                        isSynced = true
+                    )
+                    dao.updateTransaction(upd)
+                    val idx = existingLocalTxs.indexOfFirst { it.id == matched.id }
+                    if (idx >= 0) existingLocalTxs[idx] = upd
+                }
+            } else {
+                val ntx = Transaction(0, mappedBookId, amount, type, category, paymentMethod, remarks, ts, true, receiptUri)
+                val newId = dao.insertTransaction(ntx).toInt()
+                existingLocalTxs.add(ntx.copy(id = newId))
+            }
+        }
+
+        // Remove previously-synced local transactions deleted by the owner
+        existingLocalTxs.filter { it.isSynced && !remoteTxTsSet.contains(it.timestamp) }
+            .forEach { delTx ->
+                dao.deleteTransaction(delTx)
+                existingLocalTxs.remove(delTx)
+            }
+
+        // Sync Team Members list for this shared business
+        val existingLocalTeam = dao.getAllTeamMembersList().filter { it.businessId == localBizId }.toMutableList()
+        val remoteTmEmails = mutableSetOf<String>()
+        for (i in 0 until scopedTeamArr.length()) {
+            val tmObj = scopedTeamArr.getJSONObject(i)
+            val tmEmail = tmObj.optString("email", "")
+            val tmName = tmObj.optString("name", "")
+            val tmPhone = tmObj.optString("phone", "")
+            val tmRole = tmObj.optString("role", "Data Entry")
+            val tmCreatedAt = tmObj.optLong("createdAt", System.currentTimeMillis())
+            remoteTmEmails.add(tmEmail.trim().lowercase())
+            val matched = existingLocalTeam.find { it.email.equals(tmEmail, ignoreCase = true) }
+            if (matched != null) {
+                if (matched.name != tmName || matched.phone != tmPhone || matched.role != tmRole) {
+                    dao.insertTeamMember(matched.copy(name = tmName, phone = tmPhone, role = tmRole))
+                }
+            } else {
+                dao.insertTeamMember(TeamMember(0, localBizId, tmName, tmEmail, tmPhone, tmRole, tmCreatedAt))
+            }
+        }
+        existingLocalTeam.filter { !remoteTmEmails.contains(it.email.trim().lowercase()) }
+            .forEach { dao.deleteTeamMember(it) }
+
+        // 2. PUSH: If collaborator added new books or transactions locally (isSynced == false), merge ONLY into this shared business in owner's doc
+        val unsyncedLocalBooks = existingLocalBooks.filter { !it.isSynced }
+        val unsyncedLocalTxs = existingLocalTxs.filter { !it.isSynced }
+        if (unsyncedLocalBooks.isNotEmpty() || unsyncedLocalTxs.isNotEmpty()) {
+            var ownerDocModified = false
+            val localBookIdToOwnerOldId = mutableMapOf<Int, Int>()
+            for ((ownerBkOldId, localBkId) in bookOldToLocalId) {
+                localBookIdToOwnerOldId[localBkId] = ownerBkOldId
+            }
+
+            for (lb in unsyncedLocalBooks) {
+                val existingEntryIdx = (0 until ownerBooksArr.length()).firstOrNull { idx ->
+                    val o = ownerBooksArr.getJSONObject(idx)
+                    o.optInt("businessId", -1) == remoteBizOldId && o.optString("name", "").equals(lb.name, ignoreCase = true)
+                }
+                if (existingEntryIdx != null) {
+                    localBookIdToOwnerOldId[lb.id] = ownerBooksArr.getJSONObject(existingEntryIdx).getInt("id")
+                } else {
+                    maxRemoteBookId += 1
+                    val newOwnerBookId = maxRemoteBookId
+                    ownerBooksArr.put(JSONObject().apply {
+                        put("id", newOwnerBookId)
+                        put("businessId", remoteBizOldId)
+                        put("name", lb.name)
+                        put("phone", lb.phone)
+                        put("createdAt", lb.createdAt)
+                        put("isSynced", true)
+                    })
+                    localBookIdToOwnerOldId[lb.id] = newOwnerBookId
+                    ownerDocModified = true
+                }
+            }
+
+            var maxRemoteTxId = 0
+            val existingOwnerTxKeys = mutableSetOf<String>()
+            for (i in 0 until ownerTxArr.length()) {
+                val o = ownerTxArr.getJSONObject(i)
+                val id = o.optInt("id", 0)
+                if (id > maxRemoteTxId) maxRemoteTxId = id
+                existingOwnerTxKeys.add("${o.optInt("bookId", 0)}:${o.optLong("timestamp", 0L)}")
+            }
+
+            for (lt in unsyncedLocalTxs) {
+                val targetOwnerBookId = localBookIdToOwnerOldId[lt.bookId] ?: continue
+                if (ownerDeletedTxTs.contains(lt.timestamp.toString())) continue
+                val key = "$targetOwnerBookId:${lt.timestamp}"
+                if (!existingOwnerTxKeys.contains(key)) {
+                    maxRemoteTxId += 1
+                    ownerTxArr.put(JSONObject().apply {
+                        put("id", maxRemoteTxId)
+                        put("bookId", targetOwnerBookId)
+                        put("amount", lt.amount)
+                        put("type", lt.type)
+                        put("category", lt.category)
+                        put("paymentMethod", lt.paymentMethod)
+                        put("remarks", lt.remarks)
+                        put("timestamp", lt.timestamp)
+                        put("isSynced", true)
+                        if (lt.receiptUri != null) put("receiptUri", lt.receiptUri)
+                    })
+                    existingOwnerTxKeys.add(key)
+                    ownerDocModified = true
+                } else if (!activeRoleFromOwner.equals("Data Entry", ignoreCase = true)) {
+                    // Partner/Admin/Boss edited an existing entry -> update matching owner tx
+                    for (idx in 0 until ownerTxArr.length()) {
+                        val existingObj = ownerTxArr.getJSONObject(idx)
+                        if (existingObj.optInt("bookId", -1) == targetOwnerBookId &&
+                            existingObj.optLong("timestamp", -1L) == lt.timestamp
+                        ) {
+                            existingObj.put("amount", lt.amount)
+                            existingObj.put("type", lt.type)
+                            existingObj.put("category", lt.category)
+                            existingObj.put("paymentMethod", lt.paymentMethod)
+                            existingObj.put("remarks", lt.remarks)
+                            if (lt.receiptUri != null) existingObj.put("receiptUri", lt.receiptUri)
+                            ownerDocModified = true
+                            break
+                        }
+                    }
+                }
+            }
+
+            if (ownerDocModified) {
+                ownerRoot.put("books", ownerBooksArr)
+                ownerRoot.put("transactions", ownerTxArr)
+                ownerRoot.put("timestamp", System.currentTimeMillis())
+                val pushPayload = buildFirestoreFields(
+                    "userEmail" to ref.ownerEmail,
+                    "dataJson" to ownerRoot.toString(2),
+                    "updatedAt" to System.currentTimeMillis()
+                )
+                if (patchOrPostFirestoreDoc("cashbooks", ref.ownerDocId, pushPayload, idToken)) {
+                    unsyncedLocalBooks.forEach { dao.updateBook(it.copy(isSynced = true)) }
+                    unsyncedLocalTxs.forEach { dao.updateTransaction(it.copy(isSynced = true)) }
+                }
+            }
+        }
+
+        return true
+    }
+
+    suspend fun syncInvitedWorkspacesForUser(userEmail: String, dao: LedgerDao): Pair<Int, Boolean> = withContext(Dispatchers.IO) {
+        val cleanEmail = userEmail.trim().lowercase()
+        if (cleanEmail.isBlank() || cleanEmail.endsWith(".local")) return@withContext Pair(0, false)
+        val idToken = getFirebaseAuthToken()
+
+        // 1. Auto-discover pending/accepted invites addressed to this user's email
+        val remoteInvites = fetchInvitesForEmailCloud(cleanEmail)
+        var newlyAccepted = false
+        for (inv in remoteInvites) {
+            if (inv.ownerEmail.equals(cleanEmail, ignoreCase = true)) continue
+            removeBusinessFromTombstones(inv.businessName)
+            val existingRef = getSharedWorkspaces(cleanEmail).firstOrNull {
+                it.ownerDocId == inv.ownerDocId && it.businessName.equals(inv.businessName, ignoreCase = true)
+            }
+            if (existingRef == null) {
+                newlyAccepted = true
+            }
+            addOrUpdateSharedWorkspace(
+                SharedWorkspaceRef(
+                    ownerDocId = inv.ownerDocId,
+                    ownerEmail = inv.ownerEmail,
+                    businessName = inv.businessName,
+                    businessCreatedAt = inv.businessCreatedAt,
+                    role = inv.role,
+                    inviteCode = inv.inviteCode
+                ),
+                cleanEmail
+            )
+            if (inv.status == "PENDING") {
+                val codeDocKey = inv.inviteCode.trim().uppercase().replace(Regex("[^A-Z0-9_-]"), "_")
+                val accepted = inv.copy(status = "ACCEPTED")
+                val acceptedPayload = buildFirestoreFields(
+                    "status" to "ACCEPTED",
+                    "inviteJson" to teamInviteToJson(accepted).toString()
+                )
+                patchOrPostFirestoreDoc("team_invites", codeDocKey, acceptedPayload, idToken)
+                patchOrPostFirestoreDoc("cashbooks", "invite_$codeDocKey", acceptedPayload, idToken)
+            }
+        }
+
+        // 2. Sync each joined shared workspace safely (pull updates, push collaborator additions)
+        val refs = getSharedWorkspaces(cleanEmail)
+        var syncedCount = 0
+        for (ref in refs) {
+            if (syncSingleSharedWorkspace(ref, cleanEmail, dao, idToken)) {
+                syncedCount++
+            }
+        }
+        Pair(syncedCount, newlyAccepted)
     }
 
     suspend fun syncWithFirebaseCloud(dao: LedgerDao): String = withContext(Dispatchers.IO) {
@@ -1704,28 +2861,23 @@ class GoogleDriveSyncManager(private val context: Context) {
                 if (!candidateDocIds.contains(uDocId)) candidateDocIds.add(uDocId)
             }
 
-            // Include candidate docIds for all team members so team sync shares changes bi-directionally
-            val allTeamMembers = dao.getAllTeamMembersList()
-            for (tm in allTeamMembers) {
-                if (tm.email.isNotBlank() && tm.email.contains("@")) {
-                    val cleanTmEmail = tm.email.trim().lowercase().replace(Regex("[^a-zA-Z0-9_]"), "_")
-                    val tmDocId = "cashbook_$cleanTmEmail"
-                    if (!candidateDocIds.contains(tmDocId)) candidateDocIds.add(tmDocId)
-                }
-            }
-
             if (!isRealCloudAccount() && !candidateDocIds.contains("cashbook_default_user")) {
                 candidateDocIds.add("cashbook_default_user")
             }
 
             val idToken = getFirebaseAuthToken()
+            val candidateJsons = mutableListOf<Triple<String, Long, String>>() // (docId, timestamp, json)
+            var primaryCloudJson: String? = null
             var bestCloudJson: String? = null
             var maxCloudTimestamp = 0L
 
             val projId = getFirebaseProjectId()
             val apiKey = getFirebaseApiKey()
 
-            // 1. Check Firestore for all candidate docIds
+            // 1. Check Firestore ONLY for docs owned by this user (never pull or overwrite other teammates' personal backups)
+            val ownedDocIds = mutableListOf<String>()
+            ownedDocIds.add(primaryDocId)
+
             for (docId in candidateDocIds) {
                 try {
                     val getUrl = "https://firestore.googleapis.com/v1/projects/$projId/databases/(default)/documents/cashbooks/$docId?key=$apiKey"
@@ -1741,12 +2893,27 @@ class GoogleDriveSyncManager(private val context: Context) {
                                 val root = JSONObject(bodyStr)
                                 val fields = root.optJSONObject("fields")
                                 if (fields != null) {
+                                    val docOwnerEmail = fields.optJSONObject("userEmail")?.optString("stringValue", "")?.trim()?.lowercase() ?: ""
                                     val json = fields.optJSONObject("dataJson")?.optString("stringValue", "")
                                     if (!json.isNullOrBlank()) {
-                                        val ts = extractJsonTimestamp(json)
-                                        if (ts > maxCloudTimestamp) {
-                                            maxCloudTimestamp = ts
-                                            bestCloudJson = json
+                                        val parsedAccEmail = try {
+                                            JSONObject(json).optJSONObject("account_info")?.optString("user_email", "")?.trim()?.lowercase() ?: ""
+                                        } catch (_: Exception) { "" }
+                                        val effectiveDocEmail = docOwnerEmail.ifBlank { parsedAccEmail }
+                                        val isCompatibleOwner = docId == primaryDocId ||
+                                            effectiveDocEmail.isBlank() ||
+                                            effectiveDocEmail == userEmail
+                                        if (isCompatibleOwner) {
+                                            if (!ownedDocIds.contains(docId)) ownedDocIds.add(docId)
+                                            val ts = extractJsonTimestamp(json)
+                                            candidateJsons.add(Triple(docId, ts, json))
+                                            if (docId == primaryDocId) {
+                                                primaryCloudJson = json
+                                            }
+                                            if (ts > maxCloudTimestamp) {
+                                                maxCloudTimestamp = ts
+                                                bestCloudJson = json
+                                            }
                                         }
                                     }
                                 }
@@ -1762,28 +2929,33 @@ class GoogleDriveSyncManager(private val context: Context) {
                 }
             }
 
-            // 2. Check local prefs vaults for active candidate IDs only if cloud returned nothing
-            if (bestCloudJson.isNullOrBlank()) {
-                for (candId in candidateDocIds) {
-                    val vaultJson = prefs.getString("cloud_vault_$candId", "")
-                    if (!vaultJson.isNullOrBlank()) {
-                        val ts = extractJsonTimestamp(vaultJson)
-                        if (ts > maxCloudTimestamp) {
-                            maxCloudTimestamp = ts
-                            bestCloudJson = vaultJson
-                        }
+            // 2. Check local prefs vault for primaryDocId only if cloud returned nothing
+            if (candidateJsons.isEmpty()) {
+                val vaultJson = prefs.getString("cloud_vault_$primaryDocId", "")
+                if (!vaultJson.isNullOrBlank()) {
+                    val ts = extractJsonTimestamp(vaultJson)
+                    candidateJsons.add(Triple(primaryDocId, ts, vaultJson))
+                    if (ts > maxCloudTimestamp) {
+                        maxCloudTimestamp = ts
+                        bestCloudJson = vaultJson
                     }
                 }
             }
 
-            val userHasModified = prefs.getBoolean("user_has_modified_local_db", false)
-            val localLastModifiedTs = prefs.getLong("local_db_last_modified_ts", 0L)
-            val localLastSyncedTs = prefs.getLong("local_db_last_synced_ts", 0L)
-            val isCloudNewer = maxCloudTimestamp > maxOf(localLastModifiedTs, localLastSyncedTs)
-
             var restored = false
-            if (!bestCloudJson.isNullOrBlank()) {
-                restored = restoreDatabase(bestCloudJson!!, dao)
+            // Merge valid owned snapshots chronologically (oldest -> newest)
+            if (candidateJsons.isNotEmpty()) {
+                val sortedDocs = candidateJsons.sortedBy { it.second }
+                for ((_, _, docJson) in sortedDocs) {
+                    if (restoreDatabase(docJson, dao)) {
+                        restored = true
+                    }
+                }
+                if (primaryCloudJson != null && bestCloudJson != primaryCloudJson) {
+                    if (restoreDatabase(primaryCloudJson!!, dao)) {
+                        restored = true
+                    }
+                }
                 if (restored) {
                     prefs.edit().putBoolean("has_performed_initial_cloud_restore_$primaryDocId", true).apply()
                     dao.markAllBusinessesSynced()
@@ -1793,18 +2965,21 @@ class GoogleDriveSyncManager(private val context: Context) {
                 }
             }
 
-            // 3. Serialize full DB after restoration/merge
-            val finalJson = serializeDatabaseFromDao(dao)
-
-            // Save in local vault for all candidate docIds
-            for (cDocId in candidateDocIds) {
-                prefs.edit()
-                    .putString("cloud_vault_$cDocId", finalJson)
-                    .putLong("cloud_vault_ts_$cDocId", System.currentTimeMillis())
-                    .apply()
+            // 2b. Discover & sync any invited/shared team workspaces for this email
+            val (sharedSyncedCount, newlyJoinedInvite) = syncInvitedWorkspacesForUser(userEmail, dao)
+            if (newlyJoinedInvite || sharedSyncedCount > 0) {
+                restored = restored || newlyJoinedInvite
             }
 
-            // 4. Update candidateDocIds in Firestore
+            // 3. Serialize user's own businesses after restoration/merge
+            val finalJson = serializeDatabaseFromDao(dao)
+
+            prefs.edit()
+                .putString("cloud_vault_$primaryDocId", finalJson)
+                .putLong("cloud_vault_ts_$primaryDocId", System.currentTimeMillis())
+                .apply()
+
+            // 4. Update ONLY this user's own docIds in Firestore
             val payload = buildFirestoreFields(
                 "userEmail" to userEmail,
                 "dataJson" to finalJson,
@@ -1815,7 +2990,7 @@ class GoogleDriveSyncManager(private val context: Context) {
             var syncSuccess = false
             var syncSource = "Firebase Cloud"
 
-            for (cDocId in candidateDocIds) {
+            for (cDocId in ownedDocIds) {
                 val patchUrl = "https://firestore.googleapis.com/v1/projects/$projId/databases/(default)/documents/cashbooks/$cDocId?updateMask.fieldPaths=userEmail&updateMask.fieldPaths=dataJson&updateMask.fieldPaths=updatedAt&key=$apiKey"
                 val patchReqBuilder = Request.Builder().url(patchUrl)
                 if (!idToken.isNullOrBlank()) {
@@ -2007,28 +3182,30 @@ class GoogleDriveSyncManager(private val context: Context) {
         }
     }
 
-    suspend fun syncWithCloud(dao: LedgerDao): String = withContext(Dispatchers.IO) {
-        if (!isRealCloudAccount()) {
-            return@withContext "Offline Local Mode — Saved in local SQLite database"
-        }
-
-        if (isUserSignedIn()) {
-            return@withContext try {
-                syncWithFirebaseCloud(dao)
-            } catch (e: Exception) {
-                "Firebase Sync Error: ${e.message}"
+    suspend fun syncWithCloud(dao: LedgerDao): String = syncMutex.withLock {
+        withContext(Dispatchers.IO) {
+            if (!isRealCloudAccount()) {
+                return@withContext "Offline Local Mode — Saved in local SQLite database"
             }
-        }
 
-        if (hasGoogleDriveToken()) {
-            return@withContext try {
-                syncWithGoogleDrive(dao)
-            } catch (e: Exception) {
-                "Drive Sync Error: ${e.message}"
+            if (isUserSignedIn()) {
+                return@withContext try {
+                    syncWithFirebaseCloud(dao)
+                } catch (e: Exception) {
+                    "Firebase Sync Error: ${e.message}"
+                }
             }
-        }
 
-        return@withContext "Offline — Connect Cloud Account to enable Auto Sync"
+            if (hasGoogleDriveToken()) {
+                return@withContext try {
+                    syncWithGoogleDrive(dao)
+                } catch (e: Exception) {
+                    "Drive Sync Error: ${e.message}"
+                }
+            }
+
+            return@withContext "Offline — Connect Cloud Account to enable Auto Sync"
+        }
     }
 
     private fun fetchUserProfile(token: String) {
@@ -2050,10 +3227,6 @@ class GoogleDriveSyncManager(private val context: Context) {
                         if (email.isNotBlank()) {
                             val un = email.substringBefore("@")
                             registerUser(if (name.isNotBlank()) name else un, email, un, "google_oauth_pass")
-                            prefs.edit()
-                                .putBoolean("is_user_logged_in", true)
-                                .putBoolean("is_super_admin", true)
-                                .apply()
                         }
                     }
                 }

@@ -10,6 +10,7 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.*
+import com.example.notifications.WasooliNotificationHelper
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.*
@@ -97,33 +98,84 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    // Simulated Active Role (for granular testing of team permissions)
-    private val _simulatedRole = MutableStateFlow("Boss") // "Boss", "Admin", "Partner", "Data Entry"
-    val simulatedRole: StateFlow<String> = _simulatedRole.asStateFlow()
+    // --- Super Admin & User Auth State & Actions ---
+    val isSuperAdmin = MutableStateFlow(syncManager.isSuperAdminLoggedIn())
+    val isUserSignedIn = MutableStateFlow(syncManager.isUserSignedIn())
+    private val _currentUserEmail = MutableStateFlow(syncManager.getEmail().trim().lowercase())
+    val currentUserEmail: StateFlow<String> = _currentUserEmail.asStateFlow()
 
-    // Multi-Business states
-    val businesses: StateFlow<List<Business>> = repository.allBusinesses
-        .map { list ->
-            val activeEmail = syncManager.getEmail().trim().lowercase()
-            if (activeEmail.isBlank() || isSuperAdmin.value) {
-                list
-            } else {
-                list.filter { biz ->
-                    biz.userEmail.isBlank() || biz.userEmail.trim().lowercase() == activeEmail
+    @Volatile
+    private var pendingCloudSync = false
+
+    private fun filterBusinessesForUser(
+        list: List<Business>,
+        activeEmail: String,
+        superAdmin: Boolean,
+        teamMembers: List<TeamMember>
+    ): List<Business> {
+        val cleanEmail = activeEmail.trim().lowercase()
+        val isOfflineUser = cleanEmail == "offline@cashbook.local" || cleanEmail == "offline_user@cashbook.local" || cleanEmail.endsWith(".local")
+        return when {
+            isOfflineUser -> list.filter { biz ->
+                val owner = biz.userEmail.trim().lowercase()
+                (owner == cleanEmail || owner.isBlank()) && !syncManager.isBusinessDeleted(biz.name, biz.createdAt)
+            }
+            superAdmin -> list.filter { biz ->
+                val owner = biz.userEmail.trim().lowercase()
+                val isOfflineBiz = owner == "offline@cashbook.local" || owner == "offline_user@cashbook.local" || owner.endsWith(".local") ||
+                    biz.name.equals("Offline User's Business", ignoreCase = true) || biz.name.equals("Offline Business", ignoreCase = true)
+                !isOfflineBiz && !syncManager.isBusinessDeleted(biz.name, biz.createdAt)
+            }
+            cleanEmail.isBlank() -> emptyList()
+            else -> list.filter { biz ->
+                val owner = biz.userEmail.trim().lowercase()
+                val isOfflineBiz = owner == "offline@cashbook.local" || owner == "offline_user@cashbook.local" || owner.endsWith(".local") ||
+                    biz.name.equals("Offline User's Business", ignoreCase = true) || biz.name.equals("Offline Business", ignoreCase = true)
+                if (isOfflineBiz || syncManager.isBusinessDeleted(biz.name, biz.createdAt)) {
+                    false
+                } else {
+                    owner == cleanEmail ||
+                        owner.isBlank() ||
+                        teamMembers.any { tm -> tm.businessId == biz.id && tm.email.trim().lowercase() == cleanEmail }
                 }
             }
         }
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000),
-            initialValue = emptyList()
-        )
+    }
+
+    // Simulated Active Role (owner preview/override; invited collaborators strictly use their assigned role)
+    private val _simulatedRole = MutableStateFlow("Boss") // "Boss", "Admin", "Partner", "Data Entry"
+
+    val allTeamMembers: StateFlow<List<TeamMember>> = repository.allTeamMembers.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    // Multi-Business states (reactive to room changes AND account switches/team membership)
+    val businesses: StateFlow<List<Business>> = combine(
+        repository.allBusinesses,
+        _currentUserEmail,
+        isSuperAdmin,
+        repository.allTeamMembers
+    ) { list, activeEmail, superAdmin, teamMembers ->
+        filterBusinessesForUser(list, activeEmail, superAdmin, teamMembers)
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
 
     private val _activeBusiness = MutableStateFlow<Business?>(null)
     val activeBusiness: StateFlow<Business?> = _activeBusiness.asStateFlow()
 
-    // All books across all businesses
-    val allBooks: StateFlow<List<Book>> = repository.allBooks.stateIn(
+    // Scoped books belonging only to the signed-in user's visible businesses
+    val allBooks: StateFlow<List<Book>> = combine(
+        repository.allBooks,
+        businesses
+    ) { booksList, visibleBusinesses ->
+        val visibleBizIds = visibleBusinesses.map { it.id }.toSet()
+        booksList.filter { it.businessId in visibleBizIds }
+    }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = emptyList()
@@ -161,14 +213,14 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     private val _selectedTransactionIds = MutableStateFlow<Set<Int>>(emptySet())
     val selectedTransactionIds: StateFlow<Set<Int>> = _selectedTransactionIds.asStateFlow()
 
-    // Exposure of total transaction and team streams
-    val allTransactions: StateFlow<List<Transaction>> = repository.allTransactions.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
-        initialValue = emptyList()
-    )
-
-    val allTeamMembers: StateFlow<List<TeamMember>> = repository.allTeamMembers.stateIn(
+    // Scoped transactions belonging only to the signed-in user's visible books
+    val allTransactions: StateFlow<List<Transaction>> = combine(
+        repository.allTransactions,
+        allBooks
+    ) { txList, visibleBooks ->
+        val visibleBookIds = visibleBooks.map { it.id }.toSet()
+        txList.filter { it.bookId in visibleBookIds }
+    }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = emptyList()
@@ -188,6 +240,55 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = emptyList()
         )
+
+    val isActiveBusinessOwner: StateFlow<Boolean> = combine(
+        _activeBusiness,
+        _currentUserEmail,
+        isSuperAdmin,
+        activeBusinessTeamMembers
+    ) { biz, email, superAdmin, teamMembers ->
+        val cleanEmail = email.trim().lowercase()
+        if (superAdmin || biz == null || cleanEmail.isBlank() || cleanEmail.endsWith(".local")) {
+            true
+        } else {
+            val ownerEmail = biz.userEmail.trim().lowercase()
+            ownerEmail.isBlank() || ownerEmail == cleanEmail ||
+                teamMembers.any {
+                    it.email.trim().lowercase() == cleanEmail &&
+                        (it.role.equals("Boss", true) || it.role.equals("Owner", true))
+                }
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+
+    val actualUserRoleForActiveBusiness: StateFlow<String> = combine(
+        _activeBusiness,
+        _currentUserEmail,
+        isSuperAdmin,
+        activeBusinessTeamMembers
+    ) { biz, email, superAdmin, teamMembers ->
+        val cleanEmail = email.trim().lowercase()
+        if (superAdmin || biz == null || cleanEmail.isBlank() || cleanEmail.endsWith(".local")) {
+            "Boss"
+        } else {
+            val ownerEmail = biz.userEmail.trim().lowercase()
+            if (ownerEmail.isBlank() || ownerEmail == cleanEmail) {
+                "Boss"
+            } else {
+                teamMembers.firstOrNull { it.email.trim().lowercase() == cleanEmail }?.role ?: "Data Entry"
+            }
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "Boss")
+
+    val simulatedRole: StateFlow<String> = combine(
+        _simulatedRole,
+        actualUserRoleForActiveBusiness,
+        isActiveBusinessOwner
+    ) { simRole, actualRole, isOwner ->
+        if (isOwner) simRole else actualRole
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "Boss")
+
+    private val _pendingEmailInvites = MutableStateFlow<List<TeamInviteRecord>>(emptyList())
+    val pendingEmailInvites: StateFlow<List<TeamInviteRecord>> = _pendingEmailInvites.asStateFlow()
 
     // Automatically retrieve transactions for the active book
     val activeBookTransactions: StateFlow<List<Transaction>> = _activeBook
@@ -271,20 +372,62 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     val chatHistory: StateFlow<List<ChatMessage>> = _chatHistory.asStateFlow()
 
     init {
-        // Only auto-select first business if list is not empty
+        // Keep activeBusiness always valid for the active user's businesses list
         viewModelScope.launch {
             businesses.collect { list ->
-                if (list.isNotEmpty() && _activeBusiness.value == null) {
-                    _activeBusiness.value = list.first()
+                val current = _activeBusiness.value
+                if (list.isEmpty()) {
+                    _activeBusiness.value = null
+                    _activeBook.value = null
+                } else if (current == null || list.none { it.id == current.id }) {
+                    val preferred = list.find { it.name != "My Business" && !it.name.contains("@") } ?: list.first()
+                    _activeBusiness.value = preferred
+                    _activeBook.value = null
+                } else {
+                    val refreshed = list.first { it.id == current.id }
+                    if (refreshed != current) {
+                        _activeBusiness.value = refreshed
+                    }
                 }
             }
         }
 
-        // Only auto-select first book if list is not empty
+        // Keep activeBook always valid for the active business
         viewModelScope.launch {
             books.collect { list ->
-                if (list.isNotEmpty() && _activeBook.value == null) {
+                val current = _activeBook.value
+                if (list.isEmpty()) {
+                    _activeBook.value = null
+                } else if (current == null || list.none { it.id == current.id }) {
                     _activeBook.value = list.first()
+                } else {
+                    val refreshed = list.first { it.id == current.id }
+                    if (refreshed != current) {
+                        _activeBook.value = refreshed
+                    }
+                }
+            }
+        }
+
+        // Initialize Wasooli Notification Channel & reschedule upcoming reminders
+        WasooliNotificationHelper.createNotificationChannel(getApplication())
+        viewModelScope.launch {
+            allBooks.first { it.isNotEmpty() }.let { loadedBooks ->
+                val txs = repository.allTransactions.first()
+                _wasooliDueDates.value.forEach { (bookId, dueMillis) ->
+                    val book = loadedBooks.find { it.id == bookId }
+                    if (book != null) {
+                        val bookTxs = txs.filter { it.bookId == bookId }
+                        val net = bookTxs.filter { it.type == "IN" }.sumOf { it.amount } -
+                            bookTxs.filter { it.type == "OUT" }.sumOf { it.amount }
+                        WasooliNotificationHelper.scheduleWasooliReminder(
+                            context = getApplication(),
+                            bookId = bookId,
+                            bookName = book.name,
+                            netBalance = net,
+                            dueMillis = dueMillis
+                        )
+                    }
                 }
             }
         }
@@ -335,9 +478,12 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             while (isActive) {
                 kotlinx.coroutines.delay(10000L)
-                if (checkIsOnline() && syncManager.isUserSignedIn() && !_isSyncing.value) {
+                if (checkIsOnline() && syncManager.isUserSignedIn() && syncManager.isRealCloudAccount() && !_isSyncing.value) {
                     try {
-                        syncManager.syncWithCloud(database.ledgerDao())
+                        val msg = syncManager.syncWithCloud(database.ledgerDao())
+                        if (checkIsOnline()) {
+                            _syncStatus.value = msg
+                        }
                     } catch (e: Exception) {
                         Log.e("LedgerViewModel", "Background sync error", e)
                     }
@@ -357,7 +503,10 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             _syncStatus.value = "Sign in to synchronize automatically"
             return
         }
-        if (_isSyncing.value) return
+        if (_isSyncing.value) {
+            pendingCloudSync = true
+            return
+        }
 
         _isSyncing.value = true
         _syncStatus.value = "Cloud Syncing..."
@@ -371,8 +520,15 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                     _syncStatus.value = "Offline Mode - No Network Connection"
                 }
 
-                // After sync, preserve current active business & active book if valid
-                val currentBizList = repository.allBusinesses.first()
+                // After sync, preserve current active business & active book strictly scoped to active user
+                val allBiz = repository.allBusinesses.first()
+                val allTeam = repository.allTeamMembers.first()
+                val currentBizList = filterBusinessesForUser(
+                    list = allBiz,
+                    activeEmail = _currentUserEmail.value,
+                    superAdmin = isSuperAdmin.value,
+                    teamMembers = allTeam
+                )
                 if (currentBizList.isNotEmpty()) {
                     val currentBiz = _activeBusiness.value
                     val validBiz = if (currentBiz != null && currentBizList.any { it.id == currentBiz.id }) {
@@ -396,8 +552,10 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                         if (_activeBook.value != validBook) {
                             _activeBook.value = validBook
                         }
+                    } else {
+                        _activeBook.value = null
                     }
-                } else if (syncManager.isUserSignedIn()) {
+                } else if (syncManager.isUserSignedIn() && !pendingCloudSync) {
                     val email = syncManager.getEmail()
                     val globalAcc = syncManager.getGlobalAccounts().find { it.email.equals(email, ignoreCase = true) }
                     val rawName = globalAcc?.name?.trim()?.ifBlank { null } ?: syncManager.getName().trim().ifBlank { null }
@@ -408,6 +566,10 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                 _syncStatus.value = "Sync Interrupted: ${e.message}"
             } finally {
                 _isSyncing.value = false
+                if (pendingCloudSync) {
+                    pendingCloudSync = false
+                    triggerCloudSync()
+                }
             }
         }
     }
@@ -492,7 +654,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun deleteBusiness(business: Business) {
         viewModelScope.launch {
-            syncManager.recordDeletedBusiness(business.name)
+            syncManager.recordDeletedBusiness(business.name, business.userEmail)
             repository.deleteBusiness(business)
             if (_activeBusiness.value?.id == business.id) {
                 _activeBusiness.value = businesses.value.firstOrNull { it.id != business.id }
@@ -515,7 +677,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun createBook(name: String, phone: String = "") {
-        val bizId = _activeBusiness.value?.id ?: 1
+        val bizId = _activeBusiness.value?.id ?: return
         viewModelScope.launch {
             syncManager.removeBookFromTombstones(bizId, name)
             syncManager.markLocalDbModified()
@@ -549,13 +711,18 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    // --- Super Admin & User Auth State & Actions ---
-    val isSuperAdmin = MutableStateFlow(syncManager.isSuperAdminLoggedIn())
-    val isUserSignedIn = MutableStateFlow(syncManager.isUserSignedIn())
-
+    // --- Auth State Updates ---
     fun updateAuthState() {
+        val prevEmail = _currentUserEmail.value
+        val newEmail = syncManager.getEmail().trim().lowercase()
         isUserSignedIn.value = syncManager.isUserSignedIn()
         isSuperAdmin.value = syncManager.isSuperAdminLoggedIn()
+        _currentUserEmail.value = newEmail
+        if (prevEmail != newEmail) {
+            _activeBusiness.value = null
+            _activeBook.value = null
+            _activeParty.value = null
+        }
     }
 
     fun registerCustomUser(name: String, email: String, username: String, pass: String) {
@@ -565,6 +732,76 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             syncManager.registerUserCloud(name, email, username, pass)
             triggerCloudSync()
+        }
+    }
+
+    suspend fun registerUserWithOptionalInvite(
+        name: String,
+        email: String,
+        username: String,
+        pass: String,
+        inviteCode: String = "",
+        defaultBusinessName: String = "",
+        defaultBookName: String = ""
+    ): Pair<Boolean, String> {
+        val cleanCode = inviteCode.trim().uppercase()
+        val cleanEmail = email.trim().lowercase()
+        if (cleanCode.isNotBlank()) {
+            val inv = syncManager.lookupInviteByCodeCloud(cleanCode)
+                ?: return Pair(false, "Invite code '$cleanCode' was not found or has expired. Check the code or clear it to create your own account.")
+            if (inv.invitedEmail.isNotBlank() && !inv.invitedEmail.equals(cleanEmail, ignoreCase = true)) {
+                return Pair(false, "This invite code was sent to '${inv.invitedEmail}'. Please Sign Up with '${inv.invitedEmail}'.")
+            }
+        }
+
+        val (registered, regMsg) = syncManager.registerUserCloud(name, email, username, pass)
+        if (!registered) return Pair(false, regMsg)
+
+        updateAuthState()
+        _simulatedRole.value = "Boss"
+
+        var joinedInviteMsg: String? = null
+        if (cleanCode.isNotBlank()) {
+            val (ok, msg) = syncManager.redeemInviteCodeCloud(cleanCode, cleanEmail, database.ledgerDao())
+            if (ok) joinedInviteMsg = msg
+        }
+
+        val syncMsg = syncManager.syncWithCloud(database.ledgerDao())
+        _syncStatus.value = syncMsg
+
+        val visibleBusinesses = filterBusinessesForUser(
+            list = repository.allBusinesses.first(),
+            activeEmail = _currentUserEmail.value,
+            superAdmin = isSuperAdmin.value,
+            teamMembers = repository.allTeamMembers.first()
+        )
+
+        return if (visibleBusinesses.isEmpty()) {
+            val bizName = defaultBusinessName.trim().ifBlank {
+                if (name.isNotBlank()) "${name.trim()}'s Business" else "Main Business"
+            }
+            val bkName = defaultBookName.trim().ifBlank { "Main CashBook" }
+            syncManager.removeBusinessFromTombstones(bizName)
+            syncManager.markLocalDbModified()
+            val id = repository.insertBusiness(Business(name = bizName, userEmail = cleanEmail, isSynced = false))
+            val newBiz = Business(id = id.toInt(), name = bizName, userEmail = cleanEmail, isSynced = false)
+            _activeBusiness.value = newBiz
+            val bookId = repository.insertBook(Book(businessId = newBiz.id, name = bkName, isSynced = false))
+            _activeBook.value = Book(id = bookId.toInt(), businessId = newBiz.id, name = bkName, isSynced = false)
+            triggerCloudSync()
+            Pair(true, "Welcome ${name.ifBlank { username }}! Account registered.")
+        } else {
+            val preferred = visibleBusinesses.find {
+                it.userEmail.isNotBlank() && !it.userEmail.equals(cleanEmail, ignoreCase = true)
+            } ?: visibleBusinesses.first()
+            _activeBusiness.value = preferred
+            _activeBook.value = null
+            val displayMsg = joinedInviteMsg ?: if (regMsg == "EXISTING_ACCOUNT_RESTORED") {
+                "Existing account verified! Restored your cloud data."
+            } else {
+                "Connected to '${preferred.name}'!"
+            }
+            Pair(true, displayMsg)
         }
     }
 
@@ -604,6 +841,25 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         return success
     }
 
+    fun updateSuperAdminMasterPassword(currentPass: String, newPass: String): Pair<Boolean, String> {
+        if (!syncManager.loginSuperAdminWithPassword(currentPass)) {
+            return Pair(false, "Current Master Password is incorrect")
+        }
+        val trimmedNew = newPass.trim()
+        if (trimmedNew.length < 4) {
+            return Pair(false, "New Master Password must be at least 4 characters")
+        }
+        val saved = syncManager.setSuperAdminMasterPassword(trimmedNew)
+        if (!saved) {
+            return Pair(false, "Failed to save Master Password")
+        }
+        globalAccounts.value = syncManager.getGlobalAccounts()
+        viewModelScope.launch {
+            syncManager.registerUserCloud("Super Admin", "admin@cashbook.com", "admin", trimmedNew)
+        }
+        return Pair(true, "Master Password updated successfully!")
+    }
+
     fun loginUser(userOrEmail: String, pass: String): Boolean {
         val success = syncManager.loginUser(userOrEmail, pass)
         if (success) {
@@ -619,12 +875,18 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun logoutSuperAdmin() {
         syncManager.logoutSuperAdmin()
+        _activeBusiness.value = null
+        _activeBook.value = null
+        _activeParty.value = null
         updateAuthState()
         _simulatedRole.value = "Boss"
     }
 
     fun logoutUser() {
         syncManager.logoutUser()
+        _activeBusiness.value = null
+        _activeBook.value = null
+        _activeParty.value = null
         updateAuthState()
         _simulatedRole.value = "Boss"
     }
@@ -763,7 +1025,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     fun updateTransaction(transaction: Transaction) {
         viewModelScope.launch {
             syncManager.markLocalDbModified()
-            repository.updateTransaction(transaction)
+            repository.updateTransaction(transaction.copy(isSynced = false))
             triggerCloudSync()
         }
     }
@@ -874,30 +1136,153 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    // --- Digital Team Management Actions ---
+    // --- Digital Team Management Actions & Cloud Invites ---
 
-    fun addTeamMember(name: String, email: String, phone: String, role: String, targetBusinessId: Int? = null) {
-        val bizId = targetBusinessId ?: _activeBusiness.value?.id ?: 1
+    fun checkPendingInvitesForEmail(email: String) {
+        val clean = email.trim().lowercase()
+        if (!clean.contains("@")) {
+            _pendingEmailInvites.value = emptyList()
+            return
+        }
         viewModelScope.launch {
-            syncManager.removeTeamMemberFromTombstones(email)
+            _pendingEmailInvites.value = syncManager.fetchInvitesForEmailCloud(clean)
+        }
+    }
+
+    suspend fun lookupInviteCode(code: String): TeamInviteRecord? {
+        return syncManager.lookupInviteByCodeCloud(code)
+    }
+
+    fun joinBusinessByInviteCode(code: String, onResult: (Boolean, String) -> Unit = { _, _ -> }) {
+        viewModelScope.launch {
+            _isSyncing.value = true
+            try {
+                val activeEmail = syncManager.getEmail().trim().lowercase()
+                val (ok, msg) = syncManager.redeemInviteCodeCloud(code, activeEmail, database.ledgerDao())
+                if (ok) {
+                    val bizList = filterBusinessesForUser(
+                        list = repository.allBusinesses.first(),
+                        activeEmail = _currentUserEmail.value,
+                        superAdmin = isSuperAdmin.value,
+                        teamMembers = repository.allTeamMembers.first()
+                    )
+                    val joinedBiz = bizList.find {
+                        it.userEmail.isNotBlank() && !it.userEmail.equals(activeEmail, ignoreCase = true)
+                    } ?: bizList.firstOrNull()
+                    if (joinedBiz != null) {
+                        _activeBusiness.value = joinedBiz
+                        _activeBook.value = null
+                    }
+                    _syncStatus.value = "🟢 $msg"
+                }
+                onResult(ok, msg)
+            } catch (e: Exception) {
+                onResult(false, "Failed to join: ${e.localizedMessage ?: "Network error"}")
+            } finally {
+                _isSyncing.value = false
+            }
+        }
+    }
+
+    fun leaveSharedBusiness(business: Business, onResult: (String) -> Unit = {}) {
+        viewModelScope.launch {
+            val activeEmail = syncManager.getEmail().trim().lowercase()
+            syncManager.removeSharedWorkspace(business.userEmail, business.name, activeEmail)
+            syncManager.recordDeletedBusiness(business.name, business.userEmail)
+            repository.deleteBusiness(business)
+            if (_activeBusiness.value?.id == business.id) {
+                _activeBusiness.value = businesses.value.firstOrNull { it.id != business.id }
+                _activeBook.value = null
+            }
+            onResult("Left '${business.name}'.")
+        }
+    }
+
+    fun getOrCreateInviteForMember(
+        business: Business,
+        member: TeamMember,
+        onResult: (TeamInviteRecord, Boolean) -> Unit
+    ) {
+        viewModelScope.launch {
+            val (inv, published) = syncManager.publishTeamInviteCloud(business, member, database.ledgerDao())
+            onResult(inv, published)
+        }
+    }
+
+    fun addTeamMember(
+        name: String,
+        email: String,
+        phone: String,
+        role: String,
+        targetBusinessId: Int? = null,
+        onInvitePublished: ((TeamInviteRecord, Boolean) -> Unit)? = null
+    ) {
+        val targetBiz = (targetBusinessId?.let { id -> businesses.value.find { it.id == id } }) ?: _activeBusiness.value
+        val bizId = targetBiz?.id ?: 1
+        val cleanEmail = email.trim().lowercase()
+        val member = TeamMember(
+            businessId = bizId,
+            name = name.trim(),
+            email = cleanEmail,
+            phone = phone.trim(),
+            role = role
+        )
+        viewModelScope.launch {
+            syncManager.removeTeamMemberFromTombstones(cleanEmail)
             syncManager.markLocalDbModified()
-            repository.insertTeamMember(
-                TeamMember(
-                    businessId = bizId,
-                    name = name,
-                    email = email,
-                    phone = phone,
-                    role = role
-                )
-            )
+            repository.insertTeamMember(member)
+            if (targetBiz != null) {
+                val (invite, published) = syncManager.publishTeamInviteCloud(targetBiz, member, database.ledgerDao())
+                onInvitePublished?.invoke(invite, published)
+            }
+            triggerCloudSync()
+        }
+    }
+
+    fun updateTeamMember(
+        oldMember: TeamMember,
+        newName: String,
+        newEmail: String,
+        newPhone: String,
+        newRole: String,
+        onCompleted: ((TeamInviteRecord?, Boolean) -> Unit)? = null
+    ) {
+        val targetBiz = businesses.value.find { it.id == oldMember.businessId } ?: _activeBusiness.value
+        val cleanNewEmail = newEmail.trim().lowercase()
+        val updated = oldMember.copy(
+            name = newName.trim(),
+            email = cleanNewEmail,
+            phone = newPhone.trim(),
+            role = newRole
+        )
+        viewModelScope.launch {
+            if (targetBiz != null && oldMember.email.isNotBlank() && !oldMember.email.equals(cleanNewEmail, ignoreCase = true)) {
+                syncManager.recordDeletedTeamMember(oldMember.email)
+                syncManager.revokeTeamInviteCloud(targetBiz, oldMember.email)
+            }
+            syncManager.removeTeamMemberFromTombstones(cleanNewEmail)
+            syncManager.markLocalDbModified()
+            repository.updateTeamMember(updated)
+            var publishedInvite: TeamInviteRecord? = null
+            var publishedOk = false
+            if (targetBiz != null) {
+                val (inv, ok) = syncManager.publishTeamInviteCloud(targetBiz, updated, database.ledgerDao())
+                publishedInvite = inv
+                publishedOk = ok
+            }
+            onCompleted?.invoke(publishedInvite, publishedOk)
             triggerCloudSync()
         }
     }
 
     fun deleteTeamMember(teamMember: TeamMember) {
         viewModelScope.launch {
+            val targetBiz = businesses.value.find { it.id == teamMember.businessId } ?: _activeBusiness.value
             syncManager.recordDeletedTeamMember(teamMember.email)
             repository.deleteTeamMember(teamMember)
+            if (targetBiz != null) {
+                syncManager.revokeTeamInviteCloud(targetBiz, teamMember.email)
+            }
             triggerCloudSync()
         }
     }
@@ -980,13 +1365,33 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     // --- Report Utilities ---
 
     fun getCSVData(): String {
+        return getCSVDataForTransactions(activeBookTransactions.value)
+    }
+
+    fun getCSVDataForTransactions(
+        transactions: List<Transaction>,
+        bookLookup: Map<Int, Book> = emptyMap(),
+        bizLookup: Map<Int, Business> = emptyMap()
+    ): String {
         val sb = StringBuilder()
-        sb.append("Date,Type,Amount,Category,Payment Method,Remarks\n")
+        val includeScopeCols = bookLookup.isNotEmpty()
+        sb.append(
+            if (includeScopeCols) "Date,Business,Cashbook,Type,Amount,Category,Payment Method,Remarks\n"
+            else "Date,Type,Amount,Category,Payment Method,Remarks\n"
+        )
         val df = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
-        for (tx in activeBookTransactions.value) {
+        for (tx in transactions) {
             val dateStr = df.format(Date(tx.timestamp))
             val escapedRemarks = tx.remarks.replace("\"", "\"\"")
-            sb.append("$dateStr,${tx.type},${tx.amount},${tx.category},${tx.paymentMethod},\"$escapedRemarks\"\n")
+            if (includeScopeCols) {
+                val book = bookLookup[tx.bookId]
+                val biz = book?.businessId?.let { bizLookup[it] }
+                val bizName = (biz?.name ?: "").replace("\"", "\"\"")
+                val bkName = (book?.name ?: "").replace("\"", "\"\"")
+                sb.append("$dateStr,\"$bizName\",\"$bkName\",${tx.type},${tx.amount},${tx.category},${tx.paymentMethod},\"$escapedRemarks\"\n")
+            } else {
+                sb.append("$dateStr,${tx.type},${tx.amount},${tx.category},${tx.paymentMethod},\"$escapedRemarks\"\n")
+            }
         }
         return sb.toString()
     }
@@ -1006,6 +1411,9 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     private val _securityAnswer = MutableStateFlow(appPrefs.getString("security_answer", "") ?: "")
     val securityAnswer: StateFlow<String> = _securityAnswer.asStateFlow()
 
+    private val _isBiometricEnabled = MutableStateFlow(appPrefs.getBoolean("is_biometric_enabled", false))
+    val isBiometricEnabled: StateFlow<Boolean> = _isBiometricEnabled.asStateFlow()
+
     // Initially, if app lock is enabled, we start in locked state (false). Otherwise, we start unlocked (true).
     private val _isAppUnlocked = MutableStateFlow(!appPrefs.getBoolean("is_lock_enabled", false))
     val isAppUnlocked: StateFlow<Boolean> = _isAppUnlocked.asStateFlow()
@@ -1016,6 +1424,15 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             return true
         }
         return false
+    }
+
+    fun unlockAppWithBiometric() {
+        _isAppUnlocked.value = true
+    }
+
+    fun setBiometricLockEnabled(enabled: Boolean) {
+        appPrefs.edit().putBoolean("is_biometric_enabled", enabled).apply()
+        _isBiometricEnabled.value = enabled
     }
 
     fun lockApp() {
@@ -1037,15 +1454,17 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         return false
     }
 
-    fun enableAppLock(pin: String, question: String, answer: String) {
+    fun enableAppLock(pin: String, question: String, answer: String, enableBiometric: Boolean = _isBiometricEnabled.value) {
         appPrefs.edit().apply {
             putBoolean("is_lock_enabled", true)
+            putBoolean("is_biometric_enabled", enableBiometric)
             putString("app_passcode", pin)
             putString("security_question", question)
             putString("security_answer", answer)
             apply()
         }
         _isAppLockEnabled.value = true
+        _isBiometricEnabled.value = enableBiometric
         _appPasscode.value = pin
         _securityQuestion.value = question
         _securityAnswer.value = answer
@@ -1055,12 +1474,14 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     fun disableAppLock() {
         appPrefs.edit().apply {
             putBoolean("is_lock_enabled", false)
+            putBoolean("is_biometric_enabled", false)
             putString("app_passcode", "")
             putString("security_question", "")
             putString("security_answer", "")
             apply()
         }
         _isAppLockEnabled.value = false
+        _isBiometricEnabled.value = false
         _appPasscode.value = ""
         _securityQuestion.value = ""
         _securityAnswer.value = ""
@@ -1090,11 +1511,37 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         if (dueDateMillis == null || dueDateMillis <= 0L) {
             editor.remove("book_$bookId")
             _wasooliDueDates.value = _wasooliDueDates.value - bookId
+            WasooliNotificationHelper.cancelWasooliReminder(getApplication(), bookId)
         } else {
             editor.putLong("book_$bookId", dueDateMillis)
             _wasooliDueDates.value = _wasooliDueDates.value + (bookId to dueDateMillis)
+            val bookName = allBooks.value.find { it.id == bookId }?.name
+                ?: _activeBook.value?.takeIf { it.id == bookId }?.name
+                ?: "Account"
+            val bookTxs = allTransactions.value.filter { it.bookId == bookId }
+                .ifEmpty { activeBookTransactions.value.filter { it.bookId == bookId } }
+            val netBalance = bookTxs.filter { it.type == "IN" }.sumOf { it.amount } -
+                bookTxs.filter { it.type == "OUT" }.sumOf { it.amount }
+            WasooliNotificationHelper.scheduleWasooliReminder(
+                context = getApplication(),
+                bookId = bookId,
+                bookName = bookName,
+                netBalance = netBalance,
+                dueMillis = dueDateMillis
+            )
         }
         editor.apply()
+    }
+
+    fun sendTestWasooliNotification(bookId: Int, bookName: String, netBalance: Double, dueMillis: Long?) {
+        WasooliNotificationHelper.showWasooliNotification(
+            context = getApplication(),
+            bookId = bookId,
+            bookName = bookName,
+            netBalance = netBalance,
+            dueMillis = dueMillis,
+            isTest = true
+        )
     }
 }
 

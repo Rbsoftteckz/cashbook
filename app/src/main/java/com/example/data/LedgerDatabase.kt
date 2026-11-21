@@ -126,6 +126,12 @@ interface LedgerDao {
     @Delete
     suspend fun deleteBusiness(business: Business)
 
+    @Query("DELETE FROM books WHERE businessId = :businessId")
+    suspend fun deleteBooksForBusiness(businessId: Int)
+
+    @Query("DELETE FROM team_members WHERE businessId = :businessId")
+    suspend fun deleteTeamMembersForBusiness(businessId: Int)
+
     // Books
     @Query("SELECT * FROM books ORDER BY createdAt DESC")
     fun getAllBooks(): Flow<List<Book>>
@@ -203,6 +209,9 @@ interface LedgerDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertTeamMember(teamMember: TeamMember): Long
 
+    @Update
+    suspend fun updateTeamMember(teamMember: TeamMember)
+
     @Delete
     suspend fun deleteTeamMember(teamMember: TeamMember)
 }
@@ -272,6 +281,8 @@ class LedgerRepository(private val ledgerDao: LedgerDao) {
     }
 
     suspend fun deleteBusiness(business: Business) {
+        ledgerDao.deleteBooksForBusiness(business.id)
+        ledgerDao.deleteTeamMembersForBusiness(business.id)
         ledgerDao.deleteBusiness(business)
     }
 
@@ -324,6 +335,10 @@ class LedgerRepository(private val ledgerDao: LedgerDao) {
 
     suspend fun insertTeamMember(teamMember: TeamMember): Long {
         return ledgerDao.insertTeamMember(teamMember)
+    }
+
+    suspend fun updateTeamMember(teamMember: TeamMember) {
+        ledgerDao.updateTeamMember(teamMember)
     }
 
     suspend fun deleteTeamMember(teamMember: TeamMember) {
