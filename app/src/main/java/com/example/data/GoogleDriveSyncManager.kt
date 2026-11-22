@@ -1838,6 +1838,7 @@ class GoogleDriveSyncManager(private val context: Context) {
             if (root.has("team_members")) {
                 val teamArray = root.getJSONArray("team_members")
                 val remoteTeamEmails = mutableSetOf<String>()
+                val hasPendingLocalModifications = prefs.getBoolean("user_has_modified_local_db", false) && localModifiedTs > remoteTimestamp
                 for (i in 0 until teamArray.length()) {
                     val obj = teamArray.getJSONObject(i)
                     val oldBizId = obj.optInt("businessId", 1)
@@ -1853,8 +1854,11 @@ class GoogleDriveSyncManager(private val context: Context) {
                     remoteTeamEmails.add(email.trim().lowercase())
 
                     val matched = existingTeamList.find { it.email.equals(email, ignoreCase = true) && it.businessId == mappedBizId }
+                    val memberEditTs = prefs.getLong("team_member_edit_ts_${sanitizeDocKey(email)}", 0L)
+                    val localTeamChangeIsNewer = memberEditTs > remoteTimestamp || hasPendingLocalModifications
+
                     if (matched != null) {
-                        if (matched.name != name || matched.phone != phone || matched.role != role) {
+                        if (!localTeamChangeIsNewer && (matched.name != name || matched.phone != phone || matched.role != role)) {
                             val updatedTM = matched.copy(name = name, phone = phone, role = role)
                             dao.insertTeamMember(updatedTM)
                             val idx = existingTeamList.indexOfFirst { it.id == matched.id }
@@ -1877,7 +1881,12 @@ class GoogleDriveSyncManager(private val context: Context) {
 
                 val targetBizIds = if (bizIdMap.isNotEmpty()) bizIdMap.values.toSet() else existingBizList.map { it.id }.toSet()
                 val membersToDelete = existingTeamList.filter { localTM ->
-                    targetBizIds.contains(localTM.businessId) && !remoteTeamEmails.contains(localTM.email.trim().lowercase())
+                    val localEmail = localTM.email.trim().lowercase()
+                    val memberEditTs = prefs.getLong("team_member_edit_ts_${sanitizeDocKey(localEmail)}", 0L)
+                    val recentlyEditedLocally = memberEditTs > remoteTimestamp || hasPendingLocalModifications
+                    !recentlyEditedLocally &&
+                        targetBizIds.contains(localTM.businessId) &&
+                        !remoteTeamEmails.contains(localEmail)
                 }
                 membersToDelete.forEach { localTM ->
                     dao.deleteTeamMember(localTM)
@@ -2211,11 +2220,20 @@ class GoogleDriveSyncManager(private val context: Context) {
         return map.containsKey(email.trim().lowercase())
     }
 
+    fun markTeamMemberEdited(email: String) {
+        val clean = email.trim().lowercase()
+        if (clean.isNotBlank()) {
+            prefs.edit()
+                .putLong("team_member_edit_ts_${sanitizeDocKey(clean)}", System.currentTimeMillis())
+                .commit()
+        }
+    }
+
     fun markLocalDbModified() {
         prefs.edit()
             .putBoolean("user_has_modified_local_db", true)
             .putLong("local_db_last_modified_ts", System.currentTimeMillis())
-            .apply()
+            .commit()
     }
 
     private fun extractJsonTimestamp(json: String): Long {

@@ -1239,6 +1239,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             role = role
         )
         viewModelScope.launch {
+            syncManager.markTeamMemberEdited(cleanEmail)
             syncManager.removeTeamMemberFromTombstones(cleanEmail)
             syncManager.markLocalDbModified()
             repository.insertTeamMember(member)
@@ -1271,6 +1272,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                 syncManager.recordDeletedTeamMember(oldMember.email)
                 syncManager.revokeTeamInviteCloud(targetBiz, oldMember.email)
             }
+            syncManager.markTeamMemberEdited(cleanNewEmail)
             syncManager.removeTeamMemberFromTombstones(cleanNewEmail)
             syncManager.markLocalDbModified()
             repository.updateTeamMember(updated)

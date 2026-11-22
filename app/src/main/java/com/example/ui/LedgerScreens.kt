@@ -1227,7 +1227,7 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
         }
     ) {
         Scaffold(
-            contentWindowInsets = if (currentScreen == Screen.UDHAR || currentScreen == Screen.DASHBOARD) WindowInsets(0, 0, 0, 0) else ScaffoldDefaults.contentWindowInsets,
+            contentWindowInsets = if (currentScreen == Screen.UDHAR) WindowInsets(0, 0, 0, 0) else ScaffoldDefaults.contentWindowInsets,
             topBar = {
                 if (currentScreen != Screen.UDHAR) {
                     TopAppBar(
@@ -1370,7 +1370,7 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                 }
             },
             bottomBar = {
-                if (currentScreen != Screen.UDHAR && currentScreen != Screen.DASHBOARD) {
+                if (currentScreen != Screen.UDHAR) {
                     NavigationBar(
                         modifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars)
                     ) {
@@ -1757,6 +1757,8 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
     var prefillAmountForDialog by remember { mutableStateOf("") }
     var prefillRemarksForDialog by remember { mutableStateOf("") }
     var selectedTxForEdit by remember { mutableStateOf<Transaction?>(null) }
+    var txPendingDelete by remember { mutableStateOf<Transaction?>(null) }
+    var showBatchDeleteConfirm by remember { mutableStateOf(false) }
     var showAddBookDialog by remember { mutableStateOf(false) }
     var showEditBookDialog by remember { mutableStateOf(false) }
     var showBusinessSelectorDialog by remember { mutableStateOf(false) }
@@ -2078,8 +2080,7 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                         }
                         IconButton(onClick = {
                             if (hasPermission(simulatedRole, "delete_transaction")) {
-                                viewModel.batchDeleteSelectedTransactions()
-                                Toast.makeText(context, "Selected entries deleted.", Toast.LENGTH_SHORT).show()
+                                showBatchDeleteConfirm = true
                             } else {
                                 Toast.makeText(context, "Unauthorized role", Toast.LENGTH_SHORT).show()
                             }
@@ -2658,7 +2659,7 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                             onToggleSelection = { viewModel.toggleTransactionSelection(tx.id) },
                             onDelete = {
                                 if (hasPermission(simulatedRole, "delete_transaction")) {
-                                    viewModel.deleteTransaction(tx)
+                                    txPendingDelete = tx
                                 } else {
                                     Toast.makeText(context, "Unauthorized role: Partner cannot delete entries.", Toast.LENGTH_SHORT).show()
                                 }
@@ -2676,72 +2677,67 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
             }
         }
 
-        // 5. Sticky Bottom CASH IN / CASH OUT Dock ONLY (No extra bottom tabs here!)
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 3.dp,
-            shadowElevation = 6.dp
+        // 5. Clean CASH IN / CASH OUT Buttons (No bar, no divider, no background fill)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Column {
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                        .navigationBarsPadding(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Button(
-                        onClick = {
-                            if (activeBook == null) {
-                                Toast.makeText(context, "Please select or create a cashbook first", Toast.LENGTH_SHORT).show()
-                            } else if (hasPermission(simulatedRole, "add_transaction")) {
-                                prefillAmountForDialog = ""
-                                prefillRemarksForDialog = ""
-                                showTransactionDialog = "IN"
-                            } else {
-                                Toast.makeText(context, "Unauthorized role", Toast.LENGTH_SHORT).show()
-                            }
-                        },
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(48.dp)
-                            .testTag("quick_cash_in_btn"),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF0FDF4)),
-                        border = BorderStroke(1.5.dp, Color(0xFF22C55E)),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(Icons.Default.ArrowUpward, contentDescription = null, tint = Color(0xFF16A34A), modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("CASH IN", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = Color(0xFF16A34A))
+            OutlinedButton(
+                onClick = {
+                    if (activeBook == null) {
+                        Toast.makeText(context, "Please select or create a cashbook first", Toast.LENGTH_SHORT).show()
+                    } else if (hasPermission(simulatedRole, "add_transaction")) {
+                        prefillAmountForDialog = ""
+                        prefillRemarksForDialog = ""
+                        showTransactionDialog = "IN"
+                    } else {
+                        Toast.makeText(context, "Unauthorized role", Toast.LENGTH_SHORT).show()
                     }
+                },
+                modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp)
+                    .testTag("quick_cash_in_btn"),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = Color.Transparent,
+                    contentColor = Color(0xFF16A34A)
+                ),
+                border = BorderStroke(1.5.dp, Color(0xFF22C55E)),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(Icons.Default.ArrowUpward, contentDescription = null, tint = Color(0xFF16A34A), modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("CASH IN", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = Color(0xFF16A34A))
+            }
 
-                    Button(
-                        onClick = {
-                            if (activeBook == null) {
-                                Toast.makeText(context, "Please select or create a cashbook first", Toast.LENGTH_SHORT).show()
-                            } else if (hasPermission(simulatedRole, "add_transaction")) {
-                                prefillAmountForDialog = ""
-                                prefillRemarksForDialog = ""
-                                showTransactionDialog = "OUT"
-                            } else {
-                                Toast.makeText(context, "Unauthorized role", Toast.LENGTH_SHORT).show()
-                            }
-                        },
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(48.dp)
-                            .testTag("quick_cash_out_btn"),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFF7ED)),
-                        border = BorderStroke(1.5.dp, Color(0xFFF97316)),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text("CASH OUT", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = Color(0xFFEA580C))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Icon(Icons.Default.ArrowDownward, contentDescription = null, tint = Color(0xFFEA580C), modifier = Modifier.size(18.dp))
+            OutlinedButton(
+                onClick = {
+                    if (activeBook == null) {
+                        Toast.makeText(context, "Please select or create a cashbook first", Toast.LENGTH_SHORT).show()
+                    } else if (hasPermission(simulatedRole, "add_transaction")) {
+                        prefillAmountForDialog = ""
+                        prefillRemarksForDialog = ""
+                        showTransactionDialog = "OUT"
+                    } else {
+                        Toast.makeText(context, "Unauthorized role", Toast.LENGTH_SHORT).show()
                     }
-                }
+                },
+                modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp)
+                    .testTag("quick_cash_out_btn"),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = Color.Transparent,
+                    contentColor = Color(0xFFEA580C)
+                ),
+                border = BorderStroke(1.5.dp, Color(0xFFF97316)),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("CASH OUT", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = Color(0xFFEA580C))
+                Spacer(modifier = Modifier.width(6.dp))
+                Icon(Icons.Default.ArrowDownward, contentDescription = null, tint = Color(0xFFEA580C), modifier = Modifier.size(18.dp))
             }
         }
     }
@@ -2875,6 +2871,37 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
             }
         )
     }
+
+    if (txPendingDelete != null) {
+        val pendingTx = txPendingDelete!!
+        ConfirmDeleteTransactionDialog(
+            amount = pendingTx.amount,
+            isPositiveType = pendingTx.type == "IN",
+            positiveLabel = "Cash In",
+            negativeLabel = "Cash Out",
+            timestamp = pendingTx.timestamp,
+            category = pendingTx.category,
+            remarks = pendingTx.remarks,
+            onDismiss = { txPendingDelete = null },
+            onConfirm = {
+                viewModel.deleteTransaction(pendingTx)
+                txPendingDelete = null
+                Toast.makeText(context, "Entry deleted.", Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
+
+    if (showBatchDeleteConfirm && selectedIds.isNotEmpty()) {
+        ConfirmBatchDeleteTransactionsDialog(
+            count = selectedIds.size,
+            onDismiss = { showBatchDeleteConfirm = false },
+            onConfirm = {
+                viewModel.batchDeleteSelectedTransactions()
+                showBatchDeleteConfirm = false
+                Toast.makeText(context, "Selected entries deleted.", Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
 }
 
 // --- SCREEN 1: DETAILED TRANSACTIONS ---
@@ -2896,6 +2923,8 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
     var prefillAmountForDialog by remember { mutableStateOf("") }
     var prefillRemarksForDialog by remember { mutableStateOf("") }
     var selectedTxForEdit by remember { mutableStateOf<Transaction?>(null) }
+    var txPendingDelete by remember { mutableStateOf<Transaction?>(null) }
+    var showBatchDeleteConfirm by remember { mutableStateOf(false) }
     var showShareDialog by remember { mutableStateOf(false) }
     var showEditBookDialog by remember { mutableStateOf(false) }
     var showWasooliDialog by remember { mutableStateOf(false) }
@@ -3027,8 +3056,7 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                             IconButton(
                                 onClick = {
                                     if (hasPermission(simulatedRole, "delete_transaction")) {
-                                        viewModel.batchDeleteSelectedTransactions()
-                                        Toast.makeText(context, "Batch transactions deleted successfully.", Toast.LENGTH_SHORT).show()
+                                        showBatchDeleteConfirm = true
                                     } else {
                                         Toast.makeText(context, "Unauthorized: Only Boss/Admin can bulk delete transactions.", Toast.LENGTH_SHORT).show()
                                     }
@@ -3535,7 +3563,7 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                                 onToggleSelection = { viewModel.toggleTransactionSelection(tx.id) },
                                 onDelete = {
                                     if (hasPermission(simulatedRole, "delete_transaction")) {
-                                        viewModel.deleteTransaction(tx)
+                                        txPendingDelete = tx
                                     } else {
                                         Toast.makeText(context, "Unauthorized role: Partner cannot delete transactions.", Toast.LENGTH_SHORT).show()
                                     }
@@ -3553,68 +3581,64 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                 }
             }
 
-            // Quick Floating Action Buttons Panel (ONLY CASH IN / CASH OUT pinned cleanly at bottom)
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 3.dp,
-                shadowElevation = 6.dp
+            // Clean CASH IN / CASH OUT Buttons (No bar, no divider, no background fill)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                    .navigationBarsPadding(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Column {
-                    HorizontalDivider(color = Color(0xFFE2E8F0))
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 8.dp)
-                            .navigationBarsPadding(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Button(
-                            onClick = {
-                                if (hasPermission(simulatedRole, "add_transaction")) {
-                                    prefillAmountForDialog = ""
-                                    prefillRemarksForDialog = ""
-                                    showTransactionDialog = "IN"
-                                } else {
-                                    Toast.makeText(context, "Unauthorized role: Read-only partners cannot add entries.", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp)
-                                .testTag("cash_in_button"),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF0FDF4)),
-                            border = BorderStroke(1.5.dp, Color(0xFF22C55E)),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Icon(Icons.Default.ArrowUpward, contentDescription = null, tint = Color(0xFF16A34A), modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("CASH IN", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = Color(0xFF16A34A))
+                OutlinedButton(
+                    onClick = {
+                        if (hasPermission(simulatedRole, "add_transaction")) {
+                            prefillAmountForDialog = ""
+                            prefillRemarksForDialog = ""
+                            showTransactionDialog = "IN"
+                        } else {
+                            Toast.makeText(context, "Unauthorized role: Read-only partners cannot add entries.", Toast.LENGTH_SHORT).show()
                         }
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp)
+                        .testTag("cash_in_button"),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = Color.Transparent,
+                        contentColor = Color(0xFF16A34A)
+                    ),
+                    border = BorderStroke(1.5.dp, Color(0xFF22C55E)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.ArrowUpward, contentDescription = null, tint = Color(0xFF16A34A), modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("CASH IN", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = Color(0xFF16A34A))
+                }
 
-                        Button(
-                            onClick = {
-                                if (hasPermission(simulatedRole, "add_transaction")) {
-                                    prefillAmountForDialog = ""
-                                    prefillRemarksForDialog = ""
-                                    showTransactionDialog = "OUT"
-                                } else {
-                                    Toast.makeText(context, "Unauthorized role: Read-only partners cannot add entries.", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp)
-                                .testTag("cash_out_button"),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFF7ED)),
-                            border = BorderStroke(1.5.dp, Color(0xFFF97316)),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Text("CASH OUT", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = Color(0xFFEA580C))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Icon(Icons.Default.ArrowDownward, contentDescription = null, tint = Color(0xFFEA580C), modifier = Modifier.size(18.dp))
+                OutlinedButton(
+                    onClick = {
+                        if (hasPermission(simulatedRole, "add_transaction")) {
+                            prefillAmountForDialog = ""
+                            prefillRemarksForDialog = ""
+                            showTransactionDialog = "OUT"
+                        } else {
+                            Toast.makeText(context, "Unauthorized role: Read-only partners cannot add entries.", Toast.LENGTH_SHORT).show()
                         }
-                    }
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp)
+                        .testTag("cash_out_button"),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = Color.Transparent,
+                        contentColor = Color(0xFFEA580C)
+                    ),
+                    border = BorderStroke(1.5.dp, Color(0xFFF97316)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("CASH OUT", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = Color(0xFFEA580C))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Icon(Icons.Default.ArrowDownward, contentDescription = null, tint = Color(0xFFEA580C), modifier = Modifier.size(18.dp))
                 }
             }
         }
@@ -3739,6 +3763,37 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                         netBalance = netBalance,
                         dueMillis = dueMillis
                     )
+                }
+            )
+        }
+
+        if (txPendingDelete != null) {
+            val pendingTx = txPendingDelete!!
+            ConfirmDeleteTransactionDialog(
+                amount = pendingTx.amount,
+                isPositiveType = pendingTx.type == "IN",
+                positiveLabel = "Cash In",
+                negativeLabel = "Cash Out",
+                timestamp = pendingTx.timestamp,
+                category = pendingTx.category,
+                remarks = pendingTx.remarks,
+                onDismiss = { txPendingDelete = null },
+                onConfirm = {
+                    viewModel.deleteTransaction(pendingTx)
+                    txPendingDelete = null
+                    Toast.makeText(context, "Entry deleted.", Toast.LENGTH_SHORT).show()
+                }
+            )
+        }
+
+        if (showBatchDeleteConfirm && selectedIds.isNotEmpty()) {
+            ConfirmBatchDeleteTransactionsDialog(
+                count = selectedIds.size,
+                onDismiss = { showBatchDeleteConfirm = false },
+                onConfirm = {
+                    viewModel.batchDeleteSelectedTransactions()
+                    showBatchDeleteConfirm = false
+                    Toast.makeText(context, "Batch transactions deleted successfully.", Toast.LENGTH_SHORT).show()
                 }
             )
         }
@@ -4489,6 +4544,197 @@ private fun DetailInfoRow(label: String, value: String) {
             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
         )
     }
+}
+
+@Composable
+private fun ConfirmDeleteTransactionDialog(
+    amount: Double,
+    isPositiveType: Boolean,
+    positiveLabel: String,
+    negativeLabel: String,
+    timestamp: Long,
+    category: String,
+    remarks: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    val formattedAmount = String.format("%,.2f", amount).removeSuffix(".00")
+    val dateStr = SimpleDateFormat("dd MMM yyyy • h:mm a", Locale.getDefault()).format(Date(timestamp))
+    val typeLabel = if (isPositiveType) positiveLabel else negativeLabel
+    val typeLower = typeLabel.lowercase(Locale.getDefault())
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                imageVector = Icons.Default.DeleteForever,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(32.dp)
+            )
+        },
+        title = {
+            Text(
+                text = "Delete This Entry?",
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.28f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.25f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = if (isPositiveType) Color(0xFFDCFCE7) else Color(0xFFFFEDD5)
+                            ) {
+                                Text(
+                                    text = typeLabel.uppercase(Locale.getDefault()),
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isPositiveType) Color(0xFF15803D) else Color(0xFFC2410C),
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                            Text(
+                                text = "Rs. $formattedAmount",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = if (isPositiveType) GreenIn else RedOut
+                            )
+                        }
+                        Text(
+                            text = dateStr,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (category.isNotBlank() || remarks.isNotBlank()) {
+                            val summaryNote = listOf(category, remarks).filter { it.isNotBlank() }.joinToString(" • ")
+                            Text(
+                                text = summaryNote,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+
+                Text(
+                    text = "Do you want to permanently delete this $typeLower entry of Rs. $formattedAmount?\n\nYour balance will be recalculated automatically, and this action cannot be undone.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.error,
+                    contentColor = MaterialTheme.colorScheme.onError
+                ),
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .testTag("confirm_delete_tx_button")
+            ) {
+                Text("Delete Entry", maxLines = 1, softWrap = false, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            OutlinedButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .testTag("cancel_delete_tx_button")
+            ) {
+                Text("Keep Entry", maxLines = 1, softWrap = false)
+            }
+        }
+    )
+}
+
+@Composable
+private fun ConfirmBatchDeleteTransactionsDialog(
+    count: Int,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    val noun = if (count == 1) "entry" else "entries"
+    val titleNoun = if (count == 1) "Entry" else "Entries"
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                imageVector = Icons.Default.DeleteSweep,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(32.dp)
+            )
+        },
+        title = {
+            Text(
+                text = "Delete $count Selected $titleNoun?",
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+        },
+        text = {
+            Text(
+                text = "Do you want to permanently delete $count selected $noun from this cashbook?\n\nYour cashbook balance will be recalculated automatically, and deleted entries cannot be recovered.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.error,
+                    contentColor = MaterialTheme.colorScheme.onError
+                ),
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .testTag("confirm_batch_delete_tx_button")
+            ) {
+                Text(
+                    text = if (count == 1) "Delete Entry" else "Delete $count Entries",
+                    maxLines = 1,
+                    softWrap = false,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        },
+        dismissButton = {
+            OutlinedButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .testTag("cancel_batch_delete_tx_button")
+            ) {
+                Text("Keep $titleNoun", maxLines = 1, softWrap = false)
+            }
+        }
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -5381,6 +5627,7 @@ fun UdharScreen(viewModel: LedgerViewModel) {
                 }
             } else {
                 var selectedPartyTxForDetails by remember { mutableStateOf<Pair<PartyTransaction, Double>?>(null) }
+                var partyTxPendingDelete by remember { mutableStateOf<PartyTransaction?>(null) }
                 val partyRunningBalanceMap = remember(activePartyTransactions) {
                     var cumulative = 0.0
                     val map = mutableMapOf<Int, Double>()
@@ -5486,7 +5733,7 @@ fun UdharScreen(viewModel: LedgerViewModel) {
                                         if (hasPermission(simulatedRole, "delete_transaction")) {
                                             Spacer(modifier = Modifier.width(2.dp))
                                             IconButton(
-                                                onClick = { viewModel.deletePartyTransaction(pTx) },
+                                                onClick = { partyTxPendingDelete = pTx },
                                                 modifier = Modifier.size(30.dp)
                                             ) {
                                                 Icon(Icons.Default.Clear, contentDescription = "Delete credit entry", modifier = Modifier.size(16.dp))
@@ -5556,13 +5803,32 @@ fun UdharScreen(viewModel: LedgerViewModel) {
                             if (hasPermission(simulatedRole, "delete_transaction")) {
                                 TextButton(
                                     onClick = {
-                                        viewModel.deletePartyTransaction(pTx)
                                         selectedPartyTxForDetails = null
+                                        partyTxPendingDelete = pTx
                                     }
                                 ) {
                                     Text("Delete", color = MaterialTheme.colorScheme.error)
                                 }
                             }
+                        }
+                    )
+                }
+
+                if (partyTxPendingDelete != null) {
+                    val pendingPTx = partyTxPendingDelete!!
+                    ConfirmDeleteTransactionDialog(
+                        amount = pendingPTx.amount,
+                        isPositiveType = pendingPTx.type == "GAVE",
+                        positiveLabel = "You Gave",
+                        negativeLabel = "You Got",
+                        timestamp = pendingPTx.timestamp,
+                        category = party.name,
+                        remarks = pendingPTx.remarks,
+                        onDismiss = { partyTxPendingDelete = null },
+                        onConfirm = {
+                            viewModel.deletePartyTransaction(pendingPTx)
+                            partyTxPendingDelete = null
+                            Toast.makeText(context, "Entry deleted.", Toast.LENGTH_SHORT).show()
                         }
                     )
                 }
@@ -7584,10 +7850,10 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
     // Edit Team Member & Change Role Dialog
     if (memberToEdit != null) {
         val editing = memberToEdit!!
-        var editName by remember(editing.id) { mutableStateOf(editing.name) }
-        var editEmail by remember(editing.id) { mutableStateOf(editing.email) }
-        var editPhone by remember(editing.id) { mutableStateOf(editing.phone) }
-        var editRole by remember(editing.id) { mutableStateOf(editing.role) }
+        var editName by remember(editing.id, editing.name) { mutableStateOf(editing.name) }
+        var editEmail by remember(editing.id, editing.email) { mutableStateOf(editing.email) }
+        var editPhone by remember(editing.id, editing.phone) { mutableStateOf(editing.phone) }
+        var editRole by remember(editing.id, editing.role) { mutableStateOf(editing.role) }
         var editError by remember { mutableStateOf("") }
         var isSavingEdit by remember { mutableStateOf(false) }
 
@@ -7674,11 +7940,12 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         roles.forEach { roleOpt ->
+                            val isRoleSelected = editRole.equals(roleOpt, ignoreCase = true)
                             FilterChip(
-                                selected = editRole == roleOpt,
+                                selected = isRoleSelected,
                                 onClick = { editRole = roleOpt },
                                 label = { Text(roleOpt, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false) },
-                                leadingIcon = if (editRole == roleOpt) {
+                                leadingIcon = if (isRoleSelected) {
                                     { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
                                 } else null,
                                 modifier = Modifier.testTag("edit_team_role_${roleOpt.lowercase().replace(" ", "_")}")
