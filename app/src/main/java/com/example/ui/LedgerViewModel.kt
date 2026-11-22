@@ -991,6 +991,17 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         return success
     }
 
+    suspend fun resetPasswordAndLoginCloud(userOrEmail: String, newPass: String): Boolean {
+        val cloudSaved = syncManager.resetPasswordCloud(userOrEmail, newPass)
+        val localSaved = if (!cloudSaved) syncManager.resetPassword(userOrEmail, newPass) else true
+        if (!localSaved) return false
+        syncManager.loginUser(userOrEmail, newPass)
+        updateAuthState()
+        _simulatedRole.value = "Boss"
+        triggerCloudSync()
+        return true
+    }
+
     // --- Transactions Actions ---
 
     fun addTransaction(amount: Double, type: String, category: String, paymentMethod: String, remarks: String, receiptUri: String? = null, timestamp: Long = System.currentTimeMillis()) {

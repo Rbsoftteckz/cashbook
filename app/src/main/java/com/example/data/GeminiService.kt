@@ -37,7 +37,7 @@ class GeminiService {
             {
               "type": "IN" or "OUT", 
               "amount": number, 
-              "category": "Sales" / "Salary" / "Rent" / "Food" / "Travel" / "Office" / "Utilities" / "Other",
+              "category": "General" / "Goods / Items" / "Cash Received" / "Cash Paid" / "Payment" / "Expense" / "Other",
               "remarks": "short description of transaction",
               "paymentMethod": "Cash" or "Online" or "Bank"
             }

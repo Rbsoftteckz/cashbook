@@ -279,20 +279,108 @@ class GoogleDriveSyncManager(private val context: Context) {
                 "pass" to acc.pass.trim(),
                 "updatedAt" to System.currentTimeMillis()
             )
-            val projId = getFirebaseProjectId()
-            val apiKey = getFirebaseApiKey()
-            val url = "https://firestore.googleapis.com/v1/projects/$projId/databases/(default)/documents/users/$docId?key=$apiKey"
-            val body = payload.toString().toRequestBody("application/json".toMediaType())
-            val requestBuilder = Request.Builder().url(url)
-            val idToken = prefs.getString("firebase_auth_token", "") ?: ""
-            if (idToken.isNotBlank()) {
-                requestBuilder.addHeader("Authorization", "Bearer $idToken")
-            }
-            val request = requestBuilder.patch(body).build()
-            client.newCall(request).execute().close()
+            val idToken = getFirebaseAuthToken()
+            patchOrPostFirestoreDoc("users", docId, payload, idToken)
+            // Mirror inside cashbooks collection so direct lookup works even if /users collection rules differ
+            val mirrorId = "useraccount_" + targetKey.replace(Regex("[^a-zA-Z0-9_]"), "_")
+            patchOrPostFirestoreDoc("cashbooks", mirrorId, payload, idToken)
         } catch (e: Exception) {
             Log.e("GoogleDriveSyncManager", "Error syncing user to Firestore", e)
         }
+    }
+
+    private fun extractAccountWithTimestampFromCashbookFields(fields: JSONObject, targetClean: String): Pair<RegisteredAccount, Long>? {
+        val dataJson = fields.optJSONObject("dataJson")?.optString("stringValue", "") ?: ""
+        if (dataJson.isBlank()) return null
+        return try {
+            val root = JSONObject(dataJson)
+            val docTs = root.optLong("timestamp", 0L).coerceAtLeast(
+                fields.optJSONObject("updatedAt")?.optString("integerValue", "0")?.toLongOrNull() ?: 0L
+            )
+            val info = root.optJSONObject("account_info")
+            if (info != null) {
+                val e = info.optString("user_email", "").trim()
+                val u = info.optString("username", "").trim()
+                val n = info.optString("user_name", "").trim()
+                val p = info.optString("user_password", "").trim()
+                if (e.equals(targetClean, true) || u.equals(targetClean, true) ||
+                    (e.contains("@") && e.substringBefore("@").equals(targetClean, true))) {
+                    return Pair(RegisteredAccount(n, e, u, p), docTs)
+                }
+            }
+            val globalArr = root.optJSONArray("global_accounts")
+            if (globalArr != null) {
+                for (i in 0 until globalArr.length()) {
+                    val obj = globalArr.getJSONObject(i)
+                    val e = obj.optString("email", "").trim()
+                    val u = obj.optString("username", "").trim()
+                    val n = obj.optString("name", "").trim()
+                    val p = obj.optString("pass", "").trim()
+                    if (e.equals(targetClean, true) || u.equals(targetClean, true) ||
+                        (e.contains("@") && e.substringBefore("@").equals(targetClean, true))) {
+                        return Pair(RegisteredAccount(n, e, u, p), docTs)
+                    }
+                }
+            }
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun extractAccountFromCashbookFields(fields: JSONObject, targetClean: String): RegisteredAccount? {
+        return extractAccountWithTimestampFromCashbookFields(fields, targetClean)?.first
+    }
+
+    private fun findUserAccountDirectlyCloud(input: String): RegisteredAccount? {
+        val cleanInput = input.trim().lowercase()
+        if (cleanInput.isBlank()) return null
+        val idToken = getFirebaseAuthToken()
+
+        val keyVariants = mutableListOf(cleanInput.replace(Regex("[^a-zA-Z0-9_]"), "_"))
+        if (cleanInput.contains("@")) {
+            val prefixSanitized = cleanInput.substringBefore("@").replace(Regex("[^a-zA-Z0-9_]"), "_")
+            if (!keyVariants.contains(prefixSanitized)) keyVariants.add(prefixSanitized)
+        }
+
+        val candidates = mutableListOf<Pair<RegisteredAccount, Long>>()
+
+        for (sanitized in keyVariants) {
+            // 1. Direct GET /users/user_<sanitized>
+            fetchFirestoreFields("users", "user_$sanitized", idToken)?.let { f ->
+                val e = f.optJSONObject("email")?.optString("stringValue", "")?.trim() ?: ""
+                val u = f.optJSONObject("username")?.optString("stringValue", "")?.trim() ?: ""
+                val n = f.optJSONObject("name")?.optString("stringValue", "")?.trim() ?: ""
+                val p = f.optJSONObject("pass")?.optString("stringValue", "")?.trim() ?: ""
+                val ts = f.optJSONObject("updatedAt")?.optString("integerValue", "0")?.toLongOrNull() ?: 0L
+                if (e.isNotBlank() || u.isNotBlank()) {
+                    candidates.add(Pair(RegisteredAccount(n, e, u, p), ts))
+                }
+            }
+            // 2. Direct GET /cashbooks/useraccount_<sanitized>
+            fetchFirestoreFields("cashbooks", "useraccount_$sanitized", idToken)?.let { f ->
+                val e = f.optJSONObject("email")?.optString("stringValue", "")?.trim() ?: ""
+                val u = f.optJSONObject("username")?.optString("stringValue", "")?.trim() ?: ""
+                val n = f.optJSONObject("name")?.optString("stringValue", "")?.trim() ?: ""
+                val p = f.optJSONObject("pass")?.optString("stringValue", "")?.trim() ?: ""
+                val ts = f.optJSONObject("updatedAt")?.optString("integerValue", "0")?.toLongOrNull() ?: 0L
+                if (e.isNotBlank() || u.isNotBlank()) {
+                    candidates.add(Pair(RegisteredAccount(n, e, u, p), ts))
+                }
+            }
+            // 3. Direct GET /cashbooks/cashbook_<sanitized> -> parse account_info / global_accounts inside dataJson
+            fetchFirestoreFields("cashbooks", "cashbook_$sanitized", idToken)?.let { f ->
+                extractAccountWithTimestampFromCashbookFields(f, cleanInput)?.let { found ->
+                    candidates.add(found)
+                }
+            }
+        }
+
+        if (candidates.isEmpty()) return null
+        return candidates
+            .sortedWith(compareByDescending<Pair<RegisteredAccount, Long>> { it.second }.thenByDescending { it.first.pass.isNotBlank() })
+            .first()
+            .first
     }
 
     suspend fun addUserCloud(name: String, email: String, username: String, pass: String): Boolean = withContext(Dispatchers.IO) {
@@ -352,49 +440,68 @@ class GoogleDriveSyncManager(private val context: Context) {
     suspend fun fetchFirebaseAccountsCloud(): List<RegisteredAccount> = withContext(Dispatchers.IO) {
         val list = mutableListOf<RegisteredAccount>()
 
-        // 1. Fetch from Firestore users collection directly
+        // 1. Fetch from Firestore users collection with pagination so >20 accounts are never truncated
         try {
             val projId = getFirebaseProjectId()
             val apiKey = getFirebaseApiKey()
-            val firestoreUsersUrl = "https://firestore.googleapis.com/v1/projects/$projId/databases/(default)/documents/users?key=$apiKey"
-            val req = Request.Builder().url(firestoreUsersUrl).get().build()
-            client.newCall(req).execute().use { response ->
-                if (response.isSuccessful) {
-                    val bodyStr = response.body?.string() ?: ""
-                    if (bodyStr.isNotBlank()) {
-                        val root = JSONObject(bodyStr)
-                        val docs = root.optJSONArray("documents")
-                        if (docs != null) {
-                            for (i in 0 until docs.length()) {
-                                val doc = docs.getJSONObject(i)
-                                val fields = doc.optJSONObject("fields") ?: continue
-                                val n = fields.optJSONObject("name")?.optString("stringValue", "") ?: ""
-                                val e = fields.optJSONObject("email")?.optString("stringValue", "") ?: ""
-                                val un = fields.optJSONObject("username")?.optString("stringValue", "") ?: ""
-                                val p = fields.optJSONObject("pass")?.optString("stringValue", "") ?: ""
-                                if ((e.isNotBlank() || un.isNotBlank()) && !list.any { it.email.equals(e, true) || (un.isNotBlank() && it.username.equals(un, true)) }) {
-                                    list.add(RegisteredAccount(n, e, un, p))
+            var nextPageToken: String? = null
+            var pagesFetched = 0
+            do {
+                val tokenParam = if (!nextPageToken.isNullOrBlank()) "&pageToken=${java.net.URLEncoder.encode(nextPageToken, "UTF-8")}" else ""
+                val firestoreUsersUrl = "https://firestore.googleapis.com/v1/projects/$projId/databases/(default)/documents/users?pageSize=300$tokenParam&key=$apiKey"
+                val req = Request.Builder().url(firestoreUsersUrl).get().build()
+                var newPageToken: String? = null
+                client.newCall(req).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val bodyStr = response.body?.string() ?: ""
+                        if (bodyStr.isNotBlank()) {
+                            val root = JSONObject(bodyStr)
+                            newPageToken = root.optString("nextPageToken", "").ifBlank { null }
+                            val docs = root.optJSONArray("documents")
+                            if (docs != null) {
+                                for (i in 0 until docs.length()) {
+                                    val doc = docs.getJSONObject(i)
+                                    val fields = doc.optJSONObject("fields") ?: continue
+                                    val n = fields.optJSONObject("name")?.optString("stringValue", "") ?: ""
+                                    val e = fields.optJSONObject("email")?.optString("stringValue", "") ?: ""
+                                    val un = fields.optJSONObject("username")?.optString("stringValue", "") ?: ""
+                                    val p = fields.optJSONObject("pass")?.optString("stringValue", "") ?: ""
+                                    if ((e.isNotBlank() || un.isNotBlank()) && !list.any { it.email.equals(e, true) || (un.isNotBlank() && it.username.equals(un, true)) }) {
+                                        list.add(RegisteredAccount(n, e, un, p))
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
+                nextPageToken = newPageToken
+                pagesFetched++
+            } while (!nextPageToken.isNullOrBlank() && pagesFetched < 5)
         } catch (e: Exception) {
             Log.e("GoogleDriveSyncManager", "Error fetching cloud accounts from Firestore /users", e)
         }
 
-        // 2. Merge local accounts so no local accounts are lost
+        // 2. Compare against local accounts (preferring newer local password resets so stale cloud docs never overwrite a recent reset)
         val localAccs = getGlobalAccounts()
         for (acc in localAccs) {
-            if ((acc.email.isNotBlank() || acc.username.isNotBlank()) &&
-                !list.any { it.email.equals(acc.email, ignoreCase = true) || (acc.username.isNotBlank() && it.username.equals(acc.username, ignoreCase = true)) }) {
-                list.add(acc)
+            val cleanLocalEmail = acc.email.trim().lowercase()
+            val cleanLocalUser = acc.username.trim().lowercase()
+            val existingIdx = list.indexOfFirst {
+                (cleanLocalEmail.isNotBlank() && it.email.equals(cleanLocalEmail, ignoreCase = true)) ||
+                    (cleanLocalUser.isNotBlank() && it.username.equals(cleanLocalUser, ignoreCase = true))
             }
-            try {
-                syncUserToMasterCloud(acc)
-            } catch (e: Exception) {
-                Log.e("GoogleDriveSyncManager", "Error auto-syncing account to Firestore", e)
+            if (existingIdx < 0) {
+                if (cleanLocalEmail.isNotBlank() || cleanLocalUser.isNotBlank()) {
+                    list.add(acc)
+                    try { syncUserToMasterCloud(acc) } catch (_: Exception) {}
+                }
+            } else {
+                val resetKey = "pw_reset_ts_" + (cleanLocalEmail.ifBlank { cleanLocalUser }).replace(Regex("[^a-zA-Z0-9_]"), "_")
+                val localResetTs = prefs.getLong(resetKey, 0L)
+                if (localResetTs > 0L && acc.pass.isNotBlank() && list[existingIdx].pass != acc.pass) {
+                    list[existingIdx] = acc
+                    try { syncUserToMasterCloud(acc) } catch (_: Exception) {}
+                }
             }
         }
 
@@ -411,29 +518,38 @@ class GoogleDriveSyncManager(private val context: Context) {
         // 1. Check local memory/prefs
         if (checkEmailExists(cleanInput)) return@withContext true
 
-        // 2. Query Firebase Auth API via createAuthUri
-        val targetEmail = if (cleanInput.contains("@")) cleanInput else "$cleanInput@cashbook.com"
-        try {
-            val url = "https://identitytoolkit.googleapis.com/v1/accounts:createAuthUri?key=$firebaseApiKey"
-            val payload = JSONObject().apply {
-                put("identifier", targetEmail)
-                put("continueUri", "https://localhost")
-            }.toString().toRequestBody("application/json".toMediaType())
-            val req = Request.Builder().url(url).post(payload).build()
-            client.newCall(req).execute().use { response ->
-                val bodyStr = response.body?.string() ?: ""
-                if (response.isSuccessful && bodyStr.isNotBlank()) {
-                    val json = JSONObject(bodyStr)
-                    if (json.optBoolean("registered", false)) {
-                        return@withContext true
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.e("GoogleDriveSyncManager", "Error checking Firebase createAuthUri", e)
+        // 2. Direct lookup in Firestore (/users/user_<email> and /cashbooks/cashbook_<email>)
+        findUserAccountDirectlyCloud(cleanInput)?.let { found ->
+            saveGlobalAccounts(listOf(found))
+            return@withContext true
         }
 
-        // 3. Fetch fresh accounts from online cloud database (Firestore, JsonBlob, Restful API)
+        // 3. Query Firebase Auth API via createAuthUri (only when a valid AIza Web API key is configured)
+        val activeApiKey = getFirebaseApiKey()
+        val targetEmail = if (cleanInput.contains("@")) cleanInput else "$cleanInput@cashbook.com"
+        if (activeApiKey.startsWith("AIza")) {
+            try {
+                val url = "https://identitytoolkit.googleapis.com/v1/accounts:createAuthUri?key=$activeApiKey"
+                val payload = JSONObject().apply {
+                    put("identifier", targetEmail)
+                    put("continueUri", "https://localhost")
+                }.toString().toRequestBody("application/json".toMediaType())
+                val req = Request.Builder().url(url).post(payload).build()
+                client.newCall(req).execute().use { response ->
+                    val bodyStr = response.body?.string() ?: ""
+                    if (response.isSuccessful && bodyStr.isNotBlank()) {
+                        val json = JSONObject(bodyStr)
+                        if (json.optBoolean("registered", false)) {
+                            return@withContext true
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("GoogleDriveSyncManager", "Error checking Firebase createAuthUri", e)
+            }
+        }
+
+        // 4. Fetch fresh accounts from online cloud directory
         val cloudAccounts = fetchFirebaseAccountsCloud()
         cloudAccounts.any { acc ->
             val accEmail = acc.email.trim().lowercase()
@@ -457,8 +573,13 @@ class GoogleDriveSyncManager(private val context: Context) {
             return@withContext "EMAIL_NOT_FOUND"
         }
 
+        val activeApiKey = getFirebaseApiKey()
+        if (!activeApiKey.startsWith("AIza")) {
+            return@withContext "SUCCESS"
+        }
+
         try {
-            val url = "https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=$firebaseApiKey"
+            val url = "https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=$activeApiKey"
             val payload = JSONObject().apply {
                 put("requestType", "PASSWORD_RESET")
                 put("email", if (cleanEmail.contains("@")) cleanEmail else "$cleanEmail@cashbook.com")
@@ -498,9 +619,11 @@ class GoogleDriveSyncManager(private val context: Context) {
             return@withContext Pair(false, "Password must be at least 6 characters long.")
         }
 
-        // 3. Check if account already exists on Cloud Database or local storage
-        val cloudAccounts = fetchFirebaseAccountsCloud()
-        val existingAcc = cloudAccounts.find { it.email.lowercase() == cleanEmail || (cleanUser.isNotBlank() && it.username.lowercase() == cleanUser) }
+        // 3. Check direct Firestore user/cashbook doc OR full cloud accounts list
+        val directExisting = findUserAccountDirectlyCloud(cleanEmail)
+        val cloudAccounts = if (directExisting != null) listOf(directExisting) else fetchFirebaseAccountsCloud()
+        val existingAcc = directExisting
+            ?: cloudAccounts.find { it.email.lowercase() == cleanEmail || (cleanUser.isNotBlank() && it.username.lowercase() == cleanUser) }
             ?: getGlobalAccounts().find { it.email.lowercase() == cleanEmail || (cleanUser.isNotBlank() && it.username.lowercase() == cleanUser) }
 
         if (existingAcc != null) {
@@ -510,92 +633,70 @@ class GoogleDriveSyncManager(private val context: Context) {
             }
             Log.i("GoogleDriveSyncManager", "Existing account verified for $cleanEmail. Restoring account session.")
             registerUser(existingAcc.name.ifBlank { name.trim() }, existingAcc.email, existingAcc.username, cleanPass.ifBlank { storedPass })
+            syncUserToMasterCloud(existingAcc.copy(pass = cleanPass.ifBlank { storedPass }))
             return@withContext Pair(true, "EXISTING_ACCOUNT_RESTORED")
         }
 
         val acc = RegisteredAccount(name.trim(), cleanEmail, cleanUser, cleanPass)
+        val activeApiKey = getFirebaseApiKey()
 
-        // 4. Try Firebase Auth API first so existing Auth emails cannot be overwritten silently
-        try {
-            val url = "https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=$firebaseApiKey"
-            val payload = JSONObject().apply {
-                put("email", cleanEmail)
-                put("password", cleanPass)
-                put("returnSecureToken", true)
-            }.toString().toRequestBody("application/json".toMediaType())
-            val req = Request.Builder().url(url).post(payload).build()
-            var authEmailAlreadyExists = false
-            client.newCall(req).execute().use { response ->
-                val bodyStr = response.body?.string() ?: ""
-                if (response.isSuccessful) {
-                    val json = JSONObject(bodyStr)
-                    val idToken = json.optString("idToken", "")
-                    if (idToken.isNotBlank()) {
-                        prefs.edit().putString("firebase_auth_token", idToken).apply()
-                    }
-                } else if (bodyStr.contains("EMAIL_EXISTS")) {
-                    authEmailAlreadyExists = true
-                }
-            }
-            if (authEmailAlreadyExists) {
-                // Verify credentials via signInWithPassword before restoring
-                val signInUrl = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=$firebaseApiKey"
-                val signInPayload = JSONObject().apply {
+        // 4. Try Firebase Auth API when AIza Web API key is active so existing Auth emails cannot be overwritten silently
+        if (activeApiKey.startsWith("AIza")) {
+            try {
+                val url = "https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=$activeApiKey"
+                val payload = JSONObject().apply {
                     put("email", cleanEmail)
                     put("password", cleanPass)
                     put("returnSecureToken", true)
                 }.toString().toRequestBody("application/json".toMediaType())
-                var verifiedExisting = false
-                client.newCall(Request.Builder().url(signInUrl).post(signInPayload).build()).execute().use { res ->
-                    val b = res.body?.string() ?: ""
-                    if (res.isSuccessful && b.isNotBlank()) {
-                        val json = JSONObject(b)
+                val req = Request.Builder().url(url).post(payload).build()
+                var authEmailAlreadyExists = false
+                client.newCall(req).execute().use { response ->
+                    val bodyStr = response.body?.string() ?: ""
+                    if (response.isSuccessful) {
+                        val json = JSONObject(bodyStr)
                         val idToken = json.optString("idToken", "")
                         if (idToken.isNotBlank()) {
                             prefs.edit().putString("firebase_auth_token", idToken).apply()
                         }
-                        verifiedExisting = true
+                    } else if (bodyStr.contains("EMAIL_EXISTS")) {
+                        authEmailAlreadyExists = true
                     }
                 }
-                if (!verifiedExisting) {
-                    return@withContext Pair(false, "An account with email '$cleanEmail' already exists. Please switch to Sign In with your password (or use Forgot Password).")
+                if (authEmailAlreadyExists) {
+                    val signInUrl = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=$activeApiKey"
+                    val signInPayload = JSONObject().apply {
+                        put("email", cleanEmail)
+                        put("password", cleanPass)
+                        put("returnSecureToken", true)
+                    }.toString().toRequestBody("application/json".toMediaType())
+                    var verifiedExisting = false
+                    client.newCall(Request.Builder().url(signInUrl).post(signInPayload).build()).execute().use { res ->
+                        val b = res.body?.string() ?: ""
+                        if (res.isSuccessful && b.isNotBlank()) {
+                            val json = JSONObject(b)
+                            val idToken = json.optString("idToken", "")
+                            if (idToken.isNotBlank()) {
+                                prefs.edit().putString("firebase_auth_token", idToken).apply()
+                            }
+                            verifiedExisting = true
+                        }
+                    }
+                    if (!verifiedExisting) {
+                        return@withContext Pair(false, "An account with email '$cleanEmail' already exists. Please switch to Sign In with your password (or use Forgot Password).")
+                    }
+                    registerUser(name.trim(), cleanEmail, cleanUser, cleanPass)
+                    syncUserToMasterCloud(acc)
+                    return@withContext Pair(true, "EXISTING_ACCOUNT_RESTORED")
                 }
-                registerUser(name.trim(), cleanEmail, cleanUser, cleanPass)
-                syncUserToMasterCloud(acc)
-                return@withContext Pair(true, "EXISTING_ACCOUNT_RESTORED")
+            } catch (e: Exception) {
+                Log.e("GoogleDriveSyncManager", "Firebase Auth sign up notice", e)
             }
-        } catch (e: Exception) {
-            Log.e("GoogleDriveSyncManager", "Firebase Auth sign up notice", e)
         }
 
-        // 5. Register locally & push to Online Cloud Master Database
+        // 5. Register locally & push to Online Cloud Master Directory + cashbooks mirror
         registerUser(name.trim(), cleanEmail, cleanUser, cleanPass)
         syncUserToMasterCloud(acc)
-
-        // 6. Push to Firestore
-        val docId = "user_" + cleanEmail.replace(Regex("[^a-zA-Z0-9_]"), "_")
-        try {
-            val payload = buildFirestoreFields(
-                "name" to name.trim(),
-                "email" to cleanEmail,
-                "username" to cleanUser,
-                "pass" to cleanPass,
-                "updatedAt" to System.currentTimeMillis()
-            )
-            val projId = getFirebaseProjectId()
-            val apiKey = getFirebaseApiKey()
-            val url = "https://firestore.googleapis.com/v1/projects/$projId/databases/(default)/documents/users/$docId?key=$apiKey"
-            val body = payload.toString().toRequestBody("application/json".toMediaType())
-            val requestBuilder = Request.Builder().url(url)
-            val idToken = prefs.getString("firebase_auth_token", "") ?: ""
-            if (idToken.isNotBlank()) {
-                requestBuilder.addHeader("Authorization", "Bearer $idToken")
-            }
-            val request = requestBuilder.patch(body).build()
-            client.newCall(request).execute().close()
-        } catch (e: Exception) {
-            Log.e("GoogleDriveSyncManager", "Error registering user to Firestore", e)
-        }
 
         Pair(true, "Account registered & synced to Cloud Database! You can Sign In from any device.")
     }
@@ -606,52 +707,21 @@ class GoogleDriveSyncManager(private val context: Context) {
 
         if (cleanInput.isBlank()) return@withContext false
 
-        // 1. Try Firebase Auth signInWithPassword API
-        val targetEmail = if (cleanInput.contains("@")) cleanInput else "$cleanInput@cashbook.com"
-        if (cleanPass.isNotBlank()) {
-            try {
-                val url = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=$firebaseApiKey"
-                val payload = JSONObject().apply {
-                    put("email", targetEmail)
-                    put("password", cleanPass)
-                    put("returnSecureToken", true)
-                }.toString().toRequestBody("application/json".toMediaType())
-                val req = Request.Builder().url(url).post(payload).build()
-                client.newCall(req).execute().use { response ->
-                    val bodyStr = response.body?.string() ?: ""
-                    if (response.isSuccessful && bodyStr.isNotBlank()) {
-                        val json = JSONObject(bodyStr)
-                        val idToken = json.optString("idToken", "")
-                        val resEmail = json.optString("email", targetEmail)
-                        if (idToken.isNotBlank()) {
-                            prefs.edit().putString("firebase_auth_token", idToken).apply()
-                            val username = if (resEmail.contains("@")) resEmail.substringBefore("@") else resEmail
-                            val name = username.replaceFirstChar { it.uppercase() }
-                            registerUser(name, resEmail, username, cleanPass)
-                            return@withContext true
-                        }
-                    } else if (bodyStr.contains("INVALID_PASSWORD") || bodyStr.contains("INVALID_LOGIN_CREDENTIALS")) {
-                        Log.w("GoogleDriveSyncManager", "Firebase Auth rejected password for $targetEmail")
-                        return@withContext false
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e("GoogleDriveSyncManager", "Firebase Auth signInWithPassword error", e)
+        // 1. Direct Firestore lookup (/users/user_<email> + /cashbooks/useraccount_ + /cashbooks/cashbook_<email>)
+        // Check Firestore first because in-app Forgot Password resets update Firestore docs with the newest timestamp.
+        val directMatched = findUserAccountDirectlyCloud(cleanInput)
+        val matched = directMatched ?: run {
+            val cloudAccounts = fetchFirebaseAccountsCloud()
+            cloudAccounts.find { acc ->
+                val accEmail = acc.email.trim().lowercase()
+                val accUser = acc.username.trim().lowercase()
+                accEmail == cleanInput ||
+                accUser == cleanInput ||
+                (accEmail.contains("@") && accEmail.substringBefore("@") == cleanInput)
             }
         }
 
-        // 2. Fetch fresh cloud accounts from Cloud Master Directory
-        val cloudAccounts = fetchFirebaseAccountsCloud()
-        val matched = cloudAccounts.find { acc ->
-            val accEmail = acc.email.trim().lowercase()
-            val accUser = acc.username.trim().lowercase()
-            accEmail == cleanInput ||
-            accUser == cleanInput ||
-            (accEmail.contains("@") && accEmail.substringBefore("@") == cleanInput)
-        }
-
         if (matched != null) {
-            // Strict password check
             val isAdminAccount = matched.email.equals("admin@cashbook.com", ignoreCase = true) ||
                 matched.username.equals("admin", ignoreCase = true) ||
                 matched.username.equals("superadmin", ignoreCase = true)
@@ -665,39 +735,146 @@ class GoogleDriveSyncManager(private val context: Context) {
             if (passMatches) {
                 val passToUse = if (cleanPass.isNotBlank()) cleanPass else matched.pass
                 registerUser(matched.name, matched.email, matched.username, passToUse)
+                syncUserToMasterCloud(matched.copy(pass = passToUse))
                 return@withContext true
             }
-            return@withContext false // Password incorrect!
         }
 
-        // 3. Fallback to local accounts
+        // 2. Try Firebase Auth signInWithPassword API (handles accounts registered or reset via Firebase Auth email link)
+        val activeApiKey = getFirebaseApiKey()
+        val targetEmail = if (cleanInput.contains("@")) cleanInput else "$cleanInput@cashbook.com"
+        if (cleanPass.isNotBlank() && activeApiKey.startsWith("AIza")) {
+            try {
+                val url = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=$activeApiKey"
+                val payload = JSONObject().apply {
+                    put("email", targetEmail)
+                    put("password", cleanPass)
+                    put("returnSecureToken", true)
+                }.toString().toRequestBody("application/json".toMediaType())
+                val req = Request.Builder().url(url).post(payload).build()
+                client.newCall(req).execute().use { response ->
+                    val bodyStr = response.body?.string() ?: ""
+                    if (response.isSuccessful && bodyStr.isNotBlank()) {
+                        val json = JSONObject(bodyStr)
+                        val idToken = json.optString("idToken", "")
+                        val resEmail = json.optString("email", targetEmail)
+                        if (idToken.isNotBlank()) {
+                            prefs.edit().putString("firebase_auth_token", idToken).commit()
+                            val username = matched?.username?.ifBlank { null }
+                                ?: if (resEmail.contains("@")) resEmail.substringBefore("@") else resEmail
+                            val name = matched?.name?.ifBlank { null }
+                                ?: username.replaceFirstChar { it.uppercase() }
+                            registerUser(name, resEmail, username, cleanPass)
+                            syncUserToMasterCloud(RegisteredAccount(name, resEmail, username, cleanPass))
+                            return@withContext true
+                        }
+                    } else if (bodyStr.contains("INVALID_PASSWORD") || bodyStr.contains("INVALID_LOGIN_CREDENTIALS")) {
+                        Log.w("GoogleDriveSyncManager", "Firebase Auth rejected password for $targetEmail")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("GoogleDriveSyncManager", "Firebase Auth signInWithPassword error", e)
+            }
+        }
+
+        if (matched != null) {
+            return@withContext false // Cloud account found, password did not match Firestore or Firebase Auth
+        }
+
+        // 3. Fallback to local accounts (offline / local-only)
         return@withContext loginUser(userOrEmail, pass)
     }
 
     suspend fun resetPasswordCloud(userOrEmail: String, newPass: String): Boolean = withContext(Dispatchers.IO) {
         val cleanInput = userOrEmail.trim().lowercase()
+        val trimmedNewPass = newPass.trim()
+        if (cleanInput.isBlank() || trimmedNewPass.length < 4) return@withContext false
         if (cleanInput == "admin" || cleanInput == "superadmin" || cleanInput == "admin@cashbook.com") {
             return@withContext false
         }
-        val cloudAccounts = fetchFirebaseAccountsCloud()
-        val targetAcc = cloudAccounts.find { it.email.lowercase() == cleanInput || it.username.lowercase() == cleanInput }
-                       ?: getGlobalAccounts().find { it.email.lowercase() == cleanInput || it.username.lowercase() == cleanInput }
 
-        if (targetAcc != null) {
-            val updatedAcc = targetAcc.copy(pass = newPass)
-            registerUser(updatedAcc.name, updatedAcc.email, updatedAcc.username, newPass)
-            syncUserToMasterCloud(updatedAcc)
-            return@withContext true
-        }
-
-        val success = resetPassword(userOrEmail, newPass)
-        if (success) {
-            val localAcc = getGlobalAccounts().find { it.email.lowercase() == cleanInput || it.username.lowercase() == cleanInput }
-            if (localAcc != null) {
-                syncUserToMasterCloud(localAcc.copy(pass = newPass))
+        val directAcc = findUserAccountDirectlyCloud(cleanInput)
+        val cloudAccounts = if (directAcc != null) listOf(directAcc) else fetchFirebaseAccountsCloud()
+        val existingAcc = directAcc
+            ?: cloudAccounts.find {
+                it.email.lowercase() == cleanInput ||
+                    it.username.lowercase() == cleanInput ||
+                    (it.email.contains("@") && it.email.substringBefore("@").lowercase() == cleanInput)
             }
+            ?: getGlobalAccounts().find {
+                it.email.lowercase() == cleanInput ||
+                    it.username.lowercase() == cleanInput ||
+                    (it.email.contains("@") && it.email.substringBefore("@").lowercase() == cleanInput)
+            }
+
+        val resolvedAcc = if (existingAcc != null) {
+            existingAcc.copy(pass = trimmedNewPass)
+        } else {
+            val autoEmail = if (cleanInput.contains("@")) cleanInput else "$cleanInput@cashbook.local"
+            val autoUser = if (cleanInput.contains("@")) cleanInput.substringBefore("@") else cleanInput
+            val autoName = autoUser.replaceFirstChar { it.uppercase() }
+            RegisteredAccount(autoName, autoEmail, autoUser, trimmedNewPass)
         }
-        success
+
+        val targetEmail = resolvedAcc.email.trim().lowercase()
+        val resetKey = "pw_reset_ts_" + (targetEmail.ifBlank { cleanInput }).replace(Regex("[^a-zA-Z0-9_]"), "_")
+        prefs.edit().putLong(resetKey, System.currentTimeMillis()).commit()
+
+        // 1. Save locally in active prefs & registered_accounts_json
+        registerUser(resolvedAcc.name, resolvedAcc.email, resolvedAcc.username, trimmedNewPass)
+
+        // 2. Push to /users/user_<key> AND /cashbooks/useraccount_<key>
+        syncUserToMasterCloud(resolvedAcc)
+
+        // 3. Also update password inside /cashbooks/cashbook_<key> backup JSON so old snapshots never restore old password
+        try {
+            val sanitizedTarget = (targetEmail.ifBlank { cleanInput }).replace(Regex("[^a-zA-Z0-9_]"), "_")
+            val cashbookDocId = "cashbook_$sanitizedTarget"
+            val idToken = getFirebaseAuthToken()
+            val fields = fetchFirestoreFields("cashbooks", cashbookDocId, idToken)
+            val dataJsonStr = fields?.optJSONObject("dataJson")?.optString("stringValue", "") ?: ""
+            if (dataJsonStr.isNotBlank()) {
+                val root = JSONObject(dataJsonStr)
+                val info = root.optJSONObject("account_info")
+                if (info != null) {
+                    info.put("user_password", trimmedNewPass)
+                    root.put("account_info", info)
+                }
+                val globalArr = root.optJSONArray("global_accounts")
+                if (globalArr != null) {
+                    var updatedEntry = false
+                    for (i in 0 until globalArr.length()) {
+                        val obj = globalArr.getJSONObject(i)
+                        val e = obj.optString("email", "").trim().lowercase()
+                        val u = obj.optString("username", "").trim().lowercase()
+                        if (e == targetEmail || u == resolvedAcc.username.trim().lowercase()) {
+                            obj.put("pass", trimmedNewPass)
+                            updatedEntry = true
+                        }
+                    }
+                    if (!updatedEntry) {
+                        globalArr.put(JSONObject().apply {
+                            put("name", resolvedAcc.name)
+                            put("email", resolvedAcc.email)
+                            put("username", resolvedAcc.username)
+                            put("pass", trimmedNewPass)
+                        })
+                    }
+                    root.put("global_accounts", globalArr)
+                }
+                val payload = buildFirestoreFields(
+                    "userEmail" to targetEmail,
+                    "dataJson" to root.toString(2),
+                    "updatedAt" to System.currentTimeMillis()
+                )
+                patchOrPostFirestoreDoc("cashbooks", cashbookDocId, payload, idToken)
+                prefs.edit().putString("cloud_vault_$cashbookDocId", root.toString(2)).apply()
+            }
+        } catch (e: Exception) {
+            Log.e("GoogleDriveSyncManager", "Error updating cashbook backup password", e)
+        }
+
+        true
     }
 
     // --- Global Accounts Registry & Management ---
@@ -841,7 +1018,7 @@ class GoogleDriveSyncManager(private val context: Context) {
                 put("pass", acc.pass)
             })
         }
-        prefs.edit().putString("registered_accounts_json", arr.toString()).apply()
+        prefs.edit().putString("registered_accounts_json", arr.toString()).commit()
     }
 
     fun hasRegisteredAccount(): Boolean {
@@ -903,7 +1080,7 @@ class GoogleDriveSyncManager(private val context: Context) {
             .putString("user_password", finalPass)
             .putBoolean("is_user_logged_in", true)
             .putBoolean("is_super_admin", isSuperAdmin)
-            .apply()
+            .commit()
     }
 
     fun registerCustomUser(name: String, email: String, username: String, pass: String) = registerUser(name, email, username, pass)
@@ -995,7 +1172,7 @@ class GoogleDriveSyncManager(private val context: Context) {
             .remove("google_avatar_url")
             .remove("access_token")
             .remove("token_saved_time")
-            .apply()
+            .commit()
     }
 
     fun logoutSuperAdmin() = logoutUser()
@@ -1283,15 +1460,36 @@ class GoogleDriveSyncManager(private val context: Context) {
 
             if (root.has("global_accounts")) {
                 val accArr = root.getJSONArray("global_accounts")
+                val remoteTs = root.optLong("timestamp", 0L)
+                val existingLocal = getGlobalAccounts()
+                val activeLocalPass = (prefs.getString("user_password", "") ?: "").trim()
+                val activeLocalEmail = getEmail().trim().lowercase()
                 val restoredList = mutableListOf<RegisteredAccount>()
                 for (i in 0 until accArr.length()) {
                     val obj = accArr.getJSONObject(i)
+                    val rEmail = obj.optString("email", "")
+                    val rUser = obj.optString("username", "")
+                    var rPass = obj.optString("pass", "")
+
+                    val cleanREmail = rEmail.trim().lowercase()
+                    val resetKey = "pw_reset_ts_" + (cleanREmail.ifBlank { rUser.trim().lowercase() }).replace(Regex("[^a-zA-Z0-9_]"), "_")
+                    val localResetTs = prefs.getLong(resetKey, 0L)
+                    val matchedLocal = existingLocal.find {
+                        (cleanREmail.isNotBlank() && it.email.equals(cleanREmail, true)) ||
+                            (rUser.isNotBlank() && it.username.equals(rUser, true))
+                    }
+                    if (cleanREmail.isNotBlank() && cleanREmail == activeLocalEmail && activeLocalPass.isNotBlank()) {
+                        rPass = activeLocalPass
+                    } else if (localResetTs > remoteTs && matchedLocal != null && matchedLocal.pass.isNotBlank()) {
+                        rPass = matchedLocal.pass
+                    }
+
                     restoredList.add(
                         RegisteredAccount(
                             name = obj.optString("name", ""),
-                            email = obj.optString("email", ""),
-                            username = obj.optString("username", ""),
-                            pass = obj.optString("pass", "")
+                            email = rEmail,
+                            username = rUser,
+                            pass = rPass
                         )
                     )
                 }
