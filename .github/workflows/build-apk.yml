@@ -14,17 +14,17 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           java-version: '17'
           distribution: 'temurin'
           cache: 'gradle'
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Ensure Consistent Signing Keystore
         run: |
@@ -38,7 +38,7 @@ jobs:
         run: gradle assembleDebug assembleRelease --warning-mode=none
 
       - name: Upload APK Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: CashBook-EasyKhata-APKs
           path: |
