@@ -1371,44 +1371,81 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
             },
             bottomBar = {
                 if (currentScreen != Screen.UDHAR) {
-                    NavigationBar(
-                        modifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars)
+                    Surface(
+                        color = MaterialTheme.colorScheme.surface,
+                        tonalElevation = 2.dp,
+                        shadowElevation = 4.dp
                     ) {
-                        NavigationBarItem(
-                            selected = currentScreen == Screen.DASHBOARD,
-                            onClick = { viewModel.setScreen(Screen.DASHBOARD) },
-                            icon = { Icon(Icons.Default.Home, contentDescription = null) },
-                            label = { Text("Home") },
-                            modifier = Modifier.testTag("nav_home")
-                        )
-                        NavigationBarItem(
-                            selected = currentScreen == Screen.REPORTS,
-                            onClick = { viewModel.setScreen(Screen.REPORTS) },
-                            icon = { Icon(Icons.Default.Analytics, contentDescription = null) },
-                            label = { Text("Reports") },
-                            modifier = Modifier.testTag("nav_reports")
-                        )
-                        NavigationBarItem(
-                            selected = currentScreen == Screen.MANAGE_WORKSPACE,
-                            onClick = { viewModel.setScreen(Screen.MANAGE_WORKSPACE) },
-                            icon = { Icon(Icons.Default.BusinessCenter, contentDescription = null) },
-                            label = { Text("Manage") },
-                            modifier = Modifier.testTag("nav_manage")
-                        )
-                        NavigationBarItem(
-                            selected = currentScreen == Screen.SYNC_CENTER,
-                            onClick = { viewModel.setScreen(Screen.SYNC_CENTER) },
-                            icon = { Icon(Icons.Default.CloudSync, contentDescription = null) },
-                            label = { Text("Sync") },
-                            modifier = Modifier.testTag("nav_sync")
-                        )
-                        NavigationBarItem(
-                            selected = currentScreen == Screen.SETTINGS,
-                            onClick = { viewModel.setScreen(Screen.SETTINGS) },
-                            icon = { Icon(Icons.Default.Settings, contentDescription = null) },
-                            label = { Text("Settings") },
-                            modifier = Modifier.testTag("nav_settings")
-                        )
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .windowInsetsPadding(WindowInsets.navigationBars)
+                        ) {
+                            HorizontalDivider(
+                                thickness = 0.5.dp,
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(50.dp)
+                                    .padding(horizontal = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceEvenly,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                val navItems = listOf(
+                                    Triple(Screen.DASHBOARD, "Home", Icons.Default.Home to "nav_home"),
+                                    Triple(Screen.REPORTS, "Reports", Icons.Default.Analytics to "nav_reports"),
+                                    Triple(Screen.MANAGE_WORKSPACE, "Manage", Icons.Default.BusinessCenter to "nav_manage"),
+                                    Triple(Screen.SYNC_CENTER, "Sync", Icons.Default.CloudSync to "nav_sync"),
+                                    Triple(Screen.SETTINGS, "Settings", Icons.Default.Settings to "nav_settings")
+                                )
+                                navItems.forEach { (screen, label, iconAndTag) ->
+                                    val (icon, tag) = iconAndTag
+                                    val selected = currentScreen == screen
+                                    val activeColor = MaterialTheme.colorScheme.primary
+                                    val inactiveColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                    Column(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .fillMaxHeight()
+                                            .minimumInteractiveComponentSize()
+                                            .clickable { viewModel.setScreen(screen) }
+                                            .testTag(tag),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.Center
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .background(
+                                                    if (selected) activeColor.copy(alpha = 0.14f) else Color.Transparent
+                                                )
+                                                .padding(horizontal = 10.dp, vertical = 2.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = icon,
+                                                contentDescription = label,
+                                                tint = if (selected) activeColor else inactiveColor,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.height(1.dp))
+                                        Text(
+                                            text = label,
+                                            fontSize = 10.sp,
+                                            lineHeight = 11.sp,
+                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (selected) activeColor else inactiveColor,
+                                            maxLines = 1,
+                                            softWrap = false,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -2537,207 +2574,215 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
             }
         }
 
-        // 4. Full-Height Active Cashbook Entries List (Takes ALL remaining screen height!)
-        if (activeBook == null) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .padding(24.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        Icons.Default.MenuBook,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
-                        modifier = Modifier.size(56.dp)
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Text("No Cashbook Selected", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        "Create your first cashbook to start recording entries.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center
-                    )
-                    Spacer(modifier = Modifier.height(14.dp))
-                    Button(
-                        onClick = { showAddBookDialog = true },
-                        colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Create Cashbook", fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-        } else if (displayedActiveTxs.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .padding(24.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        Icons.Default.ReceiptLong,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                        modifier = Modifier.size(56.dp)
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Text(
-                        text = if (dashboardSearchQuery.isBlank() && dashboardFilterType == "all")
-                            "No entries in ${activeBook?.name} yet"
-                        else "No matching entries in ${activeBook?.name}",
-                        fontWeight = FontWeight.Bold,
-                        style = MaterialTheme.typography.titleMedium,
-                        textAlign = TextAlign.Center
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Tap CASH IN or CASH OUT below to add an entry.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center
-                    )
-                }
-            }
-        } else {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .padding(horizontal = 12.dp),
-                contentPadding = PaddingValues(top = 4.dp, bottom = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                groupedActiveTxs.forEach { (headerTitle, dayData, _) ->
-                    val (dayIn, dayOut, dayTxs) = dayData
-                    item {
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 6.dp, bottom = 2.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                            shape = RoundedCornerShape(8.dp)
+        // 4. Full-Height Active Cashbook Entries List with Floating CashBook Green/Red Buttons (no separate bar)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+        ) {
+            if (activeBook == null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 68.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            Icons.Default.MenuBook,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+                            modifier = Modifier.size(56.dp)
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text("No Cashbook Selected", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            "Create your first cashbook to start recording entries.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Button(
+                            onClick = { showAddBookDialog = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                            shape = RoundedCornerShape(10.dp)
                         ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 10.dp, vertical = 5.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = headerTitle,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    if (dayIn > 0) Text("+${String.format("%,.0f", dayIn)}", style = MaterialTheme.typography.labelSmall, color = GreenIn, fontWeight = FontWeight.Bold)
-                                    if (dayOut > 0) Text("-${String.format("%,.0f", dayOut)}", style = MaterialTheme.typography.labelSmall, color = RedOut, fontWeight = FontWeight.Bold)
-                                }
-                            }
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Create Cashbook", fontWeight = FontWeight.Bold)
                         }
                     }
-
-                    items(dayTxs) { tx ->
-                        val isSelected = selectedIds.contains(tx.id)
-                        val txRunningBal = runningBalanceMap[tx.id] ?: 0.0
-                        TransactionItemCard(
-                            transaction = tx,
-                            runningBalance = txRunningBal,
-                            bookName = activeBook?.name ?: "",
-                            businessName = activeBusiness?.name ?: "",
-                            isSelected = isSelected,
-                            onToggleSelection = { viewModel.toggleTransactionSelection(tx.id) },
-                            onDelete = {
-                                if (hasPermission(simulatedRole, "delete_transaction")) {
-                                    txPendingDelete = tx
-                                } else {
-                                    Toast.makeText(context, "Unauthorized role: Partner cannot delete entries.", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            onEdit = {
-                                if (hasPermission(simulatedRole, "edit_transaction")) {
-                                    selectedTxForEdit = tx
-                                } else {
-                                    Toast.makeText(context, "Unauthorized role cannot modify entries.", Toast.LENGTH_SHORT).show()
-                                }
-                            }
+                }
+            } else if (displayedActiveTxs.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 68.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            Icons.Default.ReceiptLong,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                            modifier = Modifier.size(56.dp)
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = if (dashboardSearchQuery.isBlank() && dashboardFilterType == "all")
+                                "No entries in ${activeBook?.name} yet"
+                            else "No matching entries in ${activeBook?.name}",
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleMedium,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Tap CASH IN or CASH OUT below to add an entry.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
                         )
                     }
                 }
-            }
-        }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 12.dp),
+                    contentPadding = PaddingValues(top = 4.dp, bottom = 68.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    groupedActiveTxs.forEach { (headerTitle, dayData, _) ->
+                        val (dayIn, dayOut, dayTxs) = dayData
+                        item {
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 6.dp, bottom = 2.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 10.dp, vertical = 5.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = headerTitle,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        if (dayIn > 0) Text("+${String.format("%,.0f", dayIn)}", style = MaterialTheme.typography.labelSmall, color = GreenIn, fontWeight = FontWeight.Bold)
+                                        if (dayOut > 0) Text("-${String.format("%,.0f", dayOut)}", style = MaterialTheme.typography.labelSmall, color = RedOut, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
 
-        // 5. Clean CASH IN / CASH OUT Buttons (No bar, no divider, no background fill)
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            OutlinedButton(
-                onClick = {
-                    if (activeBook == null) {
-                        Toast.makeText(context, "Please select or create a cashbook first", Toast.LENGTH_SHORT).show()
-                    } else if (hasPermission(simulatedRole, "add_transaction")) {
-                        prefillAmountForDialog = ""
-                        prefillRemarksForDialog = ""
-                        showTransactionDialog = "IN"
-                    } else {
-                        Toast.makeText(context, "Unauthorized role", Toast.LENGTH_SHORT).show()
+                        items(dayTxs) { tx ->
+                            val isSelected = selectedIds.contains(tx.id)
+                            val txRunningBal = runningBalanceMap[tx.id] ?: 0.0
+                            TransactionItemCard(
+                                transaction = tx,
+                                runningBalance = txRunningBal,
+                                bookName = activeBook?.name ?: "",
+                                businessName = activeBusiness?.name ?: "",
+                                isSelected = isSelected,
+                                onToggleSelection = { viewModel.toggleTransactionSelection(tx.id) },
+                                onDelete = {
+                                    if (hasPermission(simulatedRole, "delete_transaction")) {
+                                        txPendingDelete = tx
+                                    } else {
+                                        Toast.makeText(context, "Unauthorized role: Partner cannot delete entries.", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                onEdit = {
+                                    if (hasPermission(simulatedRole, "edit_transaction")) {
+                                        selectedTxForEdit = tx
+                                    } else {
+                                        Toast.makeText(context, "Unauthorized role cannot modify entries.", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            )
+                        }
                     }
-                },
-                modifier = Modifier
-                    .weight(1f)
-                    .height(48.dp)
-                    .testTag("quick_cash_in_btn"),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    containerColor = Color.Transparent,
-                    contentColor = Color(0xFF16A34A)
-                ),
-                border = BorderStroke(1.5.dp, Color(0xFF22C55E)),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Icon(Icons.Default.ArrowUpward, contentDescription = null, tint = Color(0xFF16A34A), modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("CASH IN", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = Color(0xFF16A34A))
+                }
             }
 
-            OutlinedButton(
-                onClick = {
-                    if (activeBook == null) {
-                        Toast.makeText(context, "Please select or create a cashbook first", Toast.LENGTH_SHORT).show()
-                    } else if (hasPermission(simulatedRole, "add_transaction")) {
-                        prefillAmountForDialog = ""
-                        prefillRemarksForDialog = ""
-                        showTransactionDialog = "OUT"
-                    } else {
-                        Toast.makeText(context, "Unauthorized role", Toast.LENGTH_SHORT).show()
-                    }
-                },
+            // Floating CashBook-Style Solid Green & Red Buttons (Zero separate bar!)
+            Row(
                 modifier = Modifier
-                    .weight(1f)
-                    .height(48.dp)
-                    .testTag("quick_cash_out_btn"),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    containerColor = Color.Transparent,
-                    contentColor = Color(0xFFEA580C)
-                ),
-                border = BorderStroke(1.5.dp, Color(0xFFF97316)),
-                shape = RoundedCornerShape(12.dp)
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("CASH OUT", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = Color(0xFFEA580C))
-                Spacer(modifier = Modifier.width(6.dp))
-                Icon(Icons.Default.ArrowDownward, contentDescription = null, tint = Color(0xFFEA580C), modifier = Modifier.size(18.dp))
+                Button(
+                    onClick = {
+                        if (activeBook == null) {
+                            Toast.makeText(context, "Please select or create a cashbook first", Toast.LENGTH_SHORT).show()
+                        } else if (hasPermission(simulatedRole, "add_transaction")) {
+                            prefillAmountForDialog = ""
+                            prefillRemarksForDialog = ""
+                            showTransactionDialog = "IN"
+                        } else {
+                            Toast.makeText(context, "Unauthorized role", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(46.dp)
+                        .minimumInteractiveComponentSize()
+                        .testTag("quick_cash_in_btn"),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF16A34A),
+                        contentColor = Color.White
+                    ),
+                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp, pressedElevation = 2.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("CASH IN", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = Color.White, maxLines = 1, softWrap = false)
+                }
+
+                Button(
+                    onClick = {
+                        if (activeBook == null) {
+                            Toast.makeText(context, "Please select or create a cashbook first", Toast.LENGTH_SHORT).show()
+                        } else if (hasPermission(simulatedRole, "add_transaction")) {
+                            prefillAmountForDialog = ""
+                            prefillRemarksForDialog = ""
+                            showTransactionDialog = "OUT"
+                        } else {
+                            Toast.makeText(context, "Unauthorized role", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(46.dp)
+                        .minimumInteractiveComponentSize()
+                        .testTag("quick_cash_out_btn"),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFDC2626),
+                        contentColor = Color.White
+                    ),
+                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp, pressedElevation = 2.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(Icons.Default.Remove, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("CASH OUT", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = Color.White, maxLines = 1, softWrap = false)
+                }
             }
         }
     }
@@ -3466,179 +3511,190 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                 }
             }
 
-            // Ledger Entries List Daywise
-            if (displayTransactions.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .padding(32.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
+            // Ledger Entries List Daywise with Floating CashBook Green/Red Buttons (no separate bar)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+            ) {
+                if (displayTransactions.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(start = 32.dp, end = 32.dp, top = 32.dp, bottom = 74.dp),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            Icons.Default.ReceiptLong,
-                            contentDescription = null,
-                            modifier = Modifier.size(64.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            "No transactions recorded yet.",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            "Tap 'CASH IN' or 'CASH OUT' below to add entries.",
-                            style = MaterialTheme.typography.bodySmall,
-                            textAlign = TextAlign.Center,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                        )
-                    }
-                }
-            } else {
-                // Compute running balance cumulative map for exact "Bal. Rs. xxx,xxx" chips
-                val sortedChronologicalTxs = remember(activeBookTransactions) {
-                    activeBookTransactions.sortedWith(compareBy<Transaction>({ it.timestamp }, { it.id }))
-                }
-                val runningBalanceMap = remember(sortedChronologicalTxs) {
-                    var cumulative = 0.0
-                    val map = mutableMapOf<Int, Double>()
-                    for (tx in sortedChronologicalTxs) {
-                        if (tx.type == "IN") cumulative += tx.amount else cumulative -= tx.amount
-                        map[tx.id] = cumulative
-                    }
-                    map
-                }
-
-                LazyColumn(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    groupedTransactions.forEach { (headerTitle, dayData, _) ->
-                        val (dayIn, dayOut, dayTxs) = dayData
-                        item {
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = 10.dp, bottom = 4.dp),
-                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)),
-                                shape = RoundedCornerShape(8.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = headerTitle,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        if (dayOut > 0) Text("OUT: Rs. ${String.format("%,.0f", dayOut)}", style = MaterialTheme.typography.labelSmall, color = RedOut, fontWeight = FontWeight.Bold)
-                                        if (dayIn > 0) Text("IN: Rs. ${String.format("%,.0f", dayIn)}", style = MaterialTheme.typography.labelSmall, color = GreenIn, fontWeight = FontWeight.Bold)
-                                    }
-                                }
-                            }
-                        }
-
-                        items(dayTxs) { tx ->
-                            val isSelected = selectedIds.contains(tx.id)
-                            val txRunningBal = runningBalanceMap[tx.id] ?: 0.0
-                            TransactionItemCard(
-                                transaction = tx,
-                                runningBalance = txRunningBal,
-                                bookName = activeBook?.name ?: "",
-                                businessName = activeBusiness?.name ?: "",
-                                isSelected = isSelected,
-                                onToggleSelection = { viewModel.toggleTransactionSelection(tx.id) },
-                                onDelete = {
-                                    if (hasPermission(simulatedRole, "delete_transaction")) {
-                                        txPendingDelete = tx
-                                    } else {
-                                        Toast.makeText(context, "Unauthorized role: Partner cannot delete transactions.", Toast.LENGTH_SHORT).show()
-                                    }
-                                },
-                                onEdit = {
-                                    if (hasPermission(simulatedRole, "edit_transaction")) {
-                                        selectedTxForEdit = tx
-                                    } else {
-                                        Toast.makeText(context, "Unauthorized role: Partner/Data Entry cannot modify entries.", Toast.LENGTH_SHORT).show()
-                                    }
-                                }
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                Icons.Default.ReceiptLong,
+                                contentDescription = null,
+                                modifier = Modifier.size(64.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                "No transactions recorded yet.",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                "Tap 'CASH IN' or 'CASH OUT' below to add entries.",
+                                style = MaterialTheme.typography.bodySmall,
+                                textAlign = TextAlign.Center,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                             )
                         }
                     }
-                }
-            }
-
-            // Clean CASH IN / CASH OUT Buttons (No bar, no divider, no background fill)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
-                    .navigationBarsPadding(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                OutlinedButton(
-                    onClick = {
-                        if (hasPermission(simulatedRole, "add_transaction")) {
-                            prefillAmountForDialog = ""
-                            prefillRemarksForDialog = ""
-                            showTransactionDialog = "IN"
-                        } else {
-                            Toast.makeText(context, "Unauthorized role: Read-only partners cannot add entries.", Toast.LENGTH_SHORT).show()
+                } else {
+                    // Compute running balance cumulative map for exact "Bal. Rs. xxx,xxx" chips
+                    val sortedChronologicalTxs = remember(activeBookTransactions) {
+                        activeBookTransactions.sortedWith(compareBy<Transaction>({ it.timestamp }, { it.id }))
+                    }
+                    val runningBalanceMap = remember(sortedChronologicalTxs) {
+                        var cumulative = 0.0
+                        val map = mutableMapOf<Int, Double>()
+                        for (tx in sortedChronologicalTxs) {
+                            if (tx.type == "IN") cumulative += tx.amount else cumulative -= tx.amount
+                            map[tx.id] = cumulative
                         }
-                    },
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp)
-                        .testTag("cash_in_button"),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = Color.Transparent,
-                        contentColor = Color(0xFF16A34A)
-                    ),
-                    border = BorderStroke(1.5.dp, Color(0xFF22C55E)),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(Icons.Default.ArrowUpward, contentDescription = null, tint = Color(0xFF16A34A), modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("CASH IN", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = Color(0xFF16A34A))
+                        map
+                    }
+
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 14.dp),
+                        contentPadding = PaddingValues(top = 4.dp, bottom = 74.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        groupedTransactions.forEach { (headerTitle, dayData, _) ->
+                            val (dayIn, dayOut, dayTxs) = dayData
+                            item {
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 10.dp, bottom = 4.dp),
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = headerTitle,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            if (dayOut > 0) Text("OUT: Rs. ${String.format("%,.0f", dayOut)}", style = MaterialTheme.typography.labelSmall, color = RedOut, fontWeight = FontWeight.Bold)
+                                            if (dayIn > 0) Text("IN: Rs. ${String.format("%,.0f", dayIn)}", style = MaterialTheme.typography.labelSmall, color = GreenIn, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+                            }
+
+                            items(dayTxs) { tx ->
+                                val isSelected = selectedIds.contains(tx.id)
+                                val txRunningBal = runningBalanceMap[tx.id] ?: 0.0
+                                TransactionItemCard(
+                                    transaction = tx,
+                                    runningBalance = txRunningBal,
+                                    bookName = activeBook?.name ?: "",
+                                    businessName = activeBusiness?.name ?: "",
+                                    isSelected = isSelected,
+                                    onToggleSelection = { viewModel.toggleTransactionSelection(tx.id) },
+                                    onDelete = {
+                                        if (hasPermission(simulatedRole, "delete_transaction")) {
+                                            txPendingDelete = tx
+                                        } else {
+                                            Toast.makeText(context, "Unauthorized role: Partner cannot delete transactions.", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    onEdit = {
+                                        if (hasPermission(simulatedRole, "edit_transaction")) {
+                                            selectedTxForEdit = tx
+                                        } else {
+                                            Toast.makeText(context, "Unauthorized role: Partner/Data Entry cannot modify entries.", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
                 }
 
-                OutlinedButton(
-                    onClick = {
-                        if (hasPermission(simulatedRole, "add_transaction")) {
-                            prefillAmountForDialog = ""
-                            prefillRemarksForDialog = ""
-                            showTransactionDialog = "OUT"
-                        } else {
-                            Toast.makeText(context, "Unauthorized role: Read-only partners cannot add entries.", Toast.LENGTH_SHORT).show()
-                        }
-                    },
+                // Floating CashBook-Style Solid Green & Red Buttons (Zero separate bar!)
+                Row(
                     modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp)
-                        .testTag("cash_out_button"),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = Color.Transparent,
-                        contentColor = Color(0xFFEA580C)
-                    ),
-                    border = BorderStroke(1.5.dp, Color(0xFFF97316)),
-                    shape = RoundedCornerShape(12.dp)
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Text("CASH OUT", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = Color(0xFFEA580C))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Icon(Icons.Default.ArrowDownward, contentDescription = null, tint = Color(0xFFEA580C), modifier = Modifier.size(18.dp))
+                    Button(
+                        onClick = {
+                            if (hasPermission(simulatedRole, "add_transaction")) {
+                                prefillAmountForDialog = ""
+                                prefillRemarksForDialog = ""
+                                showTransactionDialog = "IN"
+                            } else {
+                                Toast.makeText(context, "Unauthorized role: Read-only partners cannot add entries.", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(46.dp)
+                            .minimumInteractiveComponentSize()
+                            .testTag("cash_in_button"),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF16A34A),
+                            contentColor = Color.White
+                        ),
+                        elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp, pressedElevation = 2.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("CASH IN", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = Color.White, maxLines = 1, softWrap = false)
+                    }
+
+                    Button(
+                        onClick = {
+                            if (hasPermission(simulatedRole, "add_transaction")) {
+                                prefillAmountForDialog = ""
+                                prefillRemarksForDialog = ""
+                                showTransactionDialog = "OUT"
+                            } else {
+                                Toast.makeText(context, "Unauthorized role: Read-only partners cannot add entries.", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(46.dp)
+                            .minimumInteractiveComponentSize()
+                            .testTag("cash_out_button"),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFFDC2626),
+                            contentColor = Color.White
+                        ),
+                        elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp, pressedElevation = 2.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.Remove, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("CASH OUT", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = Color.White, maxLines = 1, softWrap = false)
+                    }
                 }
             }
         }
