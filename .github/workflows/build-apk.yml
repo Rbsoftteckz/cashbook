@@ -27,20 +27,33 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
 
       - name: Ensure Consistent Signing Keystore
+        env:
+          UPLOAD_KEYSTORE_BASE64: ${{ secrets.UPLOAD_KEYSTORE_BASE64 }}
+          UPLOAD_STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          UPLOAD_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          UPLOAD_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
+          if [ -n "$UPLOAD_KEYSTORE_BASE64" ]; then
+            printf '%s' "$UPLOAD_KEYSTORE_BASE64" | tr -d '\n\r ' | base64 -d > "${{ runner.temp }}/upload-keystore.jks"
+            echo "KEYSTORE_PATH=${{ runner.temp }}/upload-keystore.jks" >> "$GITHUB_ENV"
+            [ -n "$UPLOAD_STORE_PASSWORD" ] && echo "STORE_PASSWORD=$UPLOAD_STORE_PASSWORD" >> "$GITHUB_ENV"
+            [ -n "$UPLOAD_KEY_ALIAS" ] && echo "KEY_ALIAS=$UPLOAD_KEY_ALIAS" >> "$GITHUB_ENV"
+            [ -n "$UPLOAD_KEY_PASSWORD" ] && echo "KEY_PASSWORD=$UPLOAD_KEY_PASSWORD" >> "$GITHUB_ENV"
+          fi
           if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
             base64 -d debug.keystore.base64 > debug.keystore
           elif [ ! -f debug.keystore ]; then
             keytool -genkey -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=CashBook,O=CashBook,C=US"
           fi
 
-      - name: Build Debug & Release APK
-        run: gradle assembleDebug assembleRelease --warning-mode=none
+      - name: Build APKs & Play Store Bundle (.aab)
+        run: gradle assembleDebug assembleRelease bundleRelease --warning-mode=none
 
-      - name: Upload APK Artifact
+      - name: Upload APK & AAB Artifacts
         uses: actions/upload-artifact@v7
         with:
           name: CashBook-EasyKhata-APKs
           path: |
             app/build/outputs/apk/debug/*.apk
             app/build/outputs/apk/release/*.apk
+            app/build/outputs/bundle/release/*.aab

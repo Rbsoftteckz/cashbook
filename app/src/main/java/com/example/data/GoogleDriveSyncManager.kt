@@ -1655,10 +1655,14 @@ class GoogleDriveSyncManager(private val context: Context) {
                     }
                 }
 
-                // Delete local books that were deleted on remote (Skip for partial export share)
+                // Delete local books that were deleted on remote (strictly scoped to businesses owned by this user; never touch joined/shared workspaces)
                 if (!isPartialExport) {
+                    val ownedBizIds = existingBizList.filter { localBiz ->
+                        val owner = localBiz.userEmail.trim().lowercase()
+                        if (isCloudSession) owner == sessionEmail else (owner == sessionEmail || owner.isBlank())
+                    }.map { it.id }.toSet()
                     val remoteBookIdsInLocal = bookIdMap.values.toSet()
-                    val targetBizIds = if (bizIdMap.isNotEmpty()) bizIdMap.values.toSet() else existingBizList.map { it.id }.toSet()
+                    val targetBizIds = if (bizIdMap.isNotEmpty()) bizIdMap.values.toSet().intersect(ownedBizIds) else ownedBizIds
                     val booksToDelete = existingBooksList.filter { localBook ->
                         localBook.isSynced && targetBizIds.contains(localBook.businessId) && !remoteBookIdsInLocal.contains(localBook.id) && !remoteBookKeys.contains("${localBook.businessId}:${localBook.name.trim().lowercase()}")
                     }
@@ -1763,9 +1767,14 @@ class GoogleDriveSyncManager(private val context: Context) {
                     }
                 }
 
-                // Delete local transactions that were deleted on remote (Skip for partial export share)
+                // Delete local transactions that were deleted on remote (strictly scoped to books inside owned businesses)
                 if (!isPartialExport) {
-                    val targetBookIds = if (bookIdMap.isNotEmpty()) bookIdMap.values.toSet() else existingBooksList.map { it.id }.toSet()
+                    val ownedBizIds = existingBizList.filter { localBiz ->
+                        val owner = localBiz.userEmail.trim().lowercase()
+                        if (isCloudSession) owner == sessionEmail else (owner == sessionEmail || owner.isBlank())
+                    }.map { it.id }.toSet()
+                    val ownedBookIds = existingBooksList.filter { it.businessId in ownedBizIds }.map { it.id }.toSet()
+                    val targetBookIds = if (bookIdMap.isNotEmpty()) bookIdMap.values.toSet().intersect(ownedBookIds) else ownedBookIds
                     val toDelete = existingTxList.filter { localTx ->
                         localTx.isSynced && targetBookIds.contains(localTx.bookId) && !remoteTxTimestamps.contains(localTx.timestamp)
                     }
@@ -1879,7 +1888,11 @@ class GoogleDriveSyncManager(private val context: Context) {
                     }
                 }
 
-                val targetBizIds = if (bizIdMap.isNotEmpty()) bizIdMap.values.toSet() else existingBizList.map { it.id }.toSet()
+                val ownedBizIds = existingBizList.filter { localBiz ->
+                    val owner = localBiz.userEmail.trim().lowercase()
+                    if (isCloudSession) owner == sessionEmail else (owner == sessionEmail || owner.isBlank())
+                }.map { it.id }.toSet()
+                val targetBizIds = if (bizIdMap.isNotEmpty()) bizIdMap.values.toSet().intersect(ownedBizIds) else ownedBizIds
                 val membersToDelete = existingTeamList.filter { localTM ->
                     val localEmail = localTM.email.trim().lowercase()
                     val memberEditTs = prefs.getLong("team_member_edit_ts_${sanitizeDocKey(localEmail)}", 0L)
@@ -3174,10 +3187,6 @@ class GoogleDriveSyncManager(private val context: Context) {
                 }
                 if (restored) {
                     prefs.edit().putBoolean("has_performed_initial_cloud_restore_$primaryDocId", true).apply()
-                    dao.markAllBusinessesSynced()
-                    dao.markAllBooksSynced()
-                    dao.markAllTransactionsSynced()
-                    dao.markAllPartyTransactionsSynced()
                 }
             }
 

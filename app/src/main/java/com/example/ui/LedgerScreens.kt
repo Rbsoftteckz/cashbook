@@ -10638,30 +10638,30 @@ fun OnboardingSetupScreen(
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
                         if (isSyncingNow) {
-                            CircularProgressIndicator(color = GreenIn, modifier = Modifier.size(44.dp))
+                            LinearProgressIndicator(
+                                color = GreenIn,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(4.dp))
+                            )
                             Text(
-                                text = "Synchronizing Cloud Cashbooks...",
-                                style = MaterialTheme.typography.titleMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF0F172A)
+                                text = "Synchronizing cloud cashbooks in background...",
+                                style = MaterialTheme.typography.labelMedium.copy(
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = GreenIn
                                 ),
                                 textAlign = TextAlign.Center
                             )
-                            Text(
-                                text = "Account: ${syncManager.getEmail().ifBlank { syncManager.getName() }}\nRestoring your cloud businesses & team invites...",
-                                style = MaterialTheme.typography.bodyMedium.copy(color = Color(0xFF64748B)),
-                                textAlign = TextAlign.Center
-                            )
-                        } else {
-                            Icon(Icons.Default.Storefront, contentDescription = null, tint = GreenIn, modifier = Modifier.size(44.dp))
-                            Text(
-                                text = "Create or Join a Business",
-                                style = MaterialTheme.typography.titleMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF0F172A)
-                                ),
-                                textAlign = TextAlign.Center
-                            )
+                        }
+                        Icon(Icons.Default.Storefront, contentDescription = null, tint = GreenIn, modifier = Modifier.size(44.dp))
+                        Text(
+                            text = "Create or Join a Business",
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF0F172A)
+                            ),
+                            textAlign = TextAlign.Center
+                        )
                             Text(
                                 text = "Signed in as ${syncManager.getEmail().ifBlank { syncManager.getName() }}",
                                 style = MaterialTheme.typography.bodySmall.copy(color = Color(0xFF64748B)),
@@ -10696,25 +10696,25 @@ fun OnboardingSetupScreen(
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("Have an Invite Code? Join Business", color = GreenIn, fontWeight = FontWeight.Bold)
                             }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = { viewModel.triggerCloudSync() },
+                                enabled = !isSyncingNow,
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(10.dp)
                             ) {
-                                OutlinedButton(
-                                    onClick = { viewModel.triggerCloudSync() },
-                                    modifier = Modifier.weight(1f),
-                                    shape = RoundedCornerShape(10.dp)
-                                ) {
-                                    Text("Retry Sync")
-                                }
-                                OutlinedButton(
-                                    onClick = { viewModel.logoutUser() },
-                                    modifier = Modifier.weight(1f),
-                                    shape = RoundedCornerShape(10.dp),
-                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                                ) {
-                                    Text("Switch Account")
-                                }
+                                Text(if (isSyncingNow) "Syncing..." else "Retry Sync")
+                            }
+                            OutlinedButton(
+                                onClick = { viewModel.logoutUser() },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                            ) {
+                                Text("Switch Account")
                             }
                         }
                         Text(

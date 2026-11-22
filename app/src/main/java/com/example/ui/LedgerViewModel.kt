@@ -474,10 +474,10 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             Log.e("LedgerViewModel", "Failed to register network callback", e)
         }
 
-        // Real-time periodic cloud polling (every 10 seconds) so team members and transactions auto-update live silently
+        // Real-time periodic cloud polling (every 15 seconds) so team members and transactions auto-update live silently
         viewModelScope.launch {
             while (isActive) {
-                kotlinx.coroutines.delay(10000L)
+                kotlinx.coroutines.delay(15000L)
                 if (checkIsOnline() && syncManager.isUserSignedIn() && syncManager.isRealCloudAccount() && !_isSyncing.value) {
                     try {
                         val msg = syncManager.syncWithCloud(database.ledgerDao())
