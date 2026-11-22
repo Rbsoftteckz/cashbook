@@ -976,6 +976,24 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         }
                     )
 
+                    NavigationDrawerItem(
+                        icon = { Icon(Icons.Default.BusinessCenter, contentDescription = null) },
+                        label = { Text("Manage Businesses & Books") },
+                        selected = currentScreen == Screen.MANAGE_WORKSPACE,
+                        colors = NavigationDrawerItemDefaults.colors(
+                            selectedContainerColor = GreenIn.copy(alpha = 0.15f),
+                            unselectedContainerColor = Color.Transparent,
+                            selectedIconColor = GreenIn,
+                            unselectedIconColor = Color(0xFF475569),
+                            selectedTextColor = GreenIn,
+                            unselectedTextColor = Color(0xFF1E293B)
+                        ),
+                        onClick = {
+                            viewModel.setScreen(Screen.MANAGE_WORKSPACE)
+                            scope.launch { drawerState.close() }
+                        }
+                    )
+
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         "Enterprise",
@@ -1209,173 +1227,189 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
         }
     ) {
         Scaffold(
-            contentWindowInsets = if (currentScreen == Screen.UDHAR) WindowInsets(0, 0, 0, 0) else ScaffoldDefaults.contentWindowInsets,
+            contentWindowInsets = if (currentScreen == Screen.UDHAR || currentScreen == Screen.DASHBOARD) WindowInsets(0, 0, 0, 0) else ScaffoldDefaults.contentWindowInsets,
             topBar = {
                 if (currentScreen != Screen.UDHAR) {
-                    CenterAlignedTopAppBar(
+                    TopAppBar(
                         navigationIcon = {
                             IconButton(onClick = { scope.launch { drawerState.open() } }) {
                                 Icon(Icons.Default.Menu, contentDescription = "Open Navigation Drawer")
                             }
                         },
-                    title = {
-                        Row(
-                            modifier = Modifier.padding(2.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            // Secret 5-Tap on Book Icon (Completely normal appearance, no indicators)
-                            Box(
-                                modifier = Modifier
-                                    .size(40.dp)
-                                    .clickable(
-                                        interactionSource = remember { MutableInteractionSource() },
-                                        indication = null
-                                    ) {
-                                        val now = System.currentTimeMillis()
-                                        if (now - lastBookIconTapTimestamp > 2500L) {
-                                            bookIconTapCount = 1
-                                        } else {
-                                            bookIconTapCount++
-                                        }
-                                        lastBookIconTapTimestamp = now
-
-                                        if (bookIconTapCount >= 5) {
-                                            bookIconTapCount = 0
-                                            showSuperAdminSecretLoginDialog = true
-                                        }
-                                    },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    Icons.Default.MenuBook,
-                                    contentDescription = "Cashbook",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                            }
-
-                            // Tapping the Book Name / Arrow Dropdown switches active Cashbook
+                        title = {
                             Row(
-                                modifier = Modifier
-                                    .clickable { showBookSelector = true }
-                                    .padding(horizontal = 6.dp, vertical = 6.dp)
-                                    .testTag("book_selector_trigger"),
+                                modifier = Modifier.padding(vertical = 2.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(
-                                    text = activeBook?.name ?: "No Book Active",
-                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Icon(
-                                    Icons.Default.ArrowDropDown,
-                                    contentDescription = "Switch book",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    },
-                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.surface
-                    ),
-                    actions = {
-                        // Cloud Sync status indicator (Green if connected, Red if offline/error, Teal/Primary if running in offline local mode)
-                        val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
-                        val isOnline by viewModel.isOnline.collectAsStateWithLifecycle()
-                        val isRealCloudAccount = viewModel.syncManager.isRealCloudAccount()
-                        val isSyncError = !isOnline || syncStatus.contains("Error", ignoreCase = true) || syncStatus.contains("Failed", ignoreCase = true) || syncStatus.contains("403") || syncStatus.contains("401") || syncStatus.contains("400") || syncStatus.contains("500") || syncStatus.contains("Disconnected", ignoreCase = true)
-                        val isRealSuccess = isOnline && isRealCloudAccount && !isSyncError && (syncStatus.contains("Synced", ignoreCase = true) || syncStatus.contains("Restored", ignoreCase = true) || syncStatus.contains("Success", ignoreCase = true) || syncStatus.contains("Connected", ignoreCase = true) || syncStatus.contains("Vault", ignoreCase = true) || syncStatus.contains("Active", ignoreCase = true) || syncStatus.contains("Ready", ignoreCase = true))
+                                // Secret 5-Tap on Book Icon (Completely normal appearance, no indicators)
+                                Box(
+                                    modifier = Modifier
+                                        .size(34.dp)
+                                        .clickable(
+                                            interactionSource = remember { MutableInteractionSource() },
+                                            indication = null
+                                        ) {
+                                            val now = System.currentTimeMillis()
+                                            if (now - lastBookIconTapTimestamp > 2500L) {
+                                                bookIconTapCount = 1
+                                            } else {
+                                                bookIconTapCount++
+                                            }
+                                            lastBookIconTapTimestamp = now
 
-                        IconButton(
-                            onClick = { viewModel.setScreen(Screen.SYNC_CENTER) },
-                            modifier = Modifier.testTag("top_bar_sync_indicator")
-                        ) {
-                            Icon(
-                                imageVector = if (!isOnline) Icons.Default.CloudOff else if (isRealSuccess) Icons.Default.CloudDone else if (isSyncError) Icons.Default.CloudOff else Icons.Default.OfflinePin,
-                                contentDescription = "Cloud Sync & Offline Status",
-                                tint = if (!isOnline) MaterialTheme.colorScheme.error else if (isRealSuccess) GreenIn else if (isSyncError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-                            )
-                        }
-                        IconButton(
-                            onClick = {
-                                if (hasPermission(simulatedRole, "add_book")) {
-                                    showAddBookDialog = true
-                                } else {
-                                    Toast.makeText(context, "Unauthorized: Data Entry or read-only Partner cannot create books.", Toast.LENGTH_SHORT).show()
+                                            if (bookIconTapCount >= 5) {
+                                                bookIconTapCount = 0
+                                                showSuperAdminSecretLoginDialog = true
+                                            }
+                                        },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        Icons.Default.MenuBook,
+                                        contentDescription = "Cashbook",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(21.dp)
+                                    )
                                 }
-                            },
-                            modifier = Modifier.testTag("add_book_button")
-                        ) {
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier
-                                    .size(34.dp)
-                                    .background(GreenIn.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
+
+                                // Tapping the Book Name / Arrow Dropdown switches active Cashbook
+                                Row(
+                                    modifier = Modifier
+                                        .clickable { showBookSelector = true }
+                                        .padding(horizontal = 4.dp, vertical = 4.dp)
+                                        .testTag("book_selector_trigger"),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = activeBook?.name ?: "No Book Active",
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Icon(
+                                        Icons.Default.ArrowDropDown,
+                                        contentDescription = "Switch book",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(
+                            containerColor = MaterialTheme.colorScheme.surface
+                        ),
+                        actions = {
+                            // Compact Analytics / Reports shortcut icon
+                            IconButton(
+                                onClick = { viewModel.setScreen(Screen.REPORTS) },
+                                modifier = Modifier.testTag("top_bar_reports_button")
                             ) {
                                 Icon(
-                                    Icons.Default.LibraryAdd,
-                                    contentDescription = "Create New Book",
-                                    tint = GreenIn,
-                                    modifier = Modifier.size(20.dp)
+                                    imageVector = Icons.Default.Analytics,
+                                    contentDescription = "Reports & Analytics",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(21.dp)
+                                )
+                            }
+
+                            // Cloud Sync status indicator
+                            val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
+                            val isOnline by viewModel.isOnline.collectAsStateWithLifecycle()
+                            val isRealCloudAccount = viewModel.syncManager.isRealCloudAccount()
+                            val isSyncError = !isOnline || syncStatus.contains("Error", ignoreCase = true) || syncStatus.contains("Failed", ignoreCase = true) || syncStatus.contains("403") || syncStatus.contains("401") || syncStatus.contains("400") || syncStatus.contains("500") || syncStatus.contains("Disconnected", ignoreCase = true)
+                            val isRealSuccess = isOnline && isRealCloudAccount && !isSyncError && (syncStatus.contains("Synced", ignoreCase = true) || syncStatus.contains("Restored", ignoreCase = true) || syncStatus.contains("Success", ignoreCase = true) || syncStatus.contains("Connected", ignoreCase = true) || syncStatus.contains("Vault", ignoreCase = true) || syncStatus.contains("Active", ignoreCase = true) || syncStatus.contains("Ready", ignoreCase = true))
+
+                            IconButton(
+                                onClick = { viewModel.setScreen(Screen.SYNC_CENTER) },
+                                modifier = Modifier.testTag("top_bar_sync_indicator")
+                            ) {
+                                Icon(
+                                    imageVector = if (!isOnline) Icons.Default.CloudOff else if (isRealSuccess) Icons.Default.CloudDone else if (isSyncError) Icons.Default.CloudOff else Icons.Default.OfflinePin,
+                                    contentDescription = "Cloud Sync & Offline Status",
+                                    tint = if (!isOnline) MaterialTheme.colorScheme.error else if (isRealSuccess) GreenIn else if (isSyncError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(21.dp)
+                                )
+                            }
+                            IconButton(
+                                onClick = {
+                                    if (hasPermission(simulatedRole, "add_book")) {
+                                        showAddBookDialog = true
+                                    } else {
+                                        Toast.makeText(context, "Unauthorized: Data Entry or read-only Partner cannot create books.", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                modifier = Modifier.testTag("add_book_button")
+                            ) {
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier
+                                        .size(30.dp)
+                                        .background(GreenIn.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
+                                ) {
+                                    Icon(
+                                        Icons.Default.LibraryAdd,
+                                        contentDescription = "Create New Book",
+                                        tint = GreenIn,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                            IconButton(
+                                onClick = { viewModel.setScreen(Screen.PROFILE) },
+                                modifier = Modifier.testTag("top_bar_profile_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.AccountCircle,
+                                    contentDescription = "User Account Profile",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(22.dp)
                                 )
                             }
                         }
-                        IconButton(
-                            onClick = { viewModel.setScreen(Screen.PROFILE) },
-                            modifier = Modifier.testTag("top_bar_profile_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.AccountCircle,
-                                contentDescription = "User Account Profile",
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    }
-                )
+                    )
                 }
             },
             bottomBar = {
-                if (currentScreen != Screen.UDHAR) {
+                if (currentScreen != Screen.UDHAR && currentScreen != Screen.DASHBOARD) {
                     NavigationBar(
                         modifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars)
                     ) {
-                    NavigationBarItem(
-                        selected = currentScreen == Screen.DASHBOARD,
-                        onClick = { viewModel.setScreen(Screen.DASHBOARD) },
-                        icon = { Icon(Icons.Default.Home, contentDescription = null) },
-                        label = { Text("Home") },
-                        modifier = Modifier.testTag("nav_home")
-                    )
-                    NavigationBarItem(
-                        selected = currentScreen == Screen.REPORTS,
-                        onClick = { viewModel.setScreen(Screen.REPORTS) },
-                        icon = { Icon(Icons.Default.Analytics, contentDescription = null) },
-                        label = { Text("Reports") },
-                        modifier = Modifier.testTag("nav_reports")
-                    )
-                    NavigationBarItem(
-                        selected = currentScreen == Screen.MANAGE_WORKSPACE,
-                        onClick = { viewModel.setScreen(Screen.MANAGE_WORKSPACE) },
-                        icon = { Icon(Icons.Default.BusinessCenter, contentDescription = null) },
-                        label = { Text("Manage") },
-                        modifier = Modifier.testTag("nav_manage")
-                    )
-                    NavigationBarItem(
-                        selected = currentScreen == Screen.SYNC_CENTER,
-                        onClick = { viewModel.setScreen(Screen.SYNC_CENTER) },
-                        icon = { Icon(Icons.Default.CloudSync, contentDescription = null) },
-                        label = { Text("Sync") },
-                        modifier = Modifier.testTag("nav_sync")
-                    )
-                    NavigationBarItem(
-                        selected = currentScreen == Screen.SETTINGS,
-                        onClick = { viewModel.setScreen(Screen.SETTINGS) },
-                        icon = { Icon(Icons.Default.Settings, contentDescription = null) },
-                        label = { Text("Settings") },
-                        modifier = Modifier.testTag("nav_settings")
-                    )
-                }
+                        NavigationBarItem(
+                            selected = currentScreen == Screen.DASHBOARD,
+                            onClick = { viewModel.setScreen(Screen.DASHBOARD) },
+                            icon = { Icon(Icons.Default.Home, contentDescription = null) },
+                            label = { Text("Home") },
+                            modifier = Modifier.testTag("nav_home")
+                        )
+                        NavigationBarItem(
+                            selected = currentScreen == Screen.REPORTS,
+                            onClick = { viewModel.setScreen(Screen.REPORTS) },
+                            icon = { Icon(Icons.Default.Analytics, contentDescription = null) },
+                            label = { Text("Reports") },
+                            modifier = Modifier.testTag("nav_reports")
+                        )
+                        NavigationBarItem(
+                            selected = currentScreen == Screen.MANAGE_WORKSPACE,
+                            onClick = { viewModel.setScreen(Screen.MANAGE_WORKSPACE) },
+                            icon = { Icon(Icons.Default.BusinessCenter, contentDescription = null) },
+                            label = { Text("Manage") },
+                            modifier = Modifier.testTag("nav_manage")
+                        )
+                        NavigationBarItem(
+                            selected = currentScreen == Screen.SYNC_CENTER,
+                            onClick = { viewModel.setScreen(Screen.SYNC_CENTER) },
+                            icon = { Icon(Icons.Default.CloudSync, contentDescription = null) },
+                            label = { Text("Sync") },
+                            modifier = Modifier.testTag("nav_sync")
+                        )
+                        NavigationBarItem(
+                            selected = currentScreen == Screen.SETTINGS,
+                            onClick = { viewModel.setScreen(Screen.SETTINGS) },
+                            icon = { Icon(Icons.Default.Settings, contentDescription = null) },
+                            label = { Text("Settings") },
+                            modifier = Modifier.testTag("nav_settings")
+                        )
+                    }
                 }
             }
         ) { paddingValues ->
@@ -2057,23 +2091,23 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
             }
         }
 
-        // 2. Active Cashbook & Udhar Master Card (All Khata/CashBook tools right on Home, keeping entries spacious)
+        // 2. Compact Active Cashbook Summary & Small Action Icons (maximizes middle entries area)
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-            shape = RoundedCornerShape(16.dp),
+                .padding(horizontal = 10.dp, vertical = 3.dp),
+            shape = RoundedCornerShape(12.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)),
-            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp)
             ) {
-                // Top Row: Business Pill + Book Name/Edit + Switch/Udhar
+                // Top Row: Business Pill + Book Name/Edit + Compact Switch/Full
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -2085,24 +2119,25 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                         modifier = Modifier.weight(1f)
                     ) {
                         Surface(
-                            shape = RoundedCornerShape(8.dp),
+                            shape = RoundedCornerShape(6.dp),
                             color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
                             modifier = Modifier.clickable { showBusinessSelectorDialog = true }
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                horizontalArrangement = Arrangement.spacedBy(2.dp)
                             ) {
                                 Icon(
                                     Icons.Default.Storefront,
                                     contentDescription = "Select Business",
                                     tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(13.dp)
+                                    modifier = Modifier.size(12.dp)
                                 )
                                 Text(
                                     text = activeBusiness?.name ?: "Personal",
-                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.primary,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
@@ -2111,7 +2146,7 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                                     Icons.Default.ArrowDropDown,
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(15.dp)
+                                    modifier = Modifier.size(14.dp)
                                 )
                             }
                         }
@@ -2123,7 +2158,7 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                             ) {
                                 Text(
                                     text = activeBook!!.name,
-                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold),
+                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.ExtraBold),
                                     color = MaterialTheme.colorScheme.onSurface,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
@@ -2133,7 +2168,7 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                                     Icons.Default.Edit,
                                     contentDescription = "Edit Customer / Book",
                                     tint = Color.Gray,
-                                    modifier = Modifier.size(13.dp)
+                                    modifier = Modifier.size(12.dp)
                                 )
                             }
                         }
@@ -2141,87 +2176,100 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
 
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        OutlinedButton(
-                            onClick = { showHomeBookSelector = true },
-                            shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
+                            color = Color.Transparent,
                             modifier = Modifier
-                                .height(28.dp)
+                                .clickable { showHomeBookSelector = true }
                                 .testTag("home_switch_active_book_btn")
                         ) {
-                            Icon(Icons.Default.SwapHoriz, contentDescription = "Switch Active Book", modifier = Modifier.size(13.dp))
-                            Spacer(modifier = Modifier.width(2.dp))
-                            Text("Switch", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                            Row(
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                Icon(Icons.Default.SwapHoriz, contentDescription = "Switch Active Book", modifier = Modifier.size(12.dp), tint = MaterialTheme.colorScheme.primary)
+                                Text("Switch", fontWeight = FontWeight.Bold, fontSize = 10.sp, color = MaterialTheme.colorScheme.primary)
+                            }
                         }
 
                         if (activeBook != null) {
-                            FilledTonalButton(
-                                onClick = { viewModel.setScreen(Screen.UDHAR) },
-                                shape = RoundedCornerShape(8.dp),
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f),
                                 modifier = Modifier
-                                    .height(28.dp)
+                                    .clickable { viewModel.setScreen(Screen.UDHAR) }
                                     .testTag("home_open_active_ledger_btn")
                             ) {
-                                Text("Full", fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                                Icon(Icons.Default.OpenInFull, contentDescription = "Full Udhar View", modifier = Modifier.size(12.dp))
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                ) {
+                                    Text("Full", fontWeight = FontWeight.Bold, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                                    Icon(Icons.Default.OpenInFull, contentDescription = "Full View", modifier = Modifier.size(11.dp), tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                                }
                             }
                         }
                     }
                 }
 
-                // Middle Row: Net Balance + Inline IN/OUT + Orange REMIND button
+                // Middle Row: Compact Net Balance + Single-line Cash/Bank Split + Compact REMIND
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Rs. ${String.format("%,.0f", kotlin.math.abs(activeNet))}",
-                            style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Black),
-                            color = if (activeNet >= 0) Color(0xFF16A34A) else RedOut
-                        )
-                        val periodSuffix = when (dateRangePreset) {
-                            "TODAY" -> " • Today"
-                            "WEEK" -> " • 7 Days"
-                            "MONTH" -> " • This Month"
-                            "CUSTOM" -> " • Custom Range"
-                            else -> ""
-                        }
-                        Text(
-                            text = (if (activeNet >= 0) "Net Balance (IN Surplus)" else "Net Balance (OUT / Due)") + periodSuffix,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontWeight = FontWeight.Medium
-                        )
-                        Spacer(modifier = Modifier.height(3.dp))
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Text(
-                                "IN: Rs. ${String.format("%,.0f", activeIn)}",
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                color = GreenIn
-                            )
-                            Text(
-                                "OUT: Rs. ${String.format("%,.0f", activeOut)}",
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                color = RedOut
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(5.dp))
-                        // Cash vs Bank/Online Split Pills (Tap either pill to filter entries by mode)
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
+                            Text(
+                                text = "Rs. ${String.format("%,.0f", kotlin.math.abs(activeNet))}",
+                                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Black, fontSize = 20.sp),
+                                color = if (activeNet >= 0) Color(0xFF16A34A) else RedOut,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                            Text(
+                                text = if (activeNet >= 0) "• Net IN" else "• Net OUT",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1
+                            )
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Text(
+                                "IN ${String.format("%,.0f", activeIn)}",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = GreenIn,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                            Text("•", fontSize = 10.sp, color = Color.Gray)
+                            Text(
+                                "OUT ${String.format("%,.0f", activeOut)}",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = RedOut,
+                                maxLines = 1,
+                                softWrap = false
+                            )
                             val cashSelected = dashboardPaymentFilter == "Cash"
                             Surface(
-                                shape = RoundedCornerShape(6.dp),
+                                shape = RoundedCornerShape(4.dp),
                                 color = if (cashSelected) Color(0xFFDCFCE7) else Color(0xFFF1F5F9),
                                 border = if (cashSelected) BorderStroke(1.dp, GreenIn) else null,
                                 modifier = Modifier
@@ -2231,16 +2279,18 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                                     .testTag("home_cash_split_chip")
                             ) {
                                 Text(
-                                    text = "Cash: Rs. ${String.format("%,.0f", activeCashNet)}",
-                                    fontSize = 10.sp,
+                                    text = "Cash: ${String.format("%,.0f", activeCashNet)}",
+                                    fontSize = 9.5.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = if (activeCashNet >= 0) Color(0xFF15803D) else RedOut,
-                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
                                 )
                             }
                             val bankSelected = dashboardPaymentFilter == "BANK_ONLINE" || dashboardPaymentFilter == "Bank" || dashboardPaymentFilter == "Online"
                             Surface(
-                                shape = RoundedCornerShape(6.dp),
+                                shape = RoundedCornerShape(4.dp),
                                 color = if (bankSelected) Color(0xFFDBEAFE) else Color(0xFFF1F5F9),
                                 border = if (bankSelected) BorderStroke(1.dp, Color(0xFF2563EB)) else null,
                                 modifier = Modifier
@@ -2250,46 +2300,18 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                                     .testTag("home_bank_split_chip")
                             ) {
                                 Text(
-                                    text = "Bank/Online: Rs. ${String.format("%,.0f", activeBankNet)}",
-                                    fontSize = 10.sp,
+                                    text = "Bank: ${String.format("%,.0f", activeBankNet)}",
+                                    fontSize = 9.5.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = if (activeBankNet >= 0) Color(0xFF1D4ED8) else RedOut,
-                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
                                 )
-                            }
-                        }
-                        if (activeWasooliDue != null) {
-                            val dueStr = SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(activeWasooliDue))
-                            val isOverdue = activeWasooliDue <= System.currentTimeMillis()
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Surface(
-                                shape = RoundedCornerShape(6.dp),
-                                color = if (isOverdue) Color(0xFFFEE2E2) else Color(0xFFE0F2FE),
-                                modifier = Modifier.clickable { showWasooliDialog = true }
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Default.EventAvailable,
-                                        contentDescription = "Wasooli Date",
-                                        tint = if (isOverdue) RedOut else Color(0xFF0284C7),
-                                        modifier = Modifier.size(12.dp)
-                                    )
-                                    Text(
-                                        text = if (isOverdue) "Wasooli Due: $dueStr" else "Wasooli: $dueStr",
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (isOverdue) RedOut else Color(0xFF0369A1)
-                                    )
-                                }
                             }
                         }
                     }
 
-                    // Prominent Orange REMIND Button (WhatsApp / SMS payment reminder)
                     if (activeBook != null) {
                         Button(
                             onClick = {
@@ -2315,25 +2337,28 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C)),
-                            shape = RoundedCornerShape(20.dp),
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                            shape = RoundedCornerShape(16.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
                             modifier = Modifier
-                                .height(38.dp)
+                                .height(30.dp)
                                 .testTag("home_remind_button")
                         ) {
-                            Text("REMIND", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color.White)
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Icon(Icons.Default.Send, contentDescription = "Send Payment Reminder", tint = Color.White, modifier = Modifier.size(14.dp))
+                            Text("REMIND", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = Color.White)
+                            Spacer(modifier = Modifier.width(3.dp))
+                            Icon(Icons.Default.Send, contentDescription = "Send Payment Reminder", tint = Color.White, modifier = Modifier.size(12.dp))
                         }
                     }
                 }
 
-                // Bottom Row: 5 Real Working Khata & CashBook Quick Actions (Wasooli, Call, Settle, PDF, Search)
+                // Slim Single-Row Small Icon Quick Actions
                 if (activeBook != null) {
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         val isSearchActive = showSearchBar || dashboardSearchQuery.isNotBlank() || dashboardFilterType != "all" || dashboardPaymentFilter != "ALL"
                         val quickActions = listOf(
@@ -2341,16 +2366,17 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                             Triple("Call", Icons.Default.Call, Color(0xFF0D9488)),
                             Triple("Settle", Icons.Default.CheckCircleOutline, Color(0xFF16A34A)),
                             Triple("PDF", Icons.Default.PictureAsPdf, Color(0xFF7C3AED)),
-                            Triple("Search", Icons.Default.Search, Color(0xFFD97706))
+                            Triple("Search", Icons.Default.Search, Color(0xFFD97706)),
+                            Triple("Manage", Icons.Default.BusinessCenter, Color(0xFF475569))
                         )
                         quickActions.forEach { (label, icon, color) ->
                             val highlighted = (label == "Wasooli" && activeWasooliDue != null) ||
                                 (label == "Search" && isSearchActive)
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = if (highlighted) color.copy(alpha = 0.14f) else color.copy(alpha = 0.06f),
+                                border = BorderStroke(if (highlighted) 1.2.dp else 0.8.dp, color.copy(alpha = if (highlighted) 0.85f else 0.3f)),
                                 modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(8.dp))
                                     .clickable {
                                         when (label) {
                                             "Wasooli" -> showWasooliDialog = true
@@ -2372,39 +2398,38 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                                                 if (!hasPermission(simulatedRole, "add_transaction")) {
                                                     Toast.makeText(context, "Unauthorized role", Toast.LENGTH_SHORT).show()
                                                 } else if (kotlin.math.abs(activeNet) < 0.5) {
-                                                    Toast.makeText(context, "Khata balance is already Rs. 0 (Settled)", Toast.LENGTH_SHORT).show()
+                                                    Toast.makeText(context, "Balance is already Rs. 0 (Settled)", Toast.LENGTH_SHORT).show()
                                                 } else {
                                                     val absBal = kotlin.math.abs(activeNet)
                                                     prefillAmountForDialog = if (absBal % 1.0 == 0.0) absBal.toLong().toString() else String.format(Locale.US, "%.2f", absBal)
-                                                    prefillRemarksForDialog = "Full Settlement / Khata Clear"
+                                                    prefillRemarksForDialog = "Full Settlement / Clear"
                                                     showTransactionDialog = if (activeNet < 0) "IN" else "OUT"
                                                 }
                                             }
                                             "PDF" -> showShareDialog = true
                                             "Search" -> showSearchBar = !showSearchBar
+                                            "Manage" -> viewModel.setScreen(Screen.MANAGE_WORKSPACE)
                                         }
                                     }
-                                    .padding(vertical = 3.dp)
                                     .testTag("home_action_${label.lowercase()}")
                             ) {
-                                Surface(
-                                    shape = CircleShape,
-                                    color = if (highlighted) color.copy(alpha = 0.16f) else color.copy(alpha = 0.08f),
-                                    border = BorderStroke(if (highlighted) 1.5.dp else 1.dp, color.copy(alpha = if (highlighted) 0.9f else 0.35f)),
-                                    modifier = Modifier.size(34.dp)
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(3.dp)
                                 ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Icon(icon, contentDescription = label, tint = color, modifier = Modifier.size(17.dp))
-                                    }
+                                    Icon(icon, contentDescription = label, tint = color, modifier = Modifier.size(13.dp))
+                                    Text(
+                                        text = if (label == "Wasooli" && activeWasooliDue != null)
+                                            SimpleDateFormat("dd MMM", Locale.getDefault()).format(Date(activeWasooliDue))
+                                        else label,
+                                        fontSize = 10.sp,
+                                        fontWeight = if (highlighted) FontWeight.Bold else FontWeight.SemiBold,
+                                        color = if (highlighted) color else Color(0xFF334155),
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
                                 }
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    label,
-                                    fontSize = 10.sp,
-                                    fontWeight = if (highlighted) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (highlighted) color else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1
-                                )
                             }
                         }
                     }
@@ -2423,7 +2448,7 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                 customEndMillis = end
                 dateRangePreset = "CUSTOM"
             },
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 0.dp)
         )
 
         // 3. Expandable Search, Type & Payment Method Filter Bar (Compact so entries stay visible)
@@ -2651,7 +2676,7 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
             }
         }
 
-        // 5. Sticky Bottom CASH IN / CASH OUT Dock (Pinned at Bottom — NEVER in the middle!)
+        // 5. Sticky Bottom CASH IN / CASH OUT Dock ONLY (No extra bottom tabs here!)
         Surface(
             modifier = Modifier.fillMaxWidth(),
             color = MaterialTheme.colorScheme.surface,
@@ -2663,7 +2688,8 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .navigationBarsPadding(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Button(
@@ -2680,7 +2706,7 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                         },
                         modifier = Modifier
                             .weight(1f)
-                            .height(50.dp)
+                            .height(48.dp)
                             .testTag("quick_cash_in_btn"),
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF0FDF4)),
                         border = BorderStroke(1.5.dp, Color(0xFF22C55E)),
@@ -2705,7 +2731,7 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                         },
                         modifier = Modifier
                             .weight(1f)
-                            .height(50.dp)
+                            .height(48.dp)
                             .testTag("quick_cash_out_btn"),
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFF7ED)),
                         border = BorderStroke(1.5.dp, Color(0xFFF97316)),
@@ -3015,104 +3041,110 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                 }
             }
 
-            // Top Header Bar matching Screenshot (Back arrow, Customer Initial avatar, Name, Edit, PDF, Overflow)
+            // Compact Top Header Bar (Back arrow, small initial avatar, Name, Edit, PDF, Overflow)
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 color = MaterialTheme.colorScheme.surface,
-                shadowElevation = 2.dp
+                shadowElevation = 1.dp
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .statusBarsPadding()
-                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                        .padding(horizontal = 4.dp, vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
                         modifier = Modifier.weight(1f)
                     ) {
                         IconButton(onClick = { viewModel.setScreen(Screen.DASHBOARD) }) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to Home")
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to Home", modifier = Modifier.size(21.dp))
                         }
                         Surface(
                             shape = CircleShape,
                             color = MaterialTheme.colorScheme.surfaceVariant,
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                            modifier = Modifier.size(38.dp)
+                            modifier = Modifier.size(32.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 val initial = (activeBook?.name?.firstOrNull() ?: 'A').uppercaseChar()
                                 Text(
                                     text = initial.toString(),
                                     fontWeight = FontWeight.Bold,
-                                    fontSize = 18.sp,
+                                    fontSize = 14.sp,
                                     color = Color.Gray
                                 )
                             }
                         }
                         Column(modifier = Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
                                 Text(
-                                    text = activeBook?.name ?: "Customer Khata",
-                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                    text = activeBook?.name ?: "Cashbook",
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, fontSize = 15.sp),
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 IconButton(
                                     onClick = { showEditBookDialog = true },
-                                    modifier = Modifier.size(24.dp)
+                                    modifier = Modifier.size(22.dp)
                                 ) {
-                                    Icon(Icons.Default.Edit, contentDescription = "Edit name", modifier = Modifier.size(14.dp), tint = Color.Gray)
+                                    Icon(Icons.Default.Edit, contentDescription = "Edit name", modifier = Modifier.size(13.dp), tint = Color.Gray)
                                 }
                             }
                             if (activeBook?.phone?.isNotBlank() == true) {
                                 Text(
                                     text = activeBook?.phone ?: "",
-                                    style = MaterialTheme.typography.bodySmall,
+                                    fontSize = 10.sp,
                                     color = Color.Gray
                                 )
                             }
                         }
                     }
 
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = { viewModel.setScreen(Screen.REPORTS) }) {
+                            Icon(Icons.Default.Analytics, contentDescription = "Reports", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                        }
                         // PDF Statement button
                         IconButton(onClick = { showShareDialog = true }) {
                             Surface(
-                                shape = RoundedCornerShape(6.dp),
+                                shape = RoundedCornerShape(5.dp),
                                 border = BorderStroke(1.dp, Color(0xFF6B21A8)),
                                 color = Color.Transparent
                             ) {
                                 Text(
                                     text = "PDF",
-                                    fontSize = 11.sp,
+                                    fontSize = 10.sp,
                                     fontWeight = FontWeight.ExtraBold,
                                     color = Color(0xFF6B21A8),
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                                 )
                             }
                         }
                         IconButton(onClick = { showEditBookDialog = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "More options", tint = Color.Gray)
+                            Icon(Icons.Default.MoreVert, contentDescription = "More options", tint = Color.Gray, modifier = Modifier.size(20.dp))
                         }
                     }
                 }
             }
 
-            // Prominent CashBook Summary Card (Balance + Cash/Bank Split + Orange REMIND button)
+            // Slim Compact Summary & Small Icon Actions Card (frees maximum screen height for middle transactions)
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                shape = RoundedCornerShape(16.dp),
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.cardColors(containerColor = Color(0xFFFBFBFB)),
                 border = BorderStroke(1.dp, Color(0xFFEEEEEE)),
                 elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -3120,22 +3152,34 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             val balanceText = "Rs. ${String.format("%,.0f", kotlin.math.abs(netBalance))}"
-                            Text(
-                                text = balanceText,
-                                style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Black),
-                                color = if (netBalance >= 0) Color(0xFF16A34A) else RedOut
-                            )
-                            Text(
-                                text = if (netBalance >= 0) "Net Cash IN" else "Net Cash OUT",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color(0xFF64748B),
-                                fontWeight = FontWeight.Medium
-                            )
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = balanceText,
+                                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Black, fontSize = 20.sp),
+                                    color = if (netBalance >= 0) Color(0xFF16A34A) else RedOut,
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                                Text(
+                                    text = if (netBalance >= 0) "• Net Cash IN" else "• Net Cash OUT",
+                                    fontSize = 11.sp,
+                                    color = Color(0xFF64748B),
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(3.dp))
+                            Row(
+                                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 val cashSel = detailPaymentFilter == "Cash"
                                 Surface(
-                                    shape = RoundedCornerShape(6.dp),
+                                    shape = RoundedCornerShape(5.dp),
                                     color = if (cashSel) Color(0xFFDCFCE7) else Color(0xFFF1F5F9),
                                     border = if (cashSel) BorderStroke(1.dp, GreenIn) else null,
                                     modifier = Modifier.clickable {
@@ -3147,12 +3191,14 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = if (cashNet >= 0) Color(0xFF15803D) else RedOut,
-                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                     )
                                 }
                                 val bankSel = detailPaymentFilter == "BANK_ONLINE"
                                 Surface(
-                                    shape = RoundedCornerShape(6.dp),
+                                    shape = RoundedCornerShape(5.dp),
                                     color = if (bankSel) Color(0xFFDBEAFE) else Color(0xFFF1F5F9),
                                     border = if (bankSel) BorderStroke(1.dp, Color(0xFF2563EB)) else null,
                                     modifier = Modifier.clickable {
@@ -3160,46 +3206,19 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                                     }
                                 ) {
                                     Text(
-                                        text = "Bank/Online: Rs. ${String.format("%,.0f", bankNet)}",
+                                        text = "Bank: Rs. ${String.format("%,.0f", bankNet)}",
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = if (bankNet >= 0) Color(0xFF1D4ED8) else RedOut,
-                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                     )
-                                }
-                            }
-                            if (activeWasooliDueDate != null) {
-                                val dueStr = SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(activeWasooliDueDate))
-                                val isOverdue = activeWasooliDueDate <= System.currentTimeMillis()
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = if (isOverdue) Color(0xFFFEE2E2) else Color(0xFFE0F2FE),
-                                    modifier = Modifier.clickable { showWasooliDialog = true }
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Default.EventAvailable,
-                                            contentDescription = "Wasooli Date",
-                                            tint = if (isOverdue) RedOut else Color(0xFF0284C7),
-                                            modifier = Modifier.size(13.dp)
-                                        )
-                                        Text(
-                                            text = if (isOverdue) "Wasooli Due: $dueStr" else "Wasooli: $dueStr",
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = if (isOverdue) RedOut else Color(0xFF0369A1)
-                                        )
-                                    }
                                 }
                             }
                         }
 
-                        // Orange REMIND Button
+                        // Compact Orange REMIND Button
                         Button(
                             onClick = {
                                 val phone = activeBook?.phone ?: ""
@@ -3223,24 +3242,25 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C)),
-                            shape = RoundedCornerShape(20.dp),
-                            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 8.dp),
-                            modifier = Modifier.testTag("remind_button")
+                            shape = RoundedCornerShape(16.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
+                            modifier = Modifier
+                                .height(30.dp)
+                                .testTag("remind_button")
                         ) {
-                            Text("REMIND", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.White)
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Icon(Icons.Default.Send, contentDescription = null, tint = Color.White, modifier = Modifier.size(15.dp))
+                            Text("REMIND", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = Color.White)
+                            Spacer(modifier = Modifier.width(3.dp))
+                            Icon(Icons.Default.Send, contentDescription = null, tint = Color.White, modifier = Modifier.size(12.dp))
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(14.dp))
-                    HorizontalDivider(color = Color(0xFFF1F5F9))
-                    Spacer(modifier = Modifier.height(10.dp))
+                    HorizontalDivider(color = Color(0xFFE2E8F0).copy(alpha = 0.7f))
 
-                    // 4 Real Working Khata Quick Actions (Wasooli, Call, Settle, Search)
+                    // Small Compact Action Pills (Wasooli, Call, Settle, Search) in 1 slim row
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceAround
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         val isSearchActive = showSearchBar || searchQuery.isNotBlank() || txTypeFilter != "ALL"
                         val actions = listOf(
@@ -3252,10 +3272,12 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                         actions.forEach { (label, icon, color) ->
                             val highlighted = (label == "Wasooli" && activeWasooliDueDate != null) ||
                                     (label == "Search" && isSearchActive)
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = if (highlighted) color.copy(alpha = 0.14f) else Color.White,
+                                border = BorderStroke(if (highlighted) 1.2.dp else 0.9.dp, if (highlighted) color else color.copy(alpha = 0.4f)),
                                 modifier = Modifier
-                                    .minimumInteractiveComponentSize()
+                                    .weight(1f)
                                     .clickable {
                                         when (label) {
                                             "Wasooli" -> {
@@ -3287,7 +3309,7 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                                                 } else {
                                                     val absBal = kotlin.math.abs(netBalance)
                                                     prefillAmountForDialog = if (absBal % 1.0 == 0.0) absBal.toLong().toString() else String.format(Locale.US, "%.2f", absBal)
-                                                    prefillRemarksForDialog = "Full Settlement / Khata Clear"
+                                                    prefillRemarksForDialog = "Full Settlement / Clear"
                                                     showTransactionDialog = if (netBalance < 0) "IN" else "OUT"
                                                 }
                                             }
@@ -3296,33 +3318,33 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                                             }
                                         }
                                     }
-                                    .padding(4.dp)
                                     .testTag("quick_action_${label.lowercase()}")
                             ) {
-                                Surface(
-                                    shape = CircleShape,
-                                    color = if (highlighted) color.copy(alpha = 0.14f) else Color.White,
-                                    border = BorderStroke(if (highlighted) 2.dp else 1.5.dp, if (highlighted) color else color.copy(alpha = 0.5f)),
-                                    modifier = Modifier.size(44.dp)
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 5.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
                                 ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Icon(icon, contentDescription = label, tint = color, modifier = Modifier.size(22.dp))
-                                    }
+                                    Icon(icon, contentDescription = label, tint = color, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text(
+                                        text = if (label == "Wasooli" && activeWasooliDueDate != null)
+                                            SimpleDateFormat("dd MMM", Locale.getDefault()).format(Date(activeWasooliDueDate))
+                                        else label,
+                                        fontSize = 10.5.sp,
+                                        fontWeight = if (highlighted) FontWeight.Bold else FontWeight.SemiBold,
+                                        color = if (highlighted) color else Color(0xFF475569),
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
                                 }
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    label,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = if (highlighted) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (highlighted) color else Color(0xFF475569)
-                                )
                             }
                         }
                     }
                 }
             }
 
-            // Date-Range Filter Strip in BookDetailScreen
+            // Compact Date-Range Filter Strip in BookDetailScreen
             DateRangeFilterStrip(
                 selectedPreset = detailDatePreset,
                 customStartMillis = detailCustomStart,
@@ -3333,7 +3355,7 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                     detailCustomEnd = e
                     detailDatePreset = "CUSTOM"
                 },
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 0.dp)
             )
 
             // Expandable Search & Filter Bar
@@ -3394,22 +3416,22 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                 }
             }
 
-            // Ledger Column Headers ("Date", "IN", "OUT")
+            // Compact Ledger Column Headers ("Date", "IN", "OUT")
             Surface(
                 color = Color(0xFFF8FAFC),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                    .padding(horizontal = 12.dp, vertical = 1.dp)
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("Date", style = MaterialTheme.typography.labelSmall, color = Color(0xFF64748B), fontWeight = FontWeight.Bold)
-                    Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
                         Text("IN", style = MaterialTheme.typography.labelSmall, color = Color(0xFF16A34A), fontWeight = FontWeight.Bold)
                         Text("OUT", style = MaterialTheme.typography.labelSmall, color = Color(0xFFEA580C), fontWeight = FontWeight.Bold)
                     }
@@ -3531,7 +3553,7 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                 }
             }
 
-            // Quick Floating Action Buttons Panel (Pinned cleanly at bottom above system navigation bar)
+            // Quick Floating Action Buttons Panel (ONLY CASH IN / CASH OUT pinned cleanly at bottom)
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 color = MaterialTheme.colorScheme.surface,
@@ -3543,9 +3565,9 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
                             .navigationBarsPadding(),
-                        horizontalArrangement = Arrangement.spacedBy(14.dp)
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Button(
                             onClick = {
@@ -3559,15 +3581,15 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                             },
                             modifier = Modifier
                                 .weight(1f)
-                                .height(52.dp)
+                                .height(48.dp)
                                 .testTag("cash_in_button"),
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF0FDF4)),
                             border = BorderStroke(1.5.dp, Color(0xFF22C55E)),
                             shape = RoundedCornerShape(12.dp)
                         ) {
-                            Icon(Icons.Default.ArrowUpward, contentDescription = null, tint = Color(0xFF16A34A), modifier = Modifier.size(20.dp))
+                            Icon(Icons.Default.ArrowUpward, contentDescription = null, tint = Color(0xFF16A34A), modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("CASH IN", fontWeight = FontWeight.ExtraBold, fontSize = 15.sp, color = Color(0xFF16A34A))
+                            Text("CASH IN", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = Color(0xFF16A34A))
                         }
 
                         Button(
@@ -3582,15 +3604,15 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                             },
                             modifier = Modifier
                                 .weight(1f)
-                                .height(52.dp)
+                                .height(48.dp)
                                 .testTag("cash_out_button"),
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFF7ED)),
                             border = BorderStroke(1.5.dp, Color(0xFFF97316)),
                             shape = RoundedCornerShape(12.dp)
                         ) {
-                            Text("CASH OUT", fontWeight = FontWeight.ExtraBold, fontSize = 15.sp, color = Color(0xFFEA580C))
+                            Text("CASH OUT", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = Color(0xFFEA580C))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Icon(Icons.Default.ArrowDownward, contentDescription = null, tint = Color(0xFFEA580C), modifier = Modifier.size(20.dp))
+                            Icon(Icons.Default.ArrowDownward, contentDescription = null, tint = Color(0xFFEA580C), modifier = Modifier.size(18.dp))
                         }
                     }
                 }
@@ -4051,13 +4073,14 @@ fun TransactionItemCard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(horizontal = 10.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.Top
             ) {
                 // Circular Indicator / Checkbox Selector
                 Box(
                     modifier = Modifier
-                        .size(40.dp)
+                        .padding(top = 2.dp)
+                        .size(34.dp)
                         .clip(CircleShape)
                         .background(
                             if (isSelected) MaterialTheme.colorScheme.primary
@@ -4067,148 +4090,62 @@ fun TransactionItemCard(
                     contentAlignment = Alignment.Center
                 ) {
                     if (isSelected) {
-                        Icon(Icons.Default.Check, contentDescription = "Selected", tint = MaterialTheme.colorScheme.onPrimary)
+                        Icon(Icons.Default.Check, contentDescription = "Selected", tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(18.dp))
                     } else {
                         Icon(
                             imageVector = if (transaction.type == "IN") Icons.Default.TrendingUp else Icons.Default.TrendingDown,
                             contentDescription = null,
                             tint = if (transaction.type == "IN") GreenIn else RedOut,
-                            modifier = Modifier.size(20.dp)
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.width(12.dp))
+                Spacer(modifier = Modifier.width(10.dp))
 
                 Column(modifier = Modifier.weight(1f)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.Top
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             val formattedDate = SimpleDateFormat("dd MMM yyyy • h:mm a", Locale.getDefault()).format(Date(transaction.timestamp))
                             Text(
                                 text = formattedDate,
                                 fontWeight = FontWeight.Bold,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = Color(0xFF1E293B)
+                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp),
+                                color = Color(0xFF1E293B),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
-                            Spacer(modifier = Modifier.height(4.dp))
-
-                            // Running Balance + Category + Payment Mode row
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(5.dp),
-                                modifier = Modifier.horizontalScroll(rememberScrollState())
-                            ) {
-                                Surface(
-                                    shape = RoundedCornerShape(4.dp),
-                                    color = Color(0xFFFCE7F3)
-                                ) {
-                                    Text(
-                                        text = formattedRunningBal,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = Color(0xFF9D174D),
-                                        maxLines = 1,
-                                        softWrap = false,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
-                                }
-                                if (transaction.category.isNotBlank()) {
-                                    Surface(
-                                        shape = RoundedCornerShape(4.dp),
-                                        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f)
-                                    ) {
-                                        Text(
-                                            text = transaction.category,
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.Medium,
-                                            color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                            maxLines = 1,
-                                            softWrap = false,
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                        )
-                                    }
-                                }
-                                Surface(
-                                    shape = RoundedCornerShape(4.dp),
-                                    color = if (isBankOrOnline) Color(0xFFDBEAFE) else Color(0xFFDCFCE7)
-                                ) {
-                                    Text(
-                                        text = transaction.paymentMethod.ifBlank { "Cash" },
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = if (isBankOrOnline) Color(0xFF1D4ED8) else Color(0xFF15803D),
-                                        maxLines = 1,
-                                        softWrap = false,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
-                                }
-                            }
-
-                            if (transaction.remarks.isNotBlank()) {
-                                Spacer(modifier = Modifier.height(5.dp))
-                                Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    Icon(
-                                        Icons.Default.StickyNote2,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(14.dp).padding(top = 2.dp),
-                                        tint = Color.Gray
-                                    )
-                                    Text(
-                                        text = transaction.remarks,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = Color(0xFF475569),
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                            }
                         }
 
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
 
                         // Right-hand Amount display + quick menu button
-                        Row(verticalAlignment = Alignment.Top) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                             Column(horizontalAlignment = Alignment.End) {
-                                Surface(
-                                    shape = RoundedCornerShape(4.dp),
-                                    color = if (transaction.type == "IN") Color(0xFFDCFCE7) else Color(0xFFFFEDD5)
-                                ) {
-                                    Text(
-                                        text = if (transaction.type == "IN") "CASH IN" else "CASH OUT",
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (transaction.type == "IN") Color(0xFF15803D) else Color(0xFFC2410C),
-                                        maxLines = 1,
-                                        softWrap = false,
-                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(2.dp))
                                 Text(
                                     text = "Rs. ${String.format("%,.0f", transaction.amount)}",
                                     fontWeight = FontWeight.ExtraBold,
-                                    style = MaterialTheme.typography.titleMedium,
+                                    style = MaterialTheme.typography.titleSmall.copy(fontSize = 15.sp),
                                     color = if (transaction.type == "IN") Color(0xFF16A34A) else Color(0xFFEA580C),
                                     maxLines = 1,
                                     softWrap = false
                                 )
-                                Spacer(modifier = Modifier.height(2.dp))
                                 TransactionSyncCheckIndicator(isSynced = transaction.isSynced)
                             }
                             Box {
                                 IconButton(
                                     onClick = { expandedMenu = true },
-                                    modifier = Modifier.size(32.dp)
+                                    modifier = Modifier.size(28.dp)
                                 ) {
                                     Icon(
                                         Icons.Default.MoreVert,
                                         contentDescription = "Entry Actions",
                                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(18.dp)
+                                        modifier = Modifier.size(17.dp)
                                     )
                                 }
                                 DropdownMenu(
@@ -4252,8 +4189,95 @@ fun TransactionItemCard(
                         }
                     }
 
+                    Spacer(modifier = Modifier.height(3.dp))
+
+                    // Full-width Running Balance + Type + Category + Payment Mode row (never clips!)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        modifier = Modifier.horizontalScroll(rememberScrollState())
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = if (transaction.type == "IN") Color(0xFFDCFCE7) else Color(0xFFFFEDD5)
+                        ) {
+                            Text(
+                                text = if (transaction.type == "IN") "IN" else "OUT",
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (transaction.type == "IN") Color(0xFF15803D) else Color(0xFFC2410C),
+                                maxLines = 1,
+                                softWrap = false,
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = Color(0xFFFCE7F3)
+                        ) {
+                            Text(
+                                text = formattedRunningBal,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFF9D174D),
+                                maxLines = 1,
+                                softWrap = false,
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                            )
+                        }
+                        if (transaction.category.isNotBlank()) {
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f)
+                            ) {
+                                Text(
+                                    text = transaction.category,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                )
+                            }
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = if (isBankOrOnline) Color(0xFFDBEAFE) else Color(0xFFDCFCE7)
+                        ) {
+                            Text(
+                                text = transaction.paymentMethod.ifBlank { "Cash" },
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (isBankOrOnline) Color(0xFF1D4ED8) else Color(0xFF15803D),
+                                maxLines = 1,
+                                softWrap = false,
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                            )
+                        }
+                    }
+
+                    if (transaction.remarks.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Icon(
+                                Icons.Default.StickyNote2,
+                                contentDescription = null,
+                                modifier = Modifier.size(13.dp).padding(top = 2.dp),
+                                tint = Color.Gray
+                            )
+                            Text(
+                                text = transaction.remarks,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFF475569),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
                     if (transaction.receiptUri != null) {
-                        Spacer(modifier = Modifier.height(6.dp))
+                        Spacer(modifier = Modifier.height(4.dp))
                         Surface(
                             color = MaterialTheme.colorScheme.primaryContainer,
                             shape = RoundedCornerShape(4.dp),
