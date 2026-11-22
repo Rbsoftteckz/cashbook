@@ -89,11 +89,11 @@ import java.util.*
 import kotlinx.coroutines.launch
 
 // --- Permissions Helper ---
-fun hasPermission(role: String, action: String): Boolean {
+fun hasPermission(role: String, action: String, isBookRestricted: Boolean = false): Boolean {
     return when (role.trim()) {
         "Super Admin", "Boss", "Owner", "Admin" -> true
-        "Partner" -> action == "view" || action == "switch_business" || action == "add_transaction" || action == "edit_transaction" || action == "add_book"
-        "Data Entry" -> action == "view" || action == "switch_business" || action == "add_transaction" || action == "add_book"
+        "Partner" -> action == "view" || action == "switch_business" || action == "add_transaction" || action == "edit_transaction" || (action == "add_book" && !isBookRestricted)
+        "Data Entry" -> action == "view" || action == "switch_business" || action == "add_transaction" || (action == "add_book" && !isBookRestricted)
         else -> action == "view" || action == "switch_business" || action == "add_transaction"
     }
 }
@@ -104,14 +104,16 @@ fun buildTeamInviteMessage(
     invitedEmail: String,
     role: String,
     inviteCode: String,
-    apkDownloadUrl: String = ""
+    apkDownloadUrl: String = "",
+    allowedBookNames: String = ""
 ): String {
     val roleSummary = when (role.trim()) {
         "Partner" -> "Partner (View, add & edit Cash In / Cash Out entries)"
-        "Data Entry" -> "Data Entry (Add Cash In / Cash Out entries & cashbooks; cannot delete)"
+        "Data Entry" -> "Data Entry (Add Cash In / Cash Out entries; cannot edit or delete)"
         "Admin", "Boss" -> "$role (Full workspace, team & report control)"
         else -> role
     }
+    val accessSummary = formatAllowedBooksSummary(allowedBookNames, role)
     val downloadLine = if (apkDownloadUrl.isNotBlank()) "\n   Download Link: $apkDownloadUrl" else ""
     val emailLine = if (invitedEmail.isNotBlank()) invitedEmail.trim().lowercase() else "(Enter your own Email)"
     return """
@@ -123,6 +125,7 @@ fun buildTeamInviteMessage(
         📧 Invited Email: $emailLine
         🔑 Cloud Invite Code: $inviteCode
         🛡️ Assigned Role: $roleSummary
+        📚 Shared Books: $accessSummary
 
         📱 How to Join & Use the App:
         1. Open the CashBook app on your phone.$downloadLine
@@ -224,6 +227,7 @@ fun JoinBusinessByCodeDialog(
                             Text("✓ Invite Ready to Join", fontWeight = FontWeight.Bold, color = Color(0xFF166534), style = MaterialTheme.typography.bodyMedium)
                             Text("Business: ${inv.businessName}", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall, color = Color(0xFF14532D))
                             Text("Your Role: ${inv.role}", style = MaterialTheme.typography.bodySmall, color = Color(0xFF166534))
+                            Text("Book Access: ${formatAllowedBooksSummary(inv.allowedBookNames, inv.role)}", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = Color(0xFF14532D))
                             if (inv.invitedEmail.isNotBlank()) {
                                 Text("Invited Email: ${inv.invitedEmail}", style = MaterialTheme.typography.bodySmall, color = Color(0xFF166534))
                             }
@@ -711,6 +715,7 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
     val businesses by viewModel.businesses.collectAsStateWithLifecycle()
     val activeBusiness by viewModel.activeBusiness.collectAsStateWithLifecycle()
     val simulatedRole by viewModel.simulatedRole.collectAsStateWithLifecycle()
+    val isBookRestricted by viewModel.isActiveBusinessBookRestricted.collectAsStateWithLifecycle()
     val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
     val isSuperAdmin by viewModel.isSuperAdmin.collectAsStateWithLifecycle()
     val isUserSignedIn by viewModel.isUserSignedIn.collectAsStateWithLifecycle()
@@ -1330,16 +1335,11 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                                     modifier = Modifier.size(21.dp)
                                 )
                             }
-                            IconButton(
-                                onClick = {
-                                    if (hasPermission(simulatedRole, "add_book")) {
-                                        showAddBookDialog = true
-                                    } else {
-                                        Toast.makeText(context, "Unauthorized: Data Entry or read-only Partner cannot create books.", Toast.LENGTH_SHORT).show()
-                                    }
-                                },
-                                modifier = Modifier.testTag("add_book_button")
-                            ) {
+                            if (hasPermission(simulatedRole, "add_book", isBookRestricted)) {
+                                IconButton(
+                                    onClick = { showAddBookDialog = true },
+                                    modifier = Modifier.testTag("add_book_button")
+                                ) {
                                 Box(
                                     contentAlignment = Alignment.Center,
                                     modifier = Modifier
@@ -1353,6 +1353,7 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                                         modifier = Modifier.size(18.dp)
                                     )
                                 }
+                            }
                             }
                             IconButton(
                                 onClick = { viewModel.setScreen(Screen.PROFILE) },
@@ -1788,6 +1789,7 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
     val activeBookTransactions by viewModel.activeBookTransactions.collectAsStateWithLifecycle()
     val selectedIds by viewModel.selectedTransactionIds.collectAsStateWithLifecycle()
     val simulatedRole by viewModel.simulatedRole.collectAsStateWithLifecycle()
+    val isBookRestricted by viewModel.isActiveBusinessBookRestricted.collectAsStateWithLifecycle()
     val wasooliDueDates by viewModel.wasooliDueDates.collectAsStateWithLifecycle()
 
     var showTransactionDialog by remember { mutableStateOf<String?>(null) }
@@ -2003,13 +2005,15 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("Select Active Book", fontWeight = FontWeight.Bold)
-                    TextButton(onClick = {
-                        showHomeBookSelector = false
-                        showAddBookDialog = true
-                    }) {
-                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("New Book")
+                    if (hasPermission(simulatedRole, "add_book", isBookRestricted)) {
+                        TextButton(onClick = {
+                            showHomeBookSelector = false
+                            showAddBookDialog = true
+                        }) {
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("New Book")
+                        }
                     }
                 }
             },
@@ -7283,8 +7287,140 @@ fun AIAssistantScreen(viewModel: LedgerViewModel) {
 // --- SCREEN 5: TEAM MANAGEMENT & STAFF ROSTER ---
 
 @Composable
+fun BookAccessScopePicker(
+    role: String,
+    businessBooks: List<Book>,
+    shareAllBooks: Boolean,
+    onShareAllChange: (Boolean) -> Unit,
+    selectedBookNames: Set<String>,
+    onToggleBook: (String) -> Unit
+) {
+    if (isRoleFullBusinessAccess(role)) {
+        Surface(
+            color = Color(0xFFEDE9FE).copy(alpha = 0.7f),
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = "$role has full access to all books in this business.",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color(0xFF5B21B6),
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(10.dp)
+            )
+        }
+        return
+    }
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = "Which Cashbooks Can This $role See?",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            FilterChip(
+                selected = shareAllBooks,
+                onClick = { onShareAllChange(true) },
+                label = { Text("All Books", fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false) },
+                leadingIcon = if (shareAllBooks) {
+                    { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                } else null,
+                modifier = Modifier.weight(1f).testTag("scope_all_books_chip")
+            )
+            FilterChip(
+                selected = !shareAllBooks,
+                onClick = { onShareAllChange(false) },
+                label = { Text("Selected Books", fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false) },
+                leadingIcon = if (!shareAllBooks) {
+                    { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                } else null,
+                modifier = Modifier.weight(1f).testTag("scope_selected_books_chip")
+            )
+        }
+
+        if (!shareAllBooks) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, GreenIn.copy(alpha = 0.35f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    if (businessBooks.isEmpty()) {
+                        Text(
+                            text = "No cashbooks created yet. Create a cashbook first or choose All Books.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    } else {
+                        Text(
+                            text = "Tap the book(s) to share (e.g. 1 or 2 books only):",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        businessBooks.forEach { bk ->
+                            val isChecked = selectedBookNames.any { it.equals(bk.name.trim(), ignoreCase = true) }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { onToggleBook(bk.name.trim()) }
+                                    .padding(vertical = 4.dp, horizontal = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = isChecked,
+                                    onCheckedChange = { onToggleBook(bk.name.trim()) },
+                                    colors = CheckboxDefaults.colors(checkedColor = GreenIn)
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = bk.name,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = if (isChecked) FontWeight.Bold else FontWeight.Medium
+                                    )
+                                    if (bk.phone.isNotBlank()) {
+                                        Text(
+                                            text = bk.phone,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        Text(
+                            text = if (selectedBookNames.isEmpty())
+                                "Select at least 1 book above."
+                            else
+                                "Only ${selectedBookNames.size} selected book(s) will be visible — rest of business stays private.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (selectedBookNames.isEmpty()) MaterialTheme.colorScheme.error else Color(0xFF166534),
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun TeamManagementScreen(viewModel: LedgerViewModel) {
     val activeTeamMembers by viewModel.activeBusinessTeamMembers.collectAsStateWithLifecycle()
+    val businessBooks by viewModel.books.collectAsStateWithLifecycle()
     val simulatedRole by viewModel.simulatedRole.collectAsStateWithLifecycle()
     val activeBusiness by viewModel.activeBusiness.collectAsStateWithLifecycle()
     val syncManager = viewModel.syncManager
@@ -7300,6 +7436,7 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
     var lastAddedCollaboratorRole by remember { mutableStateOf("") }
     var lastAddedCollaboratorPhone by remember { mutableStateOf("") }
     var lastAddedCollaboratorEmail by remember { mutableStateOf("") }
+    var lastAddedCollaboratorAllowedBooks by remember { mutableStateOf("") }
     var lastGeneratedInviteCode by remember { mutableStateOf("") }
     var isPublishingInvite by remember { mutableStateOf(false) }
     var invitePublishedCloud by remember { mutableStateOf(false) }
@@ -7631,6 +7768,14 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                                         )
                                     }
                                     Text(
+                                        "Access: ${formatAllowedBooksSummary(tm.allowedBookNames, tm.role)}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (!isRoleFullBusinessAccess(tm.role) && parseAllowedBooks(tm.allowedBookNames).isNotEmpty()) Color(0xFF0369A1) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
                                         "Invite Code: $memberCode",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = GreenIn,
@@ -7668,6 +7813,7 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                                                 lastAddedCollaboratorEmail = tm.email
                                                 lastAddedCollaboratorPhone = tm.phone
                                                 lastAddedCollaboratorRole = tm.role
+                                                lastAddedCollaboratorAllowedBooks = tm.allowedBookNames
                                                 lastGeneratedInviteCode = memberCode
                                                 isPublishingInvite = true
                                                 invitePublishedCloud = false
@@ -7724,6 +7870,8 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
 
     if (showAddStaffDialog) {
         var expandedRoleMenu by remember { mutableStateOf(false) }
+        var shareAllBooks by remember { mutableStateOf(true) }
+        var selectedBookNames by remember { mutableStateOf<Set<String>>(emptySet()) }
         var formError by remember { mutableStateOf("") }
         val pickStaffContact = rememberContactImportAction(context) { cName, cPhone ->
             if (cName.isNotBlank()) staffName = cName
@@ -7838,12 +7986,25 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
 
                     Text(
                         text = when (staffRole) {
-                            "Data Entry" -> "Can record Cash In / Out and add Cashbooks. Cannot delete entries, books, or businesses."
-                            "Partner" -> "Can view, add, and edit Cash In / Out entries and Cashbooks. Cannot delete businesses or team."
+                            "Data Entry" -> "Can record Cash In / Out entries; cannot edit or delete existing records."
+                            "Partner" -> "Can view, add, and edit Cash In / Out entries; cannot delete business or team."
                             else -> "Full access to books, transactions, reports, and team management."
                         },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    BookAccessScopePicker(
+                        role = staffRole,
+                        businessBooks = businessBooks,
+                        shareAllBooks = shareAllBooks,
+                        onShareAllChange = { shareAllBooks = it; formError = "" },
+                        selectedBookNames = selectedBookNames,
+                        onToggleBook = { bkName ->
+                            val existing = selectedBookNames.firstOrNull { it.equals(bkName, ignoreCase = true) }
+                            selectedBookNames = if (existing != null) selectedBookNames - existing else selectedBookNames + bkName
+                            formError = ""
+                        }
                     )
 
                     if (formError.isNotBlank()) {
@@ -7860,12 +8021,20 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                             formError = "Please enter the teammate's name."
                         } else if (!android.util.Patterns.EMAIL_ADDRESS.matcher(cleanEmail).matches()) {
                             formError = "Please enter a valid Email Address so your teammate can Sign Up / Sign In."
+                        } else if (!isRoleFullBusinessAccess(staffRole) && !shareAllBooks && selectedBookNames.isEmpty()) {
+                            formError = "Please select at least 1 cashbook to share, or choose All Books."
                         } else {
+                            val allowedRaw = if (isRoleFullBusinessAccess(staffRole) || shareAllBooks) {
+                                ""
+                            } else {
+                                encodeAllowedBooks(selectedBookNames.toList())
+                            }
                             val code = syncManager.getOrGenerateInviteCode(activeBusiness?.name ?: "CB", cleanEmail)
                             lastAddedCollaboratorName = cleanName
                             lastAddedCollaboratorRole = staffRole
                             lastAddedCollaboratorPhone = staffPhone.trim()
                             lastAddedCollaboratorEmail = cleanEmail
+                            lastAddedCollaboratorAllowedBooks = allowedRaw
                             lastGeneratedInviteCode = code
                             isPublishingInvite = true
                             invitePublishedCloud = false
@@ -7874,7 +8043,8 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                                 name = cleanName,
                                 email = cleanEmail,
                                 phone = staffPhone.trim(),
-                                role = staffRole
+                                role = staffRole,
+                                allowedBookNames = allowedRaw
                             ) { inv, ok ->
                                 lastGeneratedInviteCode = inv.inviteCode
                                 invitePublishedCloud = ok
@@ -7910,6 +8080,12 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
         var editEmail by remember(editing.id, editing.email) { mutableStateOf(editing.email) }
         var editPhone by remember(editing.id, editing.phone) { mutableStateOf(editing.phone) }
         var editRole by remember(editing.id, editing.role) { mutableStateOf(editing.role) }
+        var editShareAllBooks by remember(editing.id, editing.allowedBookNames) {
+            mutableStateOf(isRoleFullBusinessAccess(editing.role) || parseAllowedBooks(editing.allowedBookNames).isEmpty())
+        }
+        var editSelectedBookNames by remember(editing.id, editing.allowedBookNames) {
+            mutableStateOf(parseAllowedBooks(editing.allowedBookNames).toSet())
+        }
         var editError by remember { mutableStateOf("") }
         var isSavingEdit by remember { mutableStateOf(false) }
 
@@ -8016,8 +8192,8 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                     ) {
                         Text(
                             text = when (editRole) {
-                                "Data Entry" -> "Data Entry: Can add Cash In / Out entries and add books. Cannot edit/delete existing entries or books."
-                                "Partner" -> "Partner: Can view, add, and edit Cash In / Out entries and add books. Cannot delete businesses or team."
+                                "Data Entry" -> "Data Entry: Can add Cash In / Out entries; cannot edit/delete existing entries or books."
+                                "Partner" -> "Partner: Can view, add, and edit Cash In / Out entries; cannot delete businesses or team."
                                 else -> "$editRole: Full access to books, transactions, reports, and team management."
                             },
                             style = MaterialTheme.typography.bodySmall,
@@ -8025,6 +8201,19 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                             modifier = Modifier.padding(10.dp)
                         )
                     }
+
+                    BookAccessScopePicker(
+                        role = editRole,
+                        businessBooks = businessBooks,
+                        shareAllBooks = editShareAllBooks,
+                        onShareAllChange = { editShareAllBooks = it; editError = "" },
+                        selectedBookNames = editSelectedBookNames,
+                        onToggleBook = { bkName ->
+                            val existing = editSelectedBookNames.firstOrNull { it.equals(bkName, ignoreCase = true) }
+                            editSelectedBookNames = if (existing != null) editSelectedBookNames - existing else editSelectedBookNames + bkName
+                            editError = ""
+                        }
+                    )
 
                     if (editError.isNotBlank()) {
                         Text(editError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
@@ -8050,14 +8239,22 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                                     editError = "Please enter the teammate's name."
                                 } else if (!android.util.Patterns.EMAIL_ADDRESS.matcher(cleanEmail).matches()) {
                                     editError = "Please enter a valid Email Address."
+                                } else if (!isRoleFullBusinessAccess(editRole) && !editShareAllBooks && editSelectedBookNames.isEmpty()) {
+                                    editError = "Please select at least 1 cashbook to share, or choose All Books."
                                 } else {
+                                    val newAllowedRaw = if (isRoleFullBusinessAccess(editRole) || editShareAllBooks) {
+                                        ""
+                                    } else {
+                                        encodeAllowedBooks(editSelectedBookNames.toList())
+                                    }
                                     isSavingEdit = true
                                     viewModel.updateTeamMember(
                                         oldMember = editing,
                                         newName = cleanName,
                                         newEmail = cleanEmail,
                                         newPhone = editPhone.trim(),
-                                        newRole = editRole
+                                        newRole = editRole,
+                                        newAllowedBookNames = newAllowedRaw
                                     ) { _, ok ->
                                         isSavingEdit = false
                                         memberToEdit = null
@@ -8128,7 +8325,8 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
             invitedEmail = lastAddedCollaboratorEmail,
             role = lastAddedCollaboratorRole,
             inviteCode = lastGeneratedInviteCode,
-            apkDownloadUrl = editableDownloadUrl.trim()
+            apkDownloadUrl = editableDownloadUrl.trim(),
+            allowedBookNames = lastAddedCollaboratorAllowedBooks
         )
 
         Dialog(
@@ -11768,6 +11966,7 @@ fun ShareBusinessDialog(
     totalNetBalance: Double,
     totalIn: Double,
     totalOut: Double,
+    businessBooks: List<Book> = emptyList(),
     viewModel: LedgerViewModel? = null,
     onDismiss: () -> Unit
 ) {
@@ -11778,6 +11977,8 @@ fun ShareBusinessDialog(
     var collaboratorName by remember { mutableStateOf("") }
     var collaboratorEmail by remember { mutableStateOf("") }
     var collaboratorPhone by remember { mutableStateOf("") }
+    var shareAllBooks by remember { mutableStateOf(true) }
+    var selectedBookNames by remember { mutableStateOf<Set<String>>(emptySet()) }
     var showAddCollaboratorSection by remember { mutableStateOf(false) }
     var activeShareMember by remember { mutableStateOf<TeamMember?>(null) }
 
@@ -11806,7 +12007,8 @@ fun ShareBusinessDialog(
             invitedEmail = focusedMember.email,
             role = focusedMember.role,
             inviteCode = focusedCode,
-            apkDownloadUrl = viewModel?.syncManager?.getApkDownloadUrl() ?: ""
+            apkDownloadUrl = viewModel?.syncManager?.getApkDownloadUrl() ?: "",
+            allowedBookNames = focusedMember.allowedBookNames
         )
     } else {
         """
@@ -11917,6 +12119,12 @@ fun ShareBusinessDialog(
                                             if (member.email.isNotBlank()) {
                                                 Text(member.email, style = MaterialTheme.typography.labelSmall, color = Color.Gray)
                                             }
+                                            Text(
+                                                "Access: ${formatAllowedBooksSummary(member.allowedBookNames, member.role)}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = Color(0xFF0369A1),
+                                                fontWeight = FontWeight.SemiBold
+                                            )
                                             if (memberCode.isNotBlank()) {
                                                 Text("Invite Code: $memberCode", style = MaterialTheme.typography.labelSmall, color = GreenIn, fontWeight = FontWeight.Bold)
                                             }
@@ -11997,6 +12205,18 @@ fun ShareBusinessDialog(
                                 }
                             }
 
+                            BookAccessScopePicker(
+                                role = selectedRole,
+                                businessBooks = businessBooks,
+                                shareAllBooks = shareAllBooks,
+                                onShareAllChange = { shareAllBooks = it },
+                                selectedBookNames = selectedBookNames,
+                                onToggleBook = { bkName ->
+                                    val existing = selectedBookNames.firstOrNull { it.equals(bkName, ignoreCase = true) }
+                                    selectedBookNames = if (existing != null) selectedBookNames - existing else selectedBookNames + bkName
+                                }
+                            )
+
                             Button(
                                 onClick = {
                                     val cName = collaboratorName.trim()
@@ -12005,12 +12225,20 @@ fun ShareBusinessDialog(
                                         Toast.makeText(context, "Please enter partner/staff name.", Toast.LENGTH_SHORT).show()
                                     } else if (!android.util.Patterns.EMAIL_ADDRESS.matcher(cEmail).matches()) {
                                         Toast.makeText(context, "Please enter a valid Email Address for this teammate.", Toast.LENGTH_SHORT).show()
+                                    } else if (!isRoleFullBusinessAccess(selectedRole) && !shareAllBooks && selectedBookNames.isEmpty()) {
+                                        Toast.makeText(context, "Please select at least 1 cashbook to share, or choose All Books.", Toast.LENGTH_SHORT).show()
                                     } else {
+                                        val allowedRaw = if (isRoleFullBusinessAccess(selectedRole) || shareAllBooks) {
+                                            ""
+                                        } else {
+                                            encodeAllowedBooks(selectedBookNames.toList())
+                                        }
                                         viewModel.addTeamMember(
                                             name = cName,
                                             email = cEmail,
                                             phone = collaboratorPhone.trim(),
                                             role = selectedRole,
+                                            allowedBookNames = allowedRaw,
                                             targetBusinessId = business.id
                                         ) { inv, published ->
                                             Toast.makeText(
@@ -12022,6 +12250,8 @@ fun ShareBusinessDialog(
                                         collaboratorName = ""
                                         collaboratorEmail = ""
                                         collaboratorPhone = ""
+                                        shareAllBooks = true
+                                        selectedBookNames = emptySet()
                                         showAddCollaboratorSection = false
                                     }
                                 },
@@ -13628,6 +13858,7 @@ fun ManageWorkspaceScreen(viewModel: LedgerViewModel) {
     var showJoinByCodeDialog by remember { mutableStateOf(false) }
     val currentUserEmail by viewModel.currentUserEmail.collectAsStateWithLifecycle()
     val simulatedRole by viewModel.simulatedRole.collectAsStateWithLifecycle()
+    val isBookRestricted by viewModel.isActiveBusinessBookRestricted.collectAsStateWithLifecycle()
     val isSuperAdmin by viewModel.isSuperAdmin.collectAsStateWithLifecycle()
 
     LazyColumn(
@@ -13979,7 +14210,7 @@ fun ManageWorkspaceScreen(viewModel: LedgerViewModel) {
                                     shape = RoundedCornerShape(8.dp)
                                 ) {
                                     Text(
-                                        text = "Shared • $simulatedRole",
+                                        text = if (isBookRestricted) "Shared • $simulatedRole • ${bizBooks.size} Book(s)" else "Shared • $simulatedRole",
                                         style = MaterialTheme.typography.labelSmall,
                                         fontWeight = FontWeight.Bold,
                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
@@ -14049,7 +14280,7 @@ fun ManageWorkspaceScreen(viewModel: LedgerViewModel) {
                         color = Color(0xFF64748B)
                     )
                 }
-                if (hasPermission(simulatedRole, "add_book")) {
+                if (hasPermission(simulatedRole, "add_book", isBookRestricted)) {
                     TextButton(
                         onClick = { showAddBookDialog = true },
                         enabled = activeBusiness != null,
@@ -14075,7 +14306,7 @@ fun ManageWorkspaceScreen(viewModel: LedgerViewModel) {
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text("No customers or cashbooks available yet.", style = MaterialTheme.typography.bodyMedium)
-                        if (hasPermission(simulatedRole, "add_book")) {
+                        if (hasPermission(simulatedRole, "add_book", isBookRestricted)) {
                             Button(
                                 onClick = { showAddBookDialog = true },
                                 colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
@@ -14429,7 +14660,7 @@ fun ManageWorkspaceScreen(viewModel: LedgerViewModel) {
     // 7. Share Business Dialog
     if (showShareBusinessDialog != null) {
         val biz = showShareBusinessDialog!!
-        val bizBooks = books.filter { it.businessId == biz.id }
+        val bizBooks = allBooks.filter { it.businessId == biz.id }
         val bizBookIds = bizBooks.map { it.id }.toSet()
         val bizTx = allTransactions.filter { bizBookIds.contains(it.bookId) }
         val bizIn = bizTx.filter { it.type == "IN" }.sumOf { it.amount }
@@ -14442,6 +14673,7 @@ fun ManageWorkspaceScreen(viewModel: LedgerViewModel) {
             totalNetBalance = bizNet,
             totalIn = bizIn,
             totalOut = bizOut,
+            businessBooks = bizBooks,
             viewModel = viewModel,
             onDismiss = { showShareBusinessDialog = null }
         )

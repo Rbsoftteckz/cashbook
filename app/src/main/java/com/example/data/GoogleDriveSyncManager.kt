@@ -31,7 +31,8 @@ data class TeamInviteRecord(
     val invitedName: String,
     val role: String,
     val status: String = "PENDING",
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val allowedBookNames: String = ""
 )
 
 data class SharedWorkspaceRef(
@@ -40,7 +41,8 @@ data class SharedWorkspaceRef(
     val businessName: String,
     val businessCreatedAt: Long,
     val role: String,
-    val inviteCode: String
+    val inviteCode: String,
+    val allowedBookNames: String = ""
 )
 
 class GoogleDriveSyncManager(private val context: Context) {
@@ -1385,6 +1387,7 @@ class GoogleDriveSyncManager(private val context: Context) {
                 put("phone", tm.phone)
                 put("role", tm.role)
                 put("createdAt", tm.createdAt)
+                put("allowedBookNames", tm.allowedBookNames)
             })
         }
         root.put("team_members", teamArray)
@@ -1857,6 +1860,7 @@ class GoogleDriveSyncManager(private val context: Context) {
                     val phone = obj.getString("phone")
                     val role = obj.getString("role")
                     val createdAt = obj.getLong("createdAt")
+                    val allowedBookNames = obj.optString("allowedBookNames", "")
 
                     if (isTeamMemberDeleted(email)) continue
 
@@ -1867,8 +1871,8 @@ class GoogleDriveSyncManager(private val context: Context) {
                     val localTeamChangeIsNewer = memberEditTs > remoteTimestamp || hasPendingLocalModifications
 
                     if (matched != null) {
-                        if (!localTeamChangeIsNewer && (matched.name != name || matched.phone != phone || matched.role != role)) {
-                            val updatedTM = matched.copy(name = name, phone = phone, role = role)
+                        if (!localTeamChangeIsNewer && (matched.name != name || matched.phone != phone || matched.role != role || matched.allowedBookNames != allowedBookNames)) {
+                            val updatedTM = matched.copy(name = name, phone = phone, role = role, allowedBookNames = allowedBookNames)
                             dao.insertTeamMember(updatedTM)
                             val idx = existingTeamList.indexOfFirst { it.id == matched.id }
                             if (idx >= 0) existingTeamList[idx] = updatedTM
@@ -1881,7 +1885,8 @@ class GoogleDriveSyncManager(private val context: Context) {
                             email = email,
                             phone = phone,
                             role = role,
-                            createdAt = createdAt
+                            createdAt = createdAt,
+                            allowedBookNames = allowedBookNames
                         )
                         val newId = dao.insertTeamMember(newMember).toInt()
                         existingTeamList.add(newMember.copy(id = newId))
@@ -2315,7 +2320,8 @@ class GoogleDriveSyncManager(private val context: Context) {
                             businessName = bizName,
                             businessCreatedAt = o.optLong("businessCreatedAt", 0L),
                             role = o.optString("role", "Data Entry"),
-                            inviteCode = o.optString("inviteCode", "")
+                            inviteCode = o.optString("inviteCode", ""),
+                            allowedBookNames = o.optString("allowedBookNames", "")
                         )
                     )
                 }
@@ -2334,6 +2340,7 @@ class GoogleDriveSyncManager(private val context: Context) {
                 put("businessCreatedAt", ref.businessCreatedAt)
                 put("role", ref.role)
                 put("inviteCode", ref.inviteCode)
+                put("allowedBookNames", ref.allowedBookNames)
             })
         }
         prefs.edit().putString(sharedWorkspacesPrefKey(email), arr.toString()).apply()
@@ -2372,6 +2379,7 @@ class GoogleDriveSyncManager(private val context: Context) {
             put("role", inv.role)
             put("status", inv.status)
             put("createdAt", inv.createdAt)
+            put("allowedBookNames", inv.allowedBookNames)
         }
     }
 
@@ -2390,7 +2398,8 @@ class GoogleDriveSyncManager(private val context: Context) {
             invitedName = obj.optString("invitedName", ""),
             role = obj.optString("role", "Data Entry"),
             status = obj.optString("status", "PENDING"),
-            createdAt = obj.optLong("createdAt", System.currentTimeMillis())
+            createdAt = obj.optLong("createdAt", System.currentTimeMillis()),
+            allowedBookNames = obj.optString("allowedBookNames", "")
         )
     }
 
@@ -2458,6 +2467,7 @@ class GoogleDriveSyncManager(private val context: Context) {
         val ownerDocId = "cashbook_" + sanitizeDocKey(ownerEmail)
         val invitedEmail = member.email.trim().lowercase()
         val code = getOrGenerateInviteCode(business.name, invitedEmail.ifBlank { member.name })
+        val effectiveAllowedBooks = if (isRoleFullBusinessAccess(member.role)) "" else member.allowedBookNames
         val invite = TeamInviteRecord(
             inviteCode = code,
             ownerEmail = ownerEmail,
@@ -2468,7 +2478,8 @@ class GoogleDriveSyncManager(private val context: Context) {
             invitedName = member.name.trim(),
             role = member.role,
             status = "PENDING",
-            createdAt = System.currentTimeMillis()
+            createdAt = System.currentTimeMillis(),
+            allowedBookNames = effectiveAllowedBooks
         )
 
         if (!isRealCloudAccount()) {
@@ -2494,6 +2505,7 @@ class GoogleDriveSyncManager(private val context: Context) {
             "role" to invite.role,
             "status" to invite.status,
             "createdAt" to invite.createdAt,
+            "allowedBookNames" to invite.allowedBookNames,
             "inviteJson" to inviteJsonStr
         )
 
@@ -2604,7 +2616,8 @@ class GoogleDriveSyncManager(private val context: Context) {
             invitedName = fields.optJSONObject("invitedName")?.optString("stringValue", "") ?: "",
             role = fields.optJSONObject("role")?.optString("stringValue", "Data Entry") ?: "Data Entry",
             status = status,
-            createdAt = fields.optJSONObject("createdAt")?.optString("integerValue", "0")?.toLongOrNull() ?: System.currentTimeMillis()
+            createdAt = fields.optJSONObject("createdAt")?.optString("integerValue", "0")?.toLongOrNull() ?: System.currentTimeMillis(),
+            allowedBookNames = fields.optJSONObject("allowedBookNames")?.optString("stringValue", "") ?: ""
         )
     }
 
@@ -2656,7 +2669,8 @@ class GoogleDriveSyncManager(private val context: Context) {
             businessName = invite.businessName,
             businessCreatedAt = invite.businessCreatedAt,
             role = invite.role,
-            inviteCode = invite.inviteCode
+            inviteCode = invite.inviteCode,
+            allowedBookNames = invite.allowedBookNames
         )
         addOrUpdateSharedWorkspace(ref, cleanAcceptor.ifBlank { getEmail() })
 
@@ -2674,6 +2688,7 @@ class GoogleDriveSyncManager(private val context: Context) {
             "role" to acceptedInvite.role,
             "status" to "ACCEPTED",
             "createdAt" to acceptedInvite.createdAt,
+            "allowedBookNames" to acceptedInvite.allowedBookNames,
             "inviteJson" to teamInviteToJson(acceptedInvite).toString()
         )
         patchOrPostFirestoreDoc("team_invites", codeDocKey, acceptedPayload, idToken)
@@ -2731,12 +2746,14 @@ class GoogleDriveSyncManager(private val context: Context) {
         val ownerTeamArr = ownerRoot.optJSONArray("team_members") ?: JSONArray()
         val scopedTeamArr = JSONArray()
         var activeRoleFromOwner: String? = null
+        var activeAllowedBooksFromOwner = ref.allowedBookNames
         for (i in 0 until ownerTeamArr.length()) {
             val tm = ownerTeamArr.getJSONObject(i)
             if (tm.optInt("businessId", -1) == remoteBizOldId) {
                 scopedTeamArr.put(tm)
                 if (tm.optString("email", "").trim().equals(sessionEmail, ignoreCase = true)) {
                     activeRoleFromOwner = tm.optString("role", ref.role)
+                    activeAllowedBooksFromOwner = tm.optString("allowedBookNames", "")
                 }
             }
         }
@@ -2755,8 +2772,16 @@ class GoogleDriveSyncManager(private val context: Context) {
             return false
         }
 
-        if (activeRoleFromOwner != ref.role || remoteBizName != ref.businessName) {
-            addOrUpdateSharedWorkspace(ref.copy(role = activeRoleFromOwner, businessName = remoteBizName), sessionEmail)
+        val effectiveAllowedBooks = if (isRoleFullBusinessAccess(activeRoleFromOwner)) "" else activeAllowedBooksFromOwner
+        if (activeRoleFromOwner != ref.role || remoteBizName != ref.businessName || effectiveAllowedBooks != ref.allowedBookNames) {
+            addOrUpdateSharedWorkspace(
+                ref.copy(
+                    role = activeRoleFromOwner,
+                    businessName = remoteBizName,
+                    allowedBookNames = effectiveAllowedBooks
+                ),
+                sessionEmail
+            )
         }
 
         // Import owner tombstones for deleted books/transactions so deleted entries vanish cleanly
@@ -2778,14 +2803,16 @@ class GoogleDriveSyncManager(private val context: Context) {
             val id = bk.getInt("id")
             if (id > maxRemoteBookId) maxRemoteBookId = id
             if (bk.optInt("businessId", -1) == remoteBizOldId) {
-                remoteSharedBookOldIds.add(id)
                 val bName = bk.getString("name")
-                remoteSharedBookNames.add(bName.trim().lowercase())
-                ownerBookOldIdToName[id] = bName.trim().lowercase()
+                if (isBookAllowedForMember(bName, effectiveAllowedBooks, activeRoleFromOwner)) {
+                    remoteSharedBookOldIds.add(id)
+                    remoteSharedBookNames.add(bName.trim().lowercase())
+                    ownerBookOldIdToName[id] = bName.trim().lowercase()
+                }
             }
         }
 
-        // 1. PULL: Ensure local Room DB has the shared Business, Books, Transactions, and TeamMembers
+        // 1. PULL: Ensure local Room DB has ONLY the permitted shared Books & Transactions, plus Business and TeamMembers
         var localBiz = dao.getAllBusinessesList().find {
             it.name.equals(remoteBizName, ignoreCase = true) && it.userEmail.equals(ref.ownerEmail, ignoreCase = true)
         }
@@ -2812,6 +2839,7 @@ class GoogleDriveSyncManager(private val context: Context) {
             val bkObj = ownerBooksArr.getJSONObject(i)
             if (bkObj.optInt("businessId", -1) != remoteBizOldId) continue
             val oldBookId = bkObj.getInt("id")
+            if (!remoteSharedBookOldIds.contains(oldBookId)) continue
             val bkName = bkObj.getString("name")
             val bkPhone = bkObj.optString("phone", "")
             val bkCreatedAt = bkObj.optLong("createdAt", System.currentTimeMillis())
@@ -2901,22 +2929,29 @@ class GoogleDriveSyncManager(private val context: Context) {
             val tmPhone = tmObj.optString("phone", "")
             val tmRole = tmObj.optString("role", "Data Entry")
             val tmCreatedAt = tmObj.optLong("createdAt", System.currentTimeMillis())
+            val tmAllowedBooks = tmObj.optString("allowedBookNames", "")
             remoteTmEmails.add(tmEmail.trim().lowercase())
             val matched = existingLocalTeam.find { it.email.equals(tmEmail, ignoreCase = true) }
             if (matched != null) {
-                if (matched.name != tmName || matched.phone != tmPhone || matched.role != tmRole) {
-                    dao.insertTeamMember(matched.copy(name = tmName, phone = tmPhone, role = tmRole))
+                if (matched.name != tmName || matched.phone != tmPhone || matched.role != tmRole || matched.allowedBookNames != tmAllowedBooks) {
+                    dao.insertTeamMember(matched.copy(name = tmName, phone = tmPhone, role = tmRole, allowedBookNames = tmAllowedBooks))
                 }
             } else {
-                dao.insertTeamMember(TeamMember(0, localBizId, tmName, tmEmail, tmPhone, tmRole, tmCreatedAt))
+                dao.insertTeamMember(TeamMember(0, localBizId, tmName, tmEmail, tmPhone, tmRole, tmCreatedAt, tmAllowedBooks))
             }
         }
         existingLocalTeam.filter { !remoteTmEmails.contains(it.email.trim().lowercase()) }
             .forEach { dao.deleteTeamMember(it) }
 
-        // 2. PUSH: If collaborator added new books or transactions locally (isSynced == false), merge ONLY into this shared business in owner's doc
-        val unsyncedLocalBooks = existingLocalBooks.filter { !it.isSynced }
-        val unsyncedLocalTxs = existingLocalTxs.filter { !it.isSynced }
+        // 2. PUSH: If collaborator added new books or transactions locally (isSynced == false), merge ONLY into permitted books in owner's doc
+        val allowedLocalBookIds = existingLocalBooks
+            .filter { isBookAllowedForMember(it.name, effectiveAllowedBooks, activeRoleFromOwner) }
+            .map { it.id }
+            .toSet()
+        val unsyncedLocalBooks = existingLocalBooks.filter {
+            !it.isSynced && isBookAllowedForMember(it.name, effectiveAllowedBooks, activeRoleFromOwner)
+        }
+        val unsyncedLocalTxs = existingLocalTxs.filter { !it.isSynced && it.bookId in allowedLocalBookIds }
         if (unsyncedLocalBooks.isNotEmpty() || unsyncedLocalTxs.isNotEmpty()) {
             var ownerDocModified = false
             val localBookIdToOwnerOldId = mutableMapOf<Int, Int>()
@@ -3039,7 +3074,8 @@ class GoogleDriveSyncManager(private val context: Context) {
                     businessName = inv.businessName,
                     businessCreatedAt = inv.businessCreatedAt,
                     role = inv.role,
-                    inviteCode = inv.inviteCode
+                    inviteCode = inv.inviteCode,
+                    allowedBookNames = inv.allowedBookNames
                 ),
                 cleanEmail
             )

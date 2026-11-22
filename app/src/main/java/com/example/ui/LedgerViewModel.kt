@@ -168,33 +168,74 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     private val _activeBusiness = MutableStateFlow<Business?>(null)
     val activeBusiness: StateFlow<Business?> = _activeBusiness.asStateFlow()
 
-    // Scoped books belonging only to the signed-in user's visible businesses
+    private fun filterBooksForUser(
+        booksList: List<Book>,
+        visibleBusinesses: List<Business>,
+        activeEmail: String,
+        superAdmin: Boolean,
+        teamMembers: List<TeamMember>
+    ): List<Book> {
+        val cleanEmail = activeEmail.trim().lowercase()
+        val isOfflineUser = cleanEmail == "offline@cashbook.local" || cleanEmail == "offline_user@cashbook.local" || cleanEmail.endsWith(".local")
+        val bizById = visibleBusinesses.associateBy { it.id }
+        if (isOfflineUser || superAdmin || cleanEmail.isBlank()) {
+            return booksList.filter { it.businessId in bizById }
+        }
+        val sharedRefs = syncManager.getSharedWorkspaces(cleanEmail)
+        return booksList.filter { book ->
+            val biz = bizById[book.businessId] ?: return@filter false
+            val owner = biz.userEmail.trim().lowercase()
+            if (owner == cleanEmail || owner.isBlank()) {
+                true
+            } else {
+                val tm = teamMembers.firstOrNull {
+                    it.businessId == biz.id && it.email.trim().lowercase() == cleanEmail
+                }
+                val ref = sharedRefs.firstOrNull {
+                    it.businessName.equals(biz.name, ignoreCase = true) && it.ownerEmail.equals(owner, ignoreCase = true)
+                }
+                val role = tm?.role ?: ref?.role ?: "Data Entry"
+                val allowedRaw = tm?.allowedBookNames ?: ref?.allowedBookNames ?: ""
+                isBookAllowedForMember(book.name, allowedRaw, role)
+            }
+        }
+    }
+
+    // Scoped books belonging only to the signed-in user's visible businesses & shared-book access
     val allBooks: StateFlow<List<Book>> = combine(
         repository.allBooks,
-        businesses
-    ) { booksList, visibleBusinesses ->
-        val visibleBizIds = visibleBusinesses.map { it.id }.toSet()
-        booksList.filter { it.businessId in visibleBizIds }
+        businesses,
+        _currentUserEmail,
+        isSuperAdmin,
+        repository.allTeamMembers
+    ) { booksList, visibleBusinesses, activeEmail, superAdmin, teamMembers ->
+        filterBooksForUser(booksList, visibleBusinesses, activeEmail, superAdmin, teamMembers)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = emptyList()
     )
 
-    // Books automatically retrieved for the active business
-    val books: StateFlow<List<Book>> = _activeBusiness
-        .flatMapLatest { biz ->
-            if (biz != null) {
-                repository.getBooksForBusiness(biz.id)
-            } else {
-                flowOf(emptyList())
-            }
+    // Books automatically retrieved and access-filtered for the active business
+    val books: StateFlow<List<Book>> = combine(
+        _activeBusiness.flatMapLatest { biz ->
+            if (biz != null) repository.getBooksForBusiness(biz.id) else flowOf(emptyList())
+        },
+        _activeBusiness,
+        _currentUserEmail,
+        isSuperAdmin,
+        repository.allTeamMembers
+    ) { bizBooks, biz, activeEmail, superAdmin, teamMembers ->
+        if (biz == null) {
+            emptyList()
+        } else {
+            filterBooksForUser(bizBooks, listOf(biz), activeEmail, superAdmin, teamMembers)
         }
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000),
-            initialValue = emptyList()
-        )
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
 
     private val _activeBook = MutableStateFlow<Book?>(null)
     val activeBook: StateFlow<Book?> = _activeBook.asStateFlow()
@@ -286,6 +327,34 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     ) { simRole, actualRole, isOwner ->
         if (isOwner) simRole else actualRole
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "Boss")
+
+    val activeBusinessAllowedBookNames: StateFlow<String> = combine(
+        _activeBusiness,
+        _currentUserEmail,
+        isSuperAdmin,
+        activeBusinessTeamMembers,
+        actualUserRoleForActiveBusiness
+    ) { biz, email, superAdmin, teamMembers, role ->
+        val cleanEmail = email.trim().lowercase()
+        if (superAdmin || biz == null || cleanEmail.isBlank() || cleanEmail.endsWith(".local")) {
+            ""
+        } else {
+            val ownerEmail = biz.userEmail.trim().lowercase()
+            if (ownerEmail.isBlank() || ownerEmail == cleanEmail || isRoleFullBusinessAccess(role)) {
+                ""
+            } else {
+                val tm = teamMembers.firstOrNull { it.email.trim().lowercase() == cleanEmail }
+                val ref = syncManager.getSharedWorkspaces(cleanEmail).firstOrNull {
+                    it.businessName.equals(biz.name, ignoreCase = true) && it.ownerEmail.equals(ownerEmail, ignoreCase = true)
+                }
+                tm?.allowedBookNames ?: ref?.allowedBookNames ?: ""
+            }
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+
+    val isActiveBusinessBookRestricted: StateFlow<Boolean> = activeBusinessAllowedBookNames
+        .map { parseAllowedBooks(it).isNotEmpty() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
     private val _pendingEmailInvites = MutableStateFlow<List<TeamInviteRecord>>(emptyList())
     val pendingEmailInvites: StateFlow<List<TeamInviteRecord>> = _pendingEmailInvites.asStateFlow()
@@ -541,7 +610,14 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                     }
 
                     val activeBizId = validBiz.id
-                    val currentBooksList = repository.getBooksForBusiness(activeBizId).first()
+                    val rawBooksList = repository.getBooksForBusiness(activeBizId).first()
+                    val currentBooksList = filterBooksForUser(
+                        booksList = rawBooksList,
+                        visibleBusinesses = listOf(validBiz),
+                        activeEmail = _currentUserEmail.value,
+                        superAdmin = isSuperAdmin.value,
+                        teamMembers = allTeam
+                    )
                     if (currentBooksList.isNotEmpty()) {
                         val currentBook = _activeBook.value
                         val validBook = if (currentBook != null && currentBook.businessId == activeBizId && currentBooksList.any { it.id == currentBook.id }) {
@@ -1225,18 +1301,21 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         email: String,
         phone: String,
         role: String,
+        allowedBookNames: String = "",
         targetBusinessId: Int? = null,
         onInvitePublished: ((TeamInviteRecord, Boolean) -> Unit)? = null
     ) {
         val targetBiz = (targetBusinessId?.let { id -> businesses.value.find { it.id == id } }) ?: _activeBusiness.value
         val bizId = targetBiz?.id ?: 1
         val cleanEmail = email.trim().lowercase()
+        val effectiveAllowed = if (isRoleFullBusinessAccess(role)) "" else allowedBookNames
         val member = TeamMember(
             businessId = bizId,
             name = name.trim(),
             email = cleanEmail,
             phone = phone.trim(),
-            role = role
+            role = role,
+            allowedBookNames = effectiveAllowed
         )
         viewModelScope.launch {
             syncManager.markTeamMemberEdited(cleanEmail)
@@ -1257,15 +1336,18 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         newEmail: String,
         newPhone: String,
         newRole: String,
+        newAllowedBookNames: String = oldMember.allowedBookNames,
         onCompleted: ((TeamInviteRecord?, Boolean) -> Unit)? = null
     ) {
         val targetBiz = businesses.value.find { it.id == oldMember.businessId } ?: _activeBusiness.value
         val cleanNewEmail = newEmail.trim().lowercase()
+        val effectiveAllowed = if (isRoleFullBusinessAccess(newRole)) "" else newAllowedBookNames
         val updated = oldMember.copy(
             name = newName.trim(),
             email = cleanNewEmail,
             phone = newPhone.trim(),
-            role = newRole
+            role = newRole,
+            allowedBookNames = effectiveAllowed
         )
         viewModelScope.launch {
             if (targetBiz != null && oldMember.email.isNotBlank() && !oldMember.email.equals(cleanNewEmail, ignoreCase = true)) {

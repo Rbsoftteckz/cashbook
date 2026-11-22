@@ -2,7 +2,10 @@ package com.example.data
 
 import android.content.Context
 import androidx.room.*
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
+import org.json.JSONArray
 
 // --- Entities ---
 
@@ -88,8 +91,64 @@ data class TeamMember(
     val email: String,
     val phone: String,
     val role: String, // "Boss", "Admin", "Partner", "Data Entry"
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val allowedBookNames: String = "" // Empty = All Books; JSON array = Selected Books Only
 )
+
+fun isRoleFullBusinessAccess(role: String?): Boolean {
+    val clean = (role ?: "").trim()
+    return clean.equals("Super Admin", ignoreCase = true) ||
+        clean.equals("Boss", ignoreCase = true) ||
+        clean.equals("Owner", ignoreCase = true) ||
+        clean.equals("Admin", ignoreCase = true)
+}
+
+fun parseAllowedBooks(raw: String?): List<String> {
+    val clean = (raw ?: "").trim()
+    if (clean.isBlank()) return emptyList()
+    return try {
+        if (clean.startsWith("[")) {
+            val arr = JSONArray(clean)
+            (0 until arr.length())
+                .mapNotNull { arr.optString(it, "").trim().takeIf { s -> s.isNotBlank() } }
+                .distinctBy { it.lowercase() }
+        } else {
+            clean.split(",")
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .distinctBy { it.lowercase() }
+        }
+    } catch (_: Exception) {
+        emptyList()
+    }
+}
+
+fun encodeAllowedBooks(bookNames: List<String>): String {
+    val cleaned = bookNames.map { it.trim() }.filter { it.isNotBlank() }.distinctBy { it.lowercase() }
+    if (cleaned.isEmpty()) return ""
+    val arr = JSONArray()
+    cleaned.forEach { arr.put(it) }
+    return arr.toString()
+}
+
+fun isBookAllowedForMember(bookName: String, allowedBookNamesRaw: String?, role: String? = null): Boolean {
+    if (isRoleFullBusinessAccess(role)) return true
+    val allowed = parseAllowedBooks(allowedBookNamesRaw)
+    if (allowed.isEmpty()) return true
+    val target = bookName.trim()
+    return allowed.any { it.equals(target, ignoreCase = true) }
+}
+
+fun formatAllowedBooksSummary(allowedBookNamesRaw: String?, role: String?): String {
+    if (isRoleFullBusinessAccess(role)) return "All Books (Full Business)"
+    val allowed = parseAllowedBooks(allowedBookNamesRaw)
+    return when {
+        allowed.isEmpty() -> "All Books"
+        allowed.size == 1 -> "1 Book: ${allowed.first()}"
+        allowed.size <= 3 -> "${allowed.size} Books: ${allowed.joinToString(", ")}"
+        else -> "${allowed.size} Books: ${allowed.take(2).joinToString(", ")} +${allowed.size - 2} more"
+    }
+}
 
 // --- DAO ---
 
@@ -220,7 +279,7 @@ interface LedgerDao {
 
 @Database(
     entities = [Business::class, Book::class, Transaction::class, Party::class, PartyTransaction::class, TeamMember::class],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 abstract class LedgerDatabase : RoomDatabase() {
@@ -230,6 +289,12 @@ abstract class LedgerDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: LedgerDatabase? = null
 
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE team_members ADD COLUMN allowedBookNames TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         fun getDatabase(context: Context): LedgerDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -237,6 +302,7 @@ abstract class LedgerDatabase : RoomDatabase() {
                     LedgerDatabase::class.java,
                     "ledger_database"
                 )
+                .addMigrations(MIGRATION_6_7)
                 .fallbackToDestructiveMigration()
                 .build()
                 INSTANCE = instance
