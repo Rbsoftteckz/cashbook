@@ -50,7 +50,9 @@ data class Transaction(
     val remarks: String,
     val timestamp: Long = System.currentTimeMillis(),
     val isSynced: Boolean = false,
-    val receiptUri: String? = null
+    val receiptUri: String? = null,
+    val addedByName: String = "",
+    val addedByEmail: String = ""
 )
 
 @Entity(tableName = "parties")
@@ -90,9 +92,10 @@ data class TeamMember(
     val name: String,
     val email: String,
     val phone: String,
-    val role: String, // "Boss", "Admin", "Partner", "Data Entry"
+    val role: String, // "Boss", "Admin", "Partner", "Data Entry", "Viewer"
     val createdAt: Long = System.currentTimeMillis(),
-    val allowedBookNames: String = "" // Empty = All Books; JSON array = Selected Books Only
+    val allowedBookNames: String = "", // Empty = All Books; JSON array = Selected Books Only
+    val hideBalance: Boolean = false // Hide Total / Net / Split balances for Data Entry & Viewer
 )
 
 fun isRoleFullBusinessAccess(role: String?): Boolean {
@@ -101,6 +104,14 @@ fun isRoleFullBusinessAccess(role: String?): Boolean {
         clean.equals("Boss", ignoreCase = true) ||
         clean.equals("Owner", ignoreCase = true) ||
         clean.equals("Admin", ignoreCase = true)
+}
+
+fun canRoleHideBalance(role: String?): Boolean {
+    val clean = (role ?: "").trim()
+    return clean.equals("Data Entry", ignoreCase = true) ||
+        clean.equals("Viewer", ignoreCase = true) ||
+        clean.equals("Read Only", ignoreCase = true) ||
+        clean.equals("Read-Only", ignoreCase = true)
 }
 
 fun parseAllowedBooks(raw: String?): List<String> {
@@ -279,7 +290,7 @@ interface LedgerDao {
 
 @Database(
     entities = [Business::class, Book::class, Transaction::class, Party::class, PartyTransaction::class, TeamMember::class],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 abstract class LedgerDatabase : RoomDatabase() {
@@ -295,6 +306,14 @@ abstract class LedgerDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE transactions ADD COLUMN addedByName TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE transactions ADD COLUMN addedByEmail TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE team_members ADD COLUMN hideBalance INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun getDatabase(context: Context): LedgerDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -302,7 +321,7 @@ abstract class LedgerDatabase : RoomDatabase() {
                     LedgerDatabase::class.java,
                     "ledger_database"
                 )
-                .addMigrations(MIGRATION_6_7)
+                .addMigrations(MIGRATION_6_7, MIGRATION_7_8)
                 .fallbackToDestructiveMigration()
                 .build()
                 INSTANCE = instance

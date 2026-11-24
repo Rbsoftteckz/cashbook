@@ -90,12 +90,73 @@ import kotlinx.coroutines.launch
 
 // --- Permissions Helper ---
 fun hasPermission(role: String, action: String, isBookRestricted: Boolean = false): Boolean {
-    return when (role.trim()) {
-        "Super Admin", "Boss", "Owner", "Admin" -> true
-        "Partner" -> action == "view" || action == "switch_business" || action == "add_transaction" || action == "edit_transaction" || (action == "add_book" && !isBookRestricted)
-        "Data Entry" -> action == "view" || action == "switch_business" || action == "add_transaction" || (action == "add_book" && !isBookRestricted)
-        else -> action == "view" || action == "switch_business" || action == "add_transaction"
+    return when (role.trim().lowercase()) {
+        "super admin", "boss", "owner", "admin" -> true
+        "partner" -> action == "view" || action == "switch_business" || action == "add_transaction" || action == "edit_transaction" || (action == "add_book" && !isBookRestricted)
+        "data entry" -> action == "view" || action == "switch_business" || action == "add_transaction" || (action == "add_book" && !isBookRestricted)
+        "viewer", "read only", "read-only" -> action == "view" || action == "switch_business"
+        else -> action == "view" || action == "switch_business"
     }
+}
+
+data class ResolvedAuthor(val displayName: String, val isOwner: Boolean)
+
+fun resolveTransactionAddedBy(
+    tx: Transaction,
+    ownerEmail: String,
+    currentUserEmail: String,
+    currentUserName: String,
+    teamMembers: List<TeamMember>,
+    globalAccounts: List<RegisteredAccount>
+): ResolvedAuthor {
+    val txEmail = tx.addedByEmail.trim().lowercase()
+    val cleanOwnerEmail = ownerEmail.trim().lowercase()
+    val cleanCurrEmail = currentUserEmail.trim().lowercase()
+
+    val isOwnerEntry = when {
+        txEmail.isNotBlank() && cleanOwnerEmail.isNotBlank() -> txEmail == cleanOwnerEmail
+        txEmail.isBlank() -> tx.addedByName.isBlank() || tx.addedByName.equals("Owner", ignoreCase = true)
+        else -> false
+    }
+
+    val teamMatchName = if (txEmail.isNotBlank()) {
+        teamMembers.firstOrNull { it.email.trim().equals(txEmail, ignoreCase = true) }?.name?.trim().orEmpty()
+    } else ""
+
+    val accountMatchName = if (txEmail.isNotBlank()) {
+        globalAccounts.firstOrNull { it.email.trim().equals(txEmail, ignoreCase = true) }?.name?.trim().orEmpty()
+    } else ""
+
+    val currentSelfName = if (txEmail.isNotBlank() && txEmail == cleanCurrEmail) {
+        currentUserName.trim().let {
+            if (it.equals("Offline User", true) || it.equals("CashBook User", true) || it.equals("User", true)) "" else it
+        }
+    } else ""
+
+    val rawTxName = tx.addedByName.trim()
+    val bestName = when {
+        !isOwnerEntry && teamMatchName.isNotBlank() -> teamMatchName
+        rawTxName.isNotBlank() && !rawTxName.equals("Owner", true) && !rawTxName.equals("Offline User", true) -> rawTxName
+        currentSelfName.isNotBlank() -> currentSelfName
+        accountMatchName.isNotBlank() -> accountMatchName
+        teamMatchName.isNotBlank() -> teamMatchName
+        txEmail.isNotBlank() -> txEmail.substringBefore("@").replaceFirstChar { it.uppercase() }
+        isOwnerEntry -> {
+            val ownerAccName = if (cleanOwnerEmail.isNotBlank()) {
+                globalAccounts.firstOrNull { it.email.trim().equals(cleanOwnerEmail, ignoreCase = true) }?.name?.trim().orEmpty()
+            } else ""
+            val fallbackOwnerSelf = if (cleanOwnerEmail.isNotBlank() && cleanOwnerEmail == cleanCurrEmail) currentUserName.trim() else ""
+            ownerAccName.ifBlank { fallbackOwnerSelf }.ifBlank { "Owner" }
+        }
+        else -> ""
+    }
+
+    val display = if (isOwnerEntry) {
+        if (bestName.isBlank() || bestName.equals("Owner", ignoreCase = true)) "Owner" else "$bestName (Owner)"
+    } else {
+        bestName.ifBlank { "Team Member" }
+    }
+    return ResolvedAuthor(display, isOwnerEntry)
 }
 
 fun buildTeamInviteMessage(
@@ -107,10 +168,11 @@ fun buildTeamInviteMessage(
     apkDownloadUrl: String = "",
     allowedBookNames: String = ""
 ): String {
-    val roleSummary = when (role.trim()) {
-        "Partner" -> "Partner (View, add & edit Cash In / Cash Out entries)"
-        "Data Entry" -> "Data Entry (Add Cash In / Cash Out entries; cannot edit or delete)"
-        "Admin", "Boss" -> "$role (Full workspace, team & report control)"
+    val roleSummary = when (role.trim().lowercase()) {
+        "viewer", "read only", "read-only" -> "Viewer (Read-Only access; cannot add, edit, or delete entries)"
+        "partner" -> "Partner (View, add & edit Cash In / Cash Out entries)"
+        "data entry" -> "Data Entry (Add Cash In / Cash Out entries; cannot edit or delete)"
+        "admin", "boss" -> "$role (Full workspace, team & report control)"
         else -> role
     }
     val accessSummary = formatAllowedBooksSummary(allowedBookNames, role)
@@ -394,6 +456,23 @@ fun isTransactionInDateRange(
             }.timeInMillis
             timestamp in startOfToday..endOfToday
         }
+        "YESTERDAY" -> {
+            val startOfYesterday = Calendar.getInstance().apply {
+                add(Calendar.DAY_OF_YEAR, -1)
+                set(Calendar.HOUR_OF_DAY, 0)
+                set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+            }.timeInMillis
+            val endOfYesterday = Calendar.getInstance().apply {
+                add(Calendar.DAY_OF_YEAR, -1)
+                set(Calendar.HOUR_OF_DAY, 23)
+                set(Calendar.MINUTE, 59)
+                set(Calendar.SECOND, 59)
+                set(Calendar.MILLISECOND, 999)
+            }.timeInMillis
+            timestamp in startOfYesterday..endOfYesterday
+        }
         "WEEK" -> {
             val startOfWeek = Calendar.getInstance().apply {
                 add(Calendar.DAY_OF_YEAR, -6)
@@ -414,6 +493,26 @@ fun isTransactionInDateRange(
                 set(Calendar.MILLISECOND, 0)
             }.timeInMillis
             timestamp in startOfMonth..endOfToday
+        }
+        "LAST_MONTH" -> {
+            val startOfLastMonth = Calendar.getInstance().apply {
+                timeInMillis = nowCal.timeInMillis
+                add(Calendar.MONTH, -1)
+                set(Calendar.DAY_OF_MONTH, 1)
+                set(Calendar.HOUR_OF_DAY, 0)
+                set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+            }
+            val endOfLastMonth = Calendar.getInstance().apply {
+                timeInMillis = startOfLastMonth.timeInMillis
+                set(Calendar.DAY_OF_MONTH, getActualMaximum(Calendar.DAY_OF_MONTH))
+                set(Calendar.HOUR_OF_DAY, 23)
+                set(Calendar.MINUTE, 59)
+                set(Calendar.SECOND, 59)
+                set(Calendar.MILLISECOND, 999)
+            }
+            timestamp in startOfLastMonth.timeInMillis..endOfLastMonth.timeInMillis
         }
         "CUSTOM" -> {
             if (customStartMillis == null || customEndMillis == null) return true
@@ -516,8 +615,10 @@ fun DateRangeFilterStrip(
         val presets = listOf(
             "ALL" to "All Time",
             "TODAY" to "Today",
+            "YESTERDAY" to "Yesterday",
             "WEEK" to "7 Days",
             "MONTH" to "This Month",
+            "LAST_MONTH" to "Last Month",
             "CUSTOM" to customLabel
         )
         presets.forEach { (key, label) ->
@@ -709,11 +810,18 @@ fun rememberContactImportAction(
 @Composable
 fun LedgerAppScreen(viewModel: LedgerViewModel) {
     val currentScreen by viewModel.currentScreen.collectAsStateWithLifecycle()
+    val isHomeBusinessesListVisible by viewModel.isHomeBusinessesListVisible.collectAsStateWithLifecycle()
+    val isHomeBooksHubVisible by viewModel.isHomeBooksHubVisible.collectAsStateWithLifecycle()
+    val manageSelectedBusinessId by viewModel.manageSelectedBusinessId.collectAsStateWithLifecycle()
+    val reportSelectedBusinessId by viewModel.reportSelectedBusinessId.collectAsStateWithLifecycle()
+    val reportSelectedBookId by viewModel.reportSelectedBookId.collectAsStateWithLifecycle()
     val activeBook by viewModel.activeBook.collectAsStateWithLifecycle()
     val books by viewModel.books.collectAsStateWithLifecycle()
     val allBooks by viewModel.allBooks.collectAsStateWithLifecycle()
     val businesses by viewModel.businesses.collectAsStateWithLifecycle()
     val activeBusiness by viewModel.activeBusiness.collectAsStateWithLifecycle()
+    val allTeamMembers by viewModel.allTeamMembers.collectAsStateWithLifecycle()
+    val currentUserEmail by viewModel.currentUserEmail.collectAsStateWithLifecycle()
     val simulatedRole by viewModel.simulatedRole.collectAsStateWithLifecycle()
     val isBookRestricted by viewModel.isActiveBusinessBookRestricted.collectAsStateWithLifecycle()
     val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
@@ -735,7 +843,9 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
+    var showBusinessSelector by remember { mutableStateOf(false) }
     var showBookSelector by remember { mutableStateOf(false) }
+    var showEditActiveBookDialog by remember { mutableStateOf(false) }
     var showAddBookDialog by remember { mutableStateOf(false) }
     var newBookName by remember { mutableStateOf("") }
 
@@ -764,8 +874,12 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
             showSuperAdminUserRegistryDialog = false
         } else if (showSuperAdminUserRegistryInDrawer) {
             showSuperAdminUserRegistryInDrawer = false
+        } else if (showBusinessSelector) {
+            showBusinessSelector = false
         } else if (showBookSelector) {
             showBookSelector = false
+        } else if (showEditActiveBookDialog) {
+            showEditActiveBookDialog = false
         } else if (showAddBookDialog) {
             showAddBookDialog = false
         } else if (showAddBusinessDialog) {
@@ -776,8 +890,16 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
             businessToDelete = null
         } else if (bookToDelete != null) {
             bookToDelete = null
+        } else if (currentScreen == Screen.REPORTS && reportSelectedBookId != null && isUserSignedIn && businesses.isNotEmpty()) {
+            viewModel.selectReportBook(null)
+        } else if (currentScreen == Screen.REPORTS && reportSelectedBusinessId != null && isUserSignedIn && businesses.isNotEmpty()) {
+            viewModel.openReportsHome()
         } else if (currentScreen != Screen.DASHBOARD && isUserSignedIn && businesses.isNotEmpty()) {
             viewModel.setScreen(Screen.DASHBOARD)
+        } else if (currentScreen == Screen.DASHBOARD && !isHomeBooksHubVisible && isUserSignedIn && businesses.isNotEmpty()) {
+            viewModel.openBooksHub()
+        } else if (currentScreen == Screen.DASHBOARD && !isHomeBusinessesListVisible && isUserSignedIn && businesses.isNotEmpty()) {
+            viewModel.openBusinessesHome()
         } else {
             showExitAppDialog = true
         }
@@ -864,23 +986,6 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f)
                             )
-                        }
-
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            TextButton(
-                                onClick = {
-                                    viewModel.logoutSuperAdmin()
-                                    Toast.makeText(context, "Signed out successfully", Toast.LENGTH_SHORT).show()
-                                },
-                                contentPadding = PaddingValues(0.dp)
-                            ) {
-                                Icon(Icons.Default.Logout, contentDescription = null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.error)
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Sign Out", fontSize = 11.sp, color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
-                            }
                         }
                     }
                 }
@@ -1235,21 +1340,82 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
             contentWindowInsets = if (currentScreen == Screen.UDHAR) WindowInsets(0, 0, 0, 0) else ScaffoldDefaults.contentWindowInsets,
             topBar = {
                 if (currentScreen != Screen.UDHAR) {
+                    val isHomeAllBusinessesView = currentScreen == Screen.DASHBOARD && isHomeBusinessesListVisible
+                    val isHomeBooksListView = currentScreen == Screen.DASHBOARD && !isHomeBusinessesListVisible && isHomeBooksHubVisible
+                    val isOpenedBookView = currentScreen == Screen.DASHBOARD && !isHomeBusinessesListVisible && !isHomeBooksHubVisible && activeBook != null
+                    val inspectedManageBiz = remember(currentScreen, manageSelectedBusinessId, businesses) {
+                        if (currentScreen == Screen.MANAGE_WORKSPACE && manageSelectedBusinessId != null) {
+                            businesses.find { it.id == manageSelectedBusinessId }
+                        } else null
+                    }
+                    val inspectedReportBiz = remember(currentScreen, reportSelectedBusinessId, businesses) {
+                        if (currentScreen == Screen.REPORTS && reportSelectedBusinessId != null) {
+                            businesses.find { it.id == reportSelectedBusinessId }
+                        } else null
+                    }
+                    val inspectedReportBook = remember(currentScreen, reportSelectedBookId, allBooks) {
+                        if (currentScreen == Screen.REPORTS && reportSelectedBookId != null) {
+                            allBooks.find { it.id == reportSelectedBookId }
+                        } else null
+                    }
                     TopAppBar(
                         navigationIcon = {
-                            IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                                Icon(Icons.Default.Menu, contentDescription = "Open Navigation Drawer")
+                            if (isOpenedBookView) {
+                                IconButton(
+                                    onClick = { viewModel.openBooksHub() },
+                                    modifier = Modifier.testTag("back_to_books_hub_btn")
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.ArrowBack,
+                                        contentDescription = "Back to Cashbooks"
+                                    )
+                                }
+                            } else if (isHomeBooksListView) {
+                                IconButton(
+                                    onClick = { viewModel.openBusinessesHome() },
+                                    modifier = Modifier.testTag("back_to_all_businesses_btn")
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.ArrowBack,
+                                        contentDescription = "Back to All Businesses"
+                                    )
+                                }
+                            } else if (currentScreen == Screen.REPORTS && inspectedReportBook != null) {
+                                IconButton(
+                                    onClick = { viewModel.selectReportBook(null) },
+                                    modifier = Modifier.testTag("reports_back_to_business_btn")
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.ArrowBack,
+                                        contentDescription = "Back to Business Books"
+                                    )
+                                }
+                            } else if (currentScreen == Screen.REPORTS && inspectedReportBiz != null) {
+                                IconButton(
+                                    onClick = { viewModel.openReportsHome() },
+                                    modifier = Modifier.testTag("reports_back_to_all_biz_btn")
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.ArrowBack,
+                                        contentDescription = "Back to All Businesses"
+                                    )
+                                }
+                            } else {
+                                IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                                    Icon(Icons.Default.Menu, contentDescription = "Open Navigation Drawer")
+                                }
                             }
                         },
                         title = {
                             Row(
                                 modifier = Modifier.padding(vertical = 2.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                // Secret 5-Tap on Book Icon (Completely normal appearance, no indicators)
+                                // Secret 5-Tap on Top Icon (Completely normal appearance, no indicators)
                                 Box(
                                     modifier = Modifier
-                                        .size(34.dp)
+                                        .size(32.dp)
                                         .clickable(
                                             interactionSource = remember { MutableInteractionSource() },
                                             indication = null
@@ -1270,33 +1436,138 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
-                                        Icons.Default.MenuBook,
-                                        contentDescription = "Cashbook",
+                                        if (isOpenedBookView) Icons.Default.MenuBook else Icons.Default.Storefront,
+                                        contentDescription = "CashBook",
                                         tint = MaterialTheme.colorScheme.primary,
                                         modifier = Modifier.size(21.dp)
                                     )
                                 }
 
-                                // Tapping the Book Name / Arrow Dropdown switches active Cashbook
-                                Row(
-                                    modifier = Modifier
-                                        .clickable { showBookSelector = true }
-                                        .padding(horizontal = 4.dp, vertical = 4.dp)
-                                        .testTag("book_selector_trigger"),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
+                                if (isOpenedBookView) {
+                                    // Inside an Opened Cashbook: show Book Name + Switcher dropdown, with Related Business right underneath
+                                    Column(
+                                        modifier = Modifier
+                                            .clickable { showBookSelector = true }
+                                            .padding(horizontal = 2.dp, vertical = 2.dp)
+                                            .testTag("book_selector_trigger")
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = activeBook?.name ?: "Cashbook",
+                                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.weight(1f, fill = false)
+                                            )
+                                            Icon(
+                                                Icons.Default.ArrowDropDown,
+                                                contentDescription = "Switch cashbook",
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                        Text(
+                                            text = activeBusiness?.name ?: "Business",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                } else if (isHomeAllBusinessesView) {
                                     Text(
-                                        text = activeBook?.name ?: "No Book Active",
-                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                        text = "All Businesses",
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
-                                    Icon(
-                                        Icons.Default.ArrowDropDown,
-                                        contentDescription = "Switch book",
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(20.dp)
+                                } else if (currentScreen == Screen.MANAGE_WORKSPACE && inspectedManageBiz != null) {
+                                    // Inside Manage -> Business Detail: always show the inspected Business
+                                    Text(
+                                        text = inspectedManageBiz.name,
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
+                                } else if (currentScreen == Screen.MANAGE_WORKSPACE) {
+                                    Text(
+                                        text = "All Businesses",
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                } else if (currentScreen == Screen.REPORTS && inspectedReportBook != null) {
+                                    Column(modifier = Modifier.padding(vertical = 2.dp)) {
+                                        Text(
+                                            text = inspectedReportBook.name,
+                                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "${inspectedReportBiz?.name ?: "Business"} • Book Report",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                } else if (currentScreen == Screen.REPORTS && inspectedReportBiz != null) {
+                                    Column(modifier = Modifier.padding(vertical = 2.dp)) {
+                                        Text(
+                                            text = inspectedReportBiz.name,
+                                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "Business & Book Reports",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                } else if (currentScreen == Screen.REPORTS) {
+                                    Text(
+                                        text = "Reports",
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                } else {
+                                    // CashBook.in-style Business Selector always on top
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
+                                        modifier = Modifier
+                                            .clickable { showBusinessSelector = true }
+                                            .testTag("business_selector_trigger")
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                        ) {
+                                            Text(
+                                                text = activeBusiness?.name ?: "Select Business",
+                                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold),
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.weight(1f, fill = false)
+                                            )
+                                            Icon(
+                                                Icons.Default.ArrowDropDown,
+                                                contentDescription = "Switch business",
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         },
@@ -1304,57 +1575,67 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                             containerColor = MaterialTheme.colorScheme.surface
                         ),
                         actions = {
-                            // Compact Analytics / Reports shortcut icon
-                            IconButton(
-                                onClick = { viewModel.setScreen(Screen.REPORTS) },
-                                modifier = Modifier.testTag("top_bar_reports_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Analytics,
-                                    contentDescription = "Reports & Analytics",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(21.dp)
-                                )
-                            }
-
-                            // Cloud Sync status indicator
-                            val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
-                            val isOnline by viewModel.isOnline.collectAsStateWithLifecycle()
-                            val isRealCloudAccount = viewModel.syncManager.isRealCloudAccount()
-                            val isSyncError = !isOnline || syncStatus.contains("Error", ignoreCase = true) || syncStatus.contains("Failed", ignoreCase = true) || syncStatus.contains("403") || syncStatus.contains("401") || syncStatus.contains("400") || syncStatus.contains("500") || syncStatus.contains("Disconnected", ignoreCase = true)
-                            val isRealSuccess = isOnline && isRealCloudAccount && !isSyncError && (syncStatus.contains("Synced", ignoreCase = true) || syncStatus.contains("Restored", ignoreCase = true) || syncStatus.contains("Success", ignoreCase = true) || syncStatus.contains("Connected", ignoreCase = true) || syncStatus.contains("Vault", ignoreCase = true) || syncStatus.contains("Active", ignoreCase = true) || syncStatus.contains("Ready", ignoreCase = true))
-
-                            IconButton(
-                                onClick = { viewModel.setScreen(Screen.SYNC_CENTER) },
-                                modifier = Modifier.testTag("top_bar_sync_indicator")
-                            ) {
-                                Icon(
-                                    imageVector = if (!isOnline) Icons.Default.CloudOff else if (isRealSuccess) Icons.Default.CloudDone else if (isSyncError) Icons.Default.CloudOff else Icons.Default.OfflinePin,
-                                    contentDescription = "Cloud Sync & Offline Status",
-                                    tint = if (!isOnline) MaterialTheme.colorScheme.error else if (isRealSuccess) GreenIn else if (isSyncError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(21.dp)
-                                )
-                            }
-                            if (hasPermission(simulatedRole, "add_book", isBookRestricted)) {
+                            if (isOpenedBookView && activeBook != null) {
                                 IconButton(
-                                    onClick = { showAddBookDialog = true },
-                                    modifier = Modifier.testTag("add_book_button")
-                                ) {
-                                Box(
-                                    contentAlignment = Alignment.Center,
-                                    modifier = Modifier
-                                        .size(30.dp)
-                                        .background(GreenIn.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
+                                    onClick = { showEditActiveBookDialog = true },
+                                    modifier = Modifier.testTag("top_bar_edit_book_btn")
                                 ) {
                                     Icon(
-                                        Icons.Default.LibraryAdd,
-                                        contentDescription = "Create New Book",
-                                        tint = GreenIn,
-                                        modifier = Modifier.size(18.dp)
+                                        imageVector = Icons.Default.Edit,
+                                        contentDescription = "Edit Cashbook",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { viewModel.setScreen(Screen.UDHAR) },
+                                    modifier = Modifier.testTag("home_open_active_ledger_btn")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.OpenInFull,
+                                        contentDescription = "Full View",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(19.dp)
                                     )
                                 }
                             }
+
+                            // Only surface a compact status indicator when offline or in sync error (Sync tab already lives in bottom nav)
+                            val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
+                            val isOnline by viewModel.isOnline.collectAsStateWithLifecycle()
+                            val isSyncError = !isOnline || syncStatus.contains("Error", ignoreCase = true) || syncStatus.contains("Failed", ignoreCase = true) || syncStatus.contains("403") || syncStatus.contains("401") || syncStatus.contains("400") || syncStatus.contains("500") || syncStatus.contains("Disconnected", ignoreCase = true)
+
+                            if (isSyncError) {
+                                Surface(
+                                    onClick = { viewModel.setScreen(Screen.SYNC_CENTER) },
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f),
+                                    modifier = Modifier
+                                        .padding(end = 4.dp)
+                                        .testTag("top_bar_sync_indicator")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.CloudOff,
+                                            contentDescription = "Offline or Sync Issue",
+                                            tint = MaterialTheme.colorScheme.error,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Text(
+                                            text = if (!isOnline) "Offline" else "Sync",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.error,
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
                             }
+
                             IconButton(
                                 onClick = { viewModel.setScreen(Screen.PROFILE) },
                                 modifier = Modifier.testTag("top_bar_profile_button")
@@ -1363,7 +1644,7 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                                     imageVector = Icons.Default.AccountCircle,
                                     contentDescription = "User Account Profile",
                                     tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(22.dp)
+                                    modifier = Modifier.size(24.dp)
                                 )
                             }
                         }
@@ -1480,61 +1761,184 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                     }
                 }
 
-                // Book Selector Modal Dialog
-                if (showBookSelector) {
-                    val booksToDisplay = if (allBooks.isNotEmpty()) allBooks else books
+                // Business Selector Modal Dialog (CashBook.in-style switcher on top)
+                if (showBusinessSelector) {
                     AlertDialog(
-                        onDismissRequest = { showBookSelector = false },
-                        title = { Text("Business Cashbooks", fontWeight = FontWeight.Bold) },
+                        onDismissRequest = { showBusinessSelector = false },
+                        title = {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Your Businesses", fontWeight = FontWeight.Bold)
+                                TextButton(onClick = {
+                                    showBusinessSelector = false
+                                    showAddBusinessDialog = true
+                                }) {
+                                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp), tint = GreenIn)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("New", fontWeight = FontWeight.Bold, color = GreenIn)
+                                }
+                            }
+                        },
                         text = {
                             LazyColumn(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                items(booksToDisplay) { book ->
-                                    val isSelected = book.id == activeBook?.id
-                                    val parentBiz = businesses.find { it.id == book.businessId }
+                                items(businesses, key = { it.id }) { biz ->
+                                    val isSelected = biz.id == activeBusiness?.id
+                                    val bizBooksCount = allBooks.count { it.businessId == biz.id }
+                                    val ownerEmail = biz.userEmail.trim().lowercase()
+                                    val isOwner = isSuperAdmin || ownerEmail.isBlank() || ownerEmail == currentUserEmail.trim().lowercase()
+                                    val memberRole = if (isOwner) {
+                                        "Owner"
+                                    } else {
+                                        allTeamMembers.firstOrNull {
+                                            it.businessId == biz.id && it.email.trim().lowercase() == currentUserEmail.trim().lowercase()
+                                        }?.role ?: "Shared"
+                                    }
                                     Card(
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .clickable {
-                                                viewModel.selectBook(book)
-                                                showBookSelector = false
+                                                viewModel.selectBusiness(biz)
+                                                viewModel.openBooksHub()
+                                                showBusinessSelector = false
                                             },
                                         colors = CardDefaults.cardColors(
-                                            containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
-                                        )
+                                            containerColor = if (isSelected) GreenIn.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant
+                                        ),
+                                        border = if (isSelected) BorderStroke(1.2.dp, GreenIn) else null
                                     ) {
                                         Row(
                                             modifier = Modifier
                                                 .fillMaxWidth()
-                                                .padding(16.dp),
+                                                .padding(14.dp),
                                             horizontalArrangement = Arrangement.SpaceBetween,
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Column {
-                                                Text(book.name, fontWeight = FontWeight.Bold)
-                                                if (parentBiz != null) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                                modifier = Modifier.weight(1f)
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.Storefront,
+                                                    contentDescription = null,
+                                                    tint = if (isSelected) GreenIn else MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                                Column {
                                                     Text(
-                                                        "Business: ${parentBiz.name}",
+                                                        biz.name,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = if (isSelected) GreenIn else MaterialTheme.colorScheme.onSurface,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                    Text(
+                                                        "$memberRole • $bizBooksCount ${if (bizBooksCount == 1) "book" else "books"}",
                                                         style = MaterialTheme.typography.labelSmall,
-                                                        color = MaterialTheme.colorScheme.primary
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
                                                     )
                                                 }
-                                                Text(
-                                                    "Created: " + SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(book.createdAt)),
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
                                             }
                                             if (isSelected) {
-                                                Icon(Icons.Default.Check, contentDescription = "Active", tint = MaterialTheme.colorScheme.primary)
-                                            } else if (booksToDisplay.size > 1 && hasPermission(simulatedRole, "delete_book")) {
-                                                IconButton(onClick = {
-                                                    bookToDelete = book
-                                                    deleteConfirmationInput = ""
-                                                }) {
-                                                    Icon(Icons.Default.Delete, contentDescription = "Delete book", tint = MaterialTheme.colorScheme.error)
+                                                Icon(Icons.Default.Check, contentDescription = "Active", tint = GreenIn)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(onClick = { showBusinessSelector = false }) {
+                                Text("Close")
+                            }
+                        }
+                    )
+                }
+
+                // Book Selector Modal Dialog — Strictly scoped to active Business (no cross-business mixing!)
+                if (showBookSelector) {
+                    val booksToDisplay = books
+                    AlertDialog(
+                        onDismissRequest = { showBookSelector = false },
+                        title = {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "${activeBusiness?.name ?: "Business"} Books",
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (hasPermission(simulatedRole, "add_book", isBookRestricted)) {
+                                    TextButton(onClick = {
+                                        showBookSelector = false
+                                        showAddBookDialog = true
+                                    }) {
+                                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp), tint = GreenIn)
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("New", fontWeight = FontWeight.Bold, color = GreenIn)
+                                    }
+                                }
+                            }
+                        },
+                        text = {
+                            if (booksToDisplay.isEmpty()) {
+                                Text(
+                                    "No cashbooks in ${activeBusiness?.name ?: "this business"} yet.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            } else {
+                                LazyColumn(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    items(booksToDisplay) { book ->
+                                        val isSelected = book.id == activeBook?.id
+                                        Card(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable {
+                                                    viewModel.openBookLedger(book)
+                                                    showBookSelector = false
+                                                },
+                                            colors = CardDefaults.cardColors(
+                                                containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+                                            )
+                                        ) {
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(16.dp),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(book.name, fontWeight = FontWeight.Bold)
+                                                    Text(
+                                                        "Created: " + SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(book.createdAt)),
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+                                                if (isSelected) {
+                                                    Icon(Icons.Default.Check, contentDescription = "Active", tint = MaterialTheme.colorScheme.primary)
+                                                } else if (booksToDisplay.size > 1 && hasPermission(simulatedRole, "delete_book")) {
+                                                    IconButton(onClick = {
+                                                        bookToDelete = book
+                                                        deleteConfirmationInput = ""
+                                                    }) {
+                                                        Icon(Icons.Default.Delete, contentDescription = "Delete book", tint = MaterialTheme.colorScheme.error)
+                                                    }
                                                 }
                                             }
                                         }
@@ -1546,6 +1950,18 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                             TextButton(onClick = { showBookSelector = false }) {
                                 Text("Close")
                             }
+                        }
+                    )
+                }
+
+                if (showEditActiveBookDialog && activeBook != null) {
+                    EditBookConsumerDialog(
+                        book = activeBook!!,
+                        onDismiss = { showEditActiveBookDialog = false },
+                        onSave = { newName, newPhone ->
+                            viewModel.updateBook(activeBook!!.copy(name = newName, phone = newPhone))
+                            showEditActiveBookDialog = false
+                            Toast.makeText(context, "Cashbook updated!", Toast.LENGTH_SHORT).show()
                         }
                     )
                 }
@@ -1562,37 +1978,19 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                     )
                 }
 
-                // Create Business Dialog
+                // Create Business Dialog (with optional First Book Name - never auto-creates Main CashBook)
                 if (showAddBusinessDialog) {
-                    AlertDialog(
-                        onDismissRequest = { showAddBusinessDialog = false },
-                        title = { Text("Add Corporate Business Account") },
-                        text = {
-                            OutlinedTextField(
-                                value = newBusinessName,
-                                onValueChange = { newBusinessName = it },
-                                label = { Text("Business Entity Name") },
-                                placeholder = { Text("e.g. Apex Traders Ltd, Personal") },
-                                modifier = Modifier.fillMaxWidth()
-                            )
+                    CreateBusinessWithOptionalBookDialog(
+                        initialBusinessName = newBusinessName,
+                        onDismiss = {
+                            newBusinessName = ""
+                            showAddBusinessDialog = false
                         },
-                        confirmButton = {
-                            Button(
-                                onClick = {
-                                    if (newBusinessName.isNotBlank()) {
-                                        viewModel.createBusiness(newBusinessName)
-                                        newBusinessName = ""
-                                        showAddBusinessDialog = false
-                                    }
-                                }
-                            ) {
-                                Text("Create Account")
-                            }
-                        },
-                        dismissButton = {
-                            TextButton(onClick = { showAddBusinessDialog = false }) {
-                                Text("Cancel")
-                            }
+                        onCreate = { bizName, firstBookName, firstBookPhone ->
+                            viewModel.createBusiness(bizName, firstBookName, firstBookPhone)
+                            newBusinessName = ""
+                            showAddBusinessDialog = false
+                            Toast.makeText(context, "Business created!", Toast.LENGTH_SHORT).show()
                         }
                     )
                 }
@@ -1785,6 +2183,16 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
     val businesses by viewModel.businesses.collectAsStateWithLifecycle()
     val activeBusiness by viewModel.activeBusiness.collectAsStateWithLifecycle()
     val books by viewModel.books.collectAsStateWithLifecycle()
+    val allBooks by viewModel.allBooks.collectAsStateWithLifecycle()
+    val allTransactions by viewModel.allTransactions.collectAsStateWithLifecycle()
+    val allTeamMembers by viewModel.allTeamMembers.collectAsStateWithLifecycle()
+    val globalAccounts by viewModel.globalAccounts.collectAsStateWithLifecycle()
+    val currentUserEmail by viewModel.currentUserEmail.collectAsStateWithLifecycle()
+    val currentUserName = remember(currentUserEmail) { viewModel.syncManager.getName() }
+    val isSuperAdmin by viewModel.isSuperAdmin.collectAsStateWithLifecycle()
+    val isHomeBusinessesListVisible by viewModel.isHomeBusinessesListVisible.collectAsStateWithLifecycle()
+    val isHomeBooksHubVisible by viewModel.isHomeBooksHubVisible.collectAsStateWithLifecycle()
+    val hideTotalBalance by viewModel.hideTotalBalanceForActiveBusiness.collectAsStateWithLifecycle()
     val activeBook by viewModel.activeBook.collectAsStateWithLifecycle()
     val activeBookTransactions by viewModel.activeBookTransactions.collectAsStateWithLifecycle()
     val selectedIds by viewModel.selectedTransactionIds.collectAsStateWithLifecycle()
@@ -1798,15 +2206,12 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
     var selectedTxForEdit by remember { mutableStateOf<Transaction?>(null) }
     var txPendingDelete by remember { mutableStateOf<Transaction?>(null) }
     var showBatchDeleteConfirm by remember { mutableStateOf(false) }
+    var showHomeAddBusinessDialog by remember { mutableStateOf(false) }
     var showAddBookDialog by remember { mutableStateOf(false) }
     var showEditBookDialog by remember { mutableStateOf(false) }
-    var showBusinessSelectorDialog by remember { mutableStateOf(false) }
-    var showHomeBookSelector by remember { mutableStateOf(false) }
-    var showAddBusinessDialog by remember { mutableStateOf(false) }
     var showShareDialog by remember { mutableStateOf(false) }
     var showWasooliDialog by remember { mutableStateOf(false) }
     var showSearchBar by remember { mutableStateOf(false) }
-    var newBusinessName by remember { mutableStateOf("") }
     var dashboardSearchQuery by remember { mutableStateOf("") }
     var dashboardFilterType by remember { mutableStateOf("all") }
     var dashboardPaymentFilter by remember { mutableStateOf("ALL") }
@@ -1888,207 +2293,784 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
         }.sortedByDescending { it.third }
     }
 
-    if (showBusinessSelectorDialog) {
-        AlertDialog(
-            onDismissRequest = { showBusinessSelectorDialog = false },
-            title = {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Select Business", fontWeight = FontWeight.Bold)
-                    TextButton(onClick = {
-                        showBusinessSelectorDialog = false
-                        showAddBusinessDialog = true
-                    }) {
-                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Add New")
+    if (isHomeBusinessesListVisible) {
+        // LEVEL 1 (Home / Opening): Show ALL Businesses cleanly so user chooses which business to open
+        var homeBizQuery by remember { mutableStateOf("") }
+        val filteredHomeBusinesses = remember(businesses, homeBizQuery) {
+            if (homeBizQuery.isBlank()) businesses
+            else businesses.filter { it.name.contains(homeBizQuery, ignoreCase = true) }
+        }
+        val remindOrange = Color(0xFFEA580C)
+
+        Box(modifier = Modifier.fillMaxSize()) {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(bottom = 84.dp)
+            ) {
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 2.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Your Businesses (${businesses.size})",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                            Text(
+                                text = "Tap a business to view its books",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        FilledTonalButton(
+                            onClick = { showHomeAddBusinessDialog = true },
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = GreenIn.copy(alpha = 0.14f),
+                                contentColor = GreenIn
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier
+                                .heightIn(min = 40.dp)
+                                .testTag("home_add_business_btn")
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("New Business", fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
+                        }
                     }
                 }
-            },
-            text = {
-                LazyColumn(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(businesses) { biz ->
-                        val isSelected = biz.id == activeBusiness?.id
+
+                if (businesses.size > 4) {
+                    item {
+                        OutlinedTextField(
+                            value = homeBizQuery,
+                            onValueChange = { homeBizQuery = it },
+                            placeholder = { Text("Search businesses...") },
+                            trailingIcon = {
+                                if (homeBizQuery.isNotBlank()) {
+                                    IconButton(onClick = { homeBizQuery = "" }) {
+                                        Icon(Icons.Default.Close, contentDescription = "Clear search")
+                                    }
+                                } else {
+                                    Icon(Icons.Default.Search, contentDescription = "Search")
+                                }
+                            },
+                            singleLine = true,
+                            shape = RoundedCornerShape(28.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+
+                items(filteredHomeBusinesses, key = { it.id }) { biz ->
+                    val bizBooks = remember(allBooks, biz.id) { allBooks.filter { it.businessId == biz.id } }
+                    val bizBookIds = remember(bizBooks) { bizBooks.map { it.id }.toSet() }
+                    val bizTxs = remember(allTransactions, bizBookIds) { allTransactions.filter { it.bookId in bizBookIds } }
+                    val bizIn = bizTxs.filter { it.type == "IN" }.sumOf { it.amount }
+                    val bizOut = bizTxs.filter { it.type == "OUT" }.sumOf { it.amount }
+                    val bizNet = bizIn - bizOut
+                    val bizHidden = viewModel.isBalanceHiddenForBusiness(biz, allTeamMembers)
+
+                    val cleanCurr = currentUserEmail.trim().lowercase()
+                    val ownerEmail = biz.userEmail.trim().lowercase()
+                    val isOwnBiz = isSuperAdmin || ownerEmail.isBlank() || ownerEmail == cleanCurr
+                    val memberRole = if (isOwnBiz) {
+                        "Owner"
+                    } else {
+                        allTeamMembers.firstOrNull {
+                            it.businessId == biz.id && it.email.trim().equals(cleanCurr, ignoreCase = true)
+                        }?.role ?: "Shared"
+                    }
+
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { viewModel.openBusinessBooks(biz) }
+                            .testTag("home_biz_card_${biz.id}"),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = GreenIn.copy(alpha = 0.12f),
+                                modifier = Modifier.size(44.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        Icons.Default.Storefront,
+                                        contentDescription = null,
+                                        tint = GreenIn,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
+                            }
+
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(3.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = biz.name,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false)
+                                    )
+                                    if (!isOwnBiz) {
+                                        Surface(
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = MaterialTheme.colorScheme.primaryContainer
+                                        ) {
+                                            Text(
+                                                text = memberRole,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                                Text(
+                                    text = "${bizBooks.size} ${if (bizBooks.size == 1) "Book" else "Books"} • ${bizTxs.size} ${if (bizTxs.size == 1) "entry" else "entries"}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                if (bizHidden) {
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = MaterialTheme.colorScheme.surfaceVariant
+                                    ) {
+                                        Text(
+                                            text = "Hidden",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        )
+                                    }
+                                } else {
+                                    Column(horizontalAlignment = Alignment.End) {
+                                        Text(
+                                            text = "Rs. ${String.format("%,.0f", kotlin.math.abs(bizNet))}",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = if (bizNet >= 0) GreenIn else remindOrange,
+                                            maxLines = 1,
+                                            softWrap = false
+                                        )
+                                        Text(
+                                            text = if (bizNet >= 0) "Net IN" else "Net OUT",
+                                            fontSize = 10.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                Icon(
+                                    Icons.Default.ChevronRight,
+                                    contentDescription = "Open ${biz.name} books",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else if (isHomeBooksHubVisible) {
+        // LEVEL 2: CashBook.in-style Books List for ONLY the Selected Business
+        var hubSearchQuery by remember { mutableStateOf("") }
+        var hubSortMode by remember { mutableStateOf("DEFAULT") } // DEFAULT, BAL_HIGH, NAME_AZ, RECENT
+        var showHubSortMenu by remember { mutableStateOf(false) }
+
+        val booksTxStats = remember(books, allTransactions) {
+            books.associate { bk ->
+                val txs = allTransactions.filter { it.bookId == bk.id }
+                val inSum = txs.filter { it.type == "IN" }.sumOf { it.amount }
+                val outSum = txs.filter { it.type == "OUT" }.sumOf { it.amount }
+                val latestTs = txs.maxOfOrNull { it.timestamp } ?: bk.createdAt
+                bk.id to Pair(Triple(inSum, outSum, inSum - outSum), Pair(txs.size, latestTs))
+            }
+        }
+
+        val totalNetInAcrossBooks = remember(books, booksTxStats) {
+            books.sumOf { bk ->
+                val net = booksTxStats[bk.id]?.first?.third ?: 0.0
+                if (net >= 0.0) net else 0.0
+            }
+        }
+        val totalNetOutAcrossBooks = remember(books, booksTxStats) {
+            books.sumOf { bk ->
+                val net = booksTxStats[bk.id]?.first?.third ?: 0.0
+                if (net < 0.0) kotlin.math.abs(net) else 0.0
+            }
+        }
+
+        val filteredBooks = remember(books, hubSearchQuery, hubSortMode, booksTxStats) {
+            val searched = if (hubSearchQuery.isBlank()) {
+                books
+            } else {
+                books.filter {
+                    it.name.contains(hubSearchQuery, ignoreCase = true) ||
+                        it.phone.contains(hubSearchQuery, ignoreCase = true)
+                }
+            }
+            when (hubSortMode) {
+                "BAL_HIGH" -> searched.sortedByDescending { kotlin.math.abs(booksTxStats[it.id]?.first?.third ?: 0.0) }
+                "NAME_AZ" -> searched.sortedBy { it.name.lowercase() }
+                "RECENT" -> searched.sortedByDescending { booksTxStats[it.id]?.second?.second ?: it.createdAt }
+                else -> searched
+            }
+        }
+
+        val remindOrange = Color(0xFFEA580C)
+
+        Box(modifier = Modifier.fillMaxSize()) {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                contentPadding = PaddingValues(bottom = 84.dp)
+            ) {
+                // 0. Clean Breadcrumb back to All Businesses
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(18.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                            modifier = Modifier
+                                .clickable { viewModel.openBusinessesHome() }
+                                .testTag("hub_back_to_businesses_btn")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "All Businesses",
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Text(
+                                    text = "All Businesses",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+
+                        Text(
+                            text = "${books.size} ${if (books.size == 1) "Book" else "Books"}",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                // 1. Two Side-by-Side Elevated White Summary Cards (Total Net IN vs Total Net OUT)
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Surface(
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.surface,
+                            shadowElevation = 2.dp,
+                            border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 14.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(3.dp)
+                            ) {
+                                Text(
+                                    text = if (hideTotalBalance) "••••" else "Rs. ${String.format("%,.0f", totalNetInAcrossBooks)}",
+                                    style = MaterialTheme.typography.titleMedium.copy(fontSize = 17.sp),
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = if (hideTotalBalance) MaterialTheme.colorScheme.onSurfaceVariant else GreenIn,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = if (hideTotalBalance) "Balance Hidden" else "Total Net IN",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+
+                        Surface(
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.surface,
+                            shadowElevation = 2.dp,
+                            border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 14.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(3.dp)
+                            ) {
+                                Text(
+                                    text = if (hideTotalBalance) "••••" else "Rs. ${String.format("%,.0f", totalNetOutAcrossBooks)}",
+                                    style = MaterialTheme.typography.titleMedium.copy(fontSize = 17.sp),
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = if (hideTotalBalance) MaterialTheme.colorScheme.onSurfaceVariant else remindOrange,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = if (hideTotalBalance) "Balance Hidden" else "Total Net OUT",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // 2. Pill Search Field + Sort + PDF Strip
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = hubSearchQuery,
+                            onValueChange = { hubSearchQuery = it },
+                            placeholder = {
+                                Text(
+                                    "Search Books...",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            },
+                            trailingIcon = {
+                                if (hubSearchQuery.isNotBlank()) {
+                                    IconButton(onClick = { hubSearchQuery = "" }) {
+                                        Icon(Icons.Default.Close, contentDescription = "Clear search")
+                                    }
+                                } else {
+                                    Icon(
+                                        Icons.Default.Search,
+                                        contentDescription = "Search books",
+                                        tint = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            },
+                            singleLine = true,
+                            shape = RoundedCornerShape(28.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                                focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
+                                unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("hub_search_input")
+                        )
+
+                        Box {
+                            IconButton(
+                                onClick = { showHubSortMenu = true },
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("hub_sort_button")
+                            ) {
+                                Icon(
+                                    Icons.Default.SwapVert,
+                                    contentDescription = "Sort books",
+                                    tint = if (hubSortMode != "DEFAULT") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = showHubSortMenu,
+                                onDismissRequest = { showHubSortMenu = false }
+                            ) {
+                                listOf(
+                                    "DEFAULT" to "Default Order",
+                                    "BAL_HIGH" to "Highest Balance",
+                                    "NAME_AZ" to "Name (A–Z)",
+                                    "RECENT" to "Most Recent"
+                                ).forEach { (mode, label) ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                label,
+                                                fontWeight = if (hubSortMode == mode) FontWeight.Bold else FontWeight.Normal,
+                                                color = if (hubSortMode == mode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                            )
+                                        },
+                                        onClick = {
+                                            hubSortMode = mode
+                                            showHubSortMenu = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        IconButton(
+                            onClick = {
+                                if (hideTotalBalance) {
+                                    Toast.makeText(context, "Balances are hidden by Admin.", Toast.LENGTH_SHORT).show()
+                                } else if (books.isEmpty()) {
+                                    Toast.makeText(context, "No cashbooks to export yet.", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    try {
+                                        val rows = books.map { bk ->
+                                            val st = booksTxStats[bk.id]
+                                            val sums = st?.first ?: Triple(0.0, 0.0, 0.0)
+                                            val cnt = st?.second?.first ?: 0
+                                            Triple(bk, sums, cnt)
+                                        }
+                                        val pdfFile = generateBusinessBooksSummaryPdf(
+                                            context = context,
+                                            businessName = activeBusiness?.name ?: "Business",
+                                            rows = rows
+                                        )
+                                        val pdfUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", pdfFile)
+                                        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                            type = "application/pdf"
+                                            putExtra(Intent.EXTRA_STREAM, pdfUri)
+                                            clipData = ClipData.newRawUri("Business Books Summary PDF", pdfUri)
+                                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                        }
+                                        context.startActivity(
+                                            Intent.createChooser(shareIntent, "Share ${activeBusiness?.name ?: "Business"} Books PDF")
+                                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        )
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "PDF Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("hub_pdf_button")
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                border = BorderStroke(1.3.dp, MaterialTheme.colorScheme.onSurface),
+                                color = MaterialTheme.colorScheme.surface
+                            ) {
+                                Text(
+                                    text = "PDF",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // 3. Empty State OR Divider-Separated Books List
+                if (books.isEmpty()) {
+                    item {
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable {
-                                    viewModel.selectBusiness(biz)
-                                    showBusinessSelectorDialog = false
-                                },
-                            colors = CardDefaults.cardColors(
-                                containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+                                .padding(top = 8.dp),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(28.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.MenuBook,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
+                                    modifier = Modifier.size(48.dp)
+                                )
+                                Text(
+                                    text = "No Books in ${activeBusiness?.name ?: "this business"} yet",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    textAlign = TextAlign.Center
+                                )
+                                Text(
+                                    text = if (hasPermission(simulatedRole, "add_book", isBookRestricted))
+                                        "Add your first customer or cashbook for this business to begin tracking."
+                                    else
+                                        "Ask the business owner or admin to share a book with you.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center
+                                )
+                                if (hasPermission(simulatedRole, "add_book", isBookRestricted)) {
+                                    Button(
+                                        onClick = { showAddBookDialog = true },
+                                        colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                                        shape = RoundedCornerShape(10.dp),
+                                        modifier = Modifier.testTag("hub_empty_add_book_btn")
+                                    ) {
+                                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Add Book", fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if (filteredBooks.isEmpty()) {
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 36.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "No books match \"$hubSearchQuery\"",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                        }
+                    }
+                } else {
+                    items(filteredBooks, key = { it.id }) { bk ->
+                        val st = booksTxStats[bk.id]
+                        val bkNet = st?.first?.third ?: 0.0
+                        val txCount = st?.second?.first ?: 0
+                        val isPositive = bkNet >= 0.0
+                        val initialLetter = bk.name.trim().take(1).uppercase().ifBlank { "B" }
+                        val amtColor = if (isPositive) GreenIn else remindOrange
+
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { viewModel.openBookLedger(bk) }
+                                .testTag("hub_book_card_${bk.id}")
                         ) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(14.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                                    .padding(vertical = 12.dp, horizontal = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    Icon(
-                                        Icons.Default.Storefront,
-                                        contentDescription = null,
-                                        tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                // Outlined circular letter avatar
+                                Surface(
+                                    modifier = Modifier.size(42.dp),
+                                    shape = CircleShape,
+                                    color = MaterialTheme.colorScheme.surface,
+                                    border = BorderStroke(1.1.dp, MaterialTheme.colorScheme.outlineVariant)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Text(
+                                            text = initialLetter,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Medium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+
+                                // Book name + subtle entry count / phone
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                                ) {
+                                    Text(
+                                        text = bk.name,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                     Text(
-                                        biz.name,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                        color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                        text = buildString {
+                                            append("$txCount ")
+                                            append(if (txCount == 1) "entry" else "entries")
+                                            if (bk.phone.isNotBlank()) append(" • ${bk.phone}")
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                 }
-                                if (isSelected) {
-                                    Icon(Icons.Default.Check, contentDescription = "Selected", tint = MaterialTheme.colorScheme.primary)
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showBusinessSelectorDialog = false }) {
-                    Text("Close")
-                }
-            }
-        )
-    }
 
-    if (showAddBusinessDialog) {
-        AlertDialog(
-            onDismissRequest = { showAddBusinessDialog = false },
-            title = { Text("Create Business Account") },
-            text = {
-                OutlinedTextField(
-                    value = newBusinessName,
-                    onValueChange = { newBusinessName = it },
-                    label = { Text("Business Entity Name") },
-                    placeholder = { Text("e.g. Retail Shop, Personal") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        if (newBusinessName.isNotBlank()) {
-                            viewModel.createBusiness(newBusinessName.trim())
-                            newBusinessName = ""
-                            showAddBusinessDialog = false
-                        }
-                    }
-                ) {
-                    Text("Create")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showAddBusinessDialog = false }) {
-                    Text("Cancel")
-                }
-            }
-        )
-    }
-
-    if (showHomeBookSelector) {
-        AlertDialog(
-            onDismissRequest = { showHomeBookSelector = false },
-            title = {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Select Active Book", fontWeight = FontWeight.Bold)
-                    if (hasPermission(simulatedRole, "add_book", isBookRestricted)) {
-                        TextButton(onClick = {
-                            showHomeBookSelector = false
-                            showAddBookDialog = true
-                        }) {
-                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("New Book")
-                        }
-                    }
-                }
-            },
-            text = {
-                if (books.isEmpty()) {
-                    Text("No books found in this business yet.")
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        items(books) { book ->
-                            val isSelected = book.id == activeBook?.id
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        viewModel.selectBook(book)
-                                        showHomeBookSelector = false
-                                    },
-                                colors = CardDefaults.cardColors(
-                                    containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
-                                )
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(14.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
+                                // Right: Amount + SEND (Green) / REMIND (Orange) pill
+                                if (hideTotalBalance) {
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = MaterialTheme.colorScheme.surfaceVariant
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.VisibilityOff,
+                                                contentDescription = "Balance Hidden",
+                                                modifier = Modifier.size(13.dp),
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            Text(
+                                                text = "Hidden",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                } else {
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                        modifier = Modifier.weight(1f)
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
-                                        Icon(
-                                            Icons.Default.MenuBook,
-                                            contentDescription = null,
-                                            tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                        Text(
+                                            text = "Rs. ${String.format("%,.0f", kotlin.math.abs(bkNet))}",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = amtColor,
+                                            maxLines = 1,
+                                            softWrap = false
                                         )
-                                        Column {
-                                            Text(
-                                                book.name,
-                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                                            )
-                                            if (book.phone.isNotBlank()) {
+                                        Surface(
+                                            onClick = {
+                                                val bizName = activeBusiness?.name ?: "CashBook Pro"
+                                                val absAmt = String.format("%,.0f", kotlin.math.abs(bkNet))
+                                                val msg = if (isPositive) {
+                                                    "Account summary from $bizName for ${bk.name}: Net IN balance is Rs. $absAmt ($txCount entries)."
+                                                } else {
+                                                    "Payment reminder from $bizName for ${bk.name}: Pending balance is Rs. $absAmt. Please settle at your earliest convenience. Thank you!"
+                                                }
+                                                val sendIntent = Intent().apply {
+                                                    action = Intent.ACTION_SEND
+                                                    putExtra(Intent.EXTRA_TEXT, msg)
+                                                    type = "text/plain"
+                                                    if (bk.phone.isNotBlank()) {
+                                                        putExtra(
+                                                            "jid",
+                                                            "${bk.phone.replace("+", "").replace("-", "").replace(" ", "")}@s.whatsapp.net"
+                                                        )
+                                                    }
+                                                }
+                                                try {
+                                                    context.startActivity(
+                                                        Intent.createChooser(
+                                                            sendIntent,
+                                                            if (isPositive) "Send Book Summary" else "Send Payment Reminder"
+                                                        )
+                                                    )
+                                                } catch (_: Exception) {
+                                                    Toast.makeText(context, "Could not open sharing app", Toast.LENGTH_SHORT).show()
+                                                }
+                                            },
+                                            shape = RoundedCornerShape(18.dp),
+                                            color = if (isPositive) GreenIn else remindOrange,
+                                            modifier = Modifier
+                                                .defaultMinSize(minWidth = 72.dp, minHeight = 30.dp)
+                                                .testTag("hub_book_action_${bk.id}")
+                                        ) {
+                                            Box(
+                                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
                                                 Text(
-                                                    book.phone,
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    text = if (isPositive) "SEND" else "REMIND",
+                                                    color = Color.White,
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    maxLines = 1,
+                                                    softWrap = false
                                                 )
                                             }
                                         }
                                     }
-                                    if (isSelected) {
-                                        Icon(Icons.Default.Check, contentDescription = "Selected", tint = MaterialTheme.colorScheme.primary)
-                                    }
                                 }
                             }
+                            HorizontalDivider(
+                                thickness = 0.6.dp,
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                            )
                         }
                     }
                 }
-            },
-            confirmButton = {
-                TextButton(onClick = { showHomeBookSelector = false }) {
-                    Text("Close")
-                }
             }
-        )
-    }
 
-    // Best-in-class CashBook / Udhar Layout:
-    // Top compact Active Cashbook Summary -> Middle full-height Active Book Entries -> Sticky Bottom IN / OUT buttons
-    Column(modifier = Modifier.fillMaxSize()) {
+            if (hasPermission(simulatedRole, "add_book", isBookRestricted)) {
+                ExtendedFloatingActionButton(
+                    onClick = { showAddBookDialog = true },
+                    containerColor = GreenIn,
+                    contentColor = Color.White,
+                    icon = { Icon(Icons.Default.LibraryAdd, contentDescription = null) },
+                    text = { Text("New Book", fontWeight = FontWeight.Bold) },
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(16.dp)
+                        .testTag("hub_add_book_btn")
+                )
+            }
+        }
+    } else {
+        // Best-in-class CashBook / Ledger View for Opened Cashbook
+        Column(modifier = Modifier.fillMaxSize()) {
         // 1. Batch Selection Header Banner (if multi-selecting entries)
         if (selectedIds.isNotEmpty()) {
             Card(
@@ -2146,253 +3128,170 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 10.dp, vertical = 7.dp),
-                verticalArrangement = Arrangement.spacedBy(5.dp)
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                // Top Row: Business Pill + Book Name/Edit + Compact Switch/Full
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.weight(1f)
+                // Balance + Cash/Bank Split + REMIND (Masked if Hide Balance enabled; TopAppBar handles Book/Business/Back/Edit)
+                if (hideTotalBalance) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
-                            modifier = Modifier.clickable { showBusinessSelectorDialog = true }
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
+                            Icon(
+                                Icons.Default.VisibilityOff,
+                                contentDescription = "Balances Hidden",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = "Total Balances Hidden by Admin",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                Icon(
-                                    Icons.Default.Storefront,
-                                    contentDescription = "Select Business",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(12.dp)
+                                Text(
+                                    text = "Rs. ${String.format("%,.0f", kotlin.math.abs(activeNet))}",
+                                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Black, fontSize = 20.sp),
+                                    color = if (activeNet >= 0) Color(0xFF16A34A) else RedOut,
+                                    maxLines = 1,
+                                    softWrap = false
                                 )
                                 Text(
-                                    text = activeBusiness?.name ?: "Personal",
+                                    text = if (activeNet >= 0) "• Net IN" else "• Net OUT",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1
+                                )
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Text(
+                                    "IN ${String.format("%,.0f", activeIn)}",
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary,
+                                    color = GreenIn,
                                     maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
+                                    softWrap = false
                                 )
-                                Icon(
-                                    Icons.Default.ArrowDropDown,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                            }
-                        }
-
-                        if (activeBook != null) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.clickable { showEditBookDialog = true }
-                            ) {
+                                Text("•", fontSize = 10.sp, color = Color.Gray)
                                 Text(
-                                    text = activeBook!!.name,
-                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.ExtraBold),
-                                    color = MaterialTheme.colorScheme.onSurface,
+                                    "OUT ${String.format("%,.0f", activeOut)}",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = RedOut,
                                     maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
+                                    softWrap = false
                                 )
-                                Spacer(modifier = Modifier.width(3.dp))
-                                Icon(
-                                    Icons.Default.Edit,
-                                    contentDescription = "Edit Customer / Book",
-                                    tint = Color.Gray,
-                                    modifier = Modifier.size(12.dp)
-                                )
-                            }
-                        }
-                    }
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
-                            color = Color.Transparent,
-                            modifier = Modifier
-                                .clickable { showHomeBookSelector = true }
-                                .testTag("home_switch_active_book_btn")
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(2.dp)
-                            ) {
-                                Icon(Icons.Default.SwapHoriz, contentDescription = "Switch Active Book", modifier = Modifier.size(12.dp), tint = MaterialTheme.colorScheme.primary)
-                                Text("Switch", fontWeight = FontWeight.Bold, fontSize = 10.sp, color = MaterialTheme.colorScheme.primary)
-                            }
-                        }
-
-                        if (activeBook != null) {
-                            Surface(
-                                shape = RoundedCornerShape(6.dp),
-                                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f),
-                                modifier = Modifier
-                                    .clickable { viewModel.setScreen(Screen.UDHAR) }
-                                    .testTag("home_open_active_ledger_btn")
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                val cashSelected = dashboardPaymentFilter == "Cash"
+                                Surface(
+                                    shape = RoundedCornerShape(4.dp),
+                                    color = if (cashSelected) Color(0xFFDCFCE7) else Color(0xFFF1F5F9),
+                                    border = if (cashSelected) BorderStroke(1.dp, GreenIn) else null,
+                                    modifier = Modifier
+                                        .clickable {
+                                            dashboardPaymentFilter = if (cashSelected) "ALL" else "Cash"
+                                        }
+                                        .testTag("home_cash_split_chip")
                                 ) {
-                                    Text("Full", fontWeight = FontWeight.Bold, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSecondaryContainer)
-                                    Icon(Icons.Default.OpenInFull, contentDescription = "Full View", modifier = Modifier.size(11.dp), tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                                    Text(
+                                        text = "Cash: ${String.format("%,.0f", activeCashNet)}",
+                                        fontSize = 9.5.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (activeCashNet >= 0) Color(0xFF15803D) else RedOut,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                    )
                                 }
+                                val bankSelected = dashboardPaymentFilter == "BANK_ONLINE" || dashboardPaymentFilter == "Bank" || dashboardPaymentFilter == "Online"
+                                Surface(
+                                    shape = RoundedCornerShape(4.dp),
+                                    color = if (bankSelected) Color(0xFFDBEAFE) else Color(0xFFF1F5F9),
+                                    border = if (bankSelected) BorderStroke(1.dp, Color(0xFF2563EB)) else null,
+                                    modifier = Modifier
+                                        .clickable {
+                                            dashboardPaymentFilter = if (bankSelected) "ALL" else "BANK_ONLINE"
+                                        }
+                                        .testTag("home_bank_split_chip")
+                                ) {
+                                    Text(
+                                        text = "Bank: ${String.format("%,.0f", activeBankNet)}",
+                                        fontSize = 9.5.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (activeBankNet >= 0) Color(0xFF1D4ED8) else RedOut,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        if (activeBook != null) {
+                            Button(
+                                onClick = {
+                                    val phone = activeBook?.phone ?: ""
+                                    val customerName = activeBook?.name ?: "Customer"
+                                    val bizName = activeBusiness?.name ?: "CashBook Pro"
+                                    val dueLine = if (activeWasooliDue != null) {
+                                        " Due date: ${SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(activeWasooliDue))}."
+                                    } else ""
+                                    val remMsg = "Payment reminder from $bizName for $customerName: Pending balance is Rs. ${String.format("%,.0f", kotlin.math.abs(activeNet))}.$dueLine Please settle at your earliest convenience. Thank you!"
+                                    val sendIntent = Intent().apply {
+                                        action = Intent.ACTION_SEND
+                                        putExtra(Intent.EXTRA_TEXT, remMsg)
+                                        type = "text/plain"
+                                        if (phone.isNotBlank()) {
+                                            putExtra("jid", "${phone.replace("+", "").replace("-", "").replace(" ", "")}@s.whatsapp.net")
+                                        }
+                                    }
+                                    try {
+                                        context.startActivity(Intent.createChooser(sendIntent, "Send Payment Reminder"))
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "Could not open sharing app", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C)),
+                                shape = RoundedCornerShape(16.dp),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                                modifier = Modifier
+                                    .height(30.dp)
+                                    .testTag("home_remind_button")
+                            ) {
+                                Text("REMIND", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = Color.White)
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Icon(Icons.Default.Send, contentDescription = "Send Payment Reminder", tint = Color.White, modifier = Modifier.size(12.dp))
                             }
                         }
                     }
                 }
 
-                // Middle Row: Compact Net Balance + Single-line Cash/Bank Split + Compact REMIND
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Text(
-                                text = "Rs. ${String.format("%,.0f", kotlin.math.abs(activeNet))}",
-                                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Black, fontSize = 20.sp),
-                                color = if (activeNet >= 0) Color(0xFF16A34A) else RedOut,
-                                maxLines = 1,
-                                softWrap = false
-                            )
-                            Text(
-                                text = if (activeNet >= 0) "• Net IN" else "• Net OUT",
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 1
-                            )
-                        }
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp)
-                        ) {
-                            Text(
-                                "IN ${String.format("%,.0f", activeIn)}",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = GreenIn,
-                                maxLines = 1,
-                                softWrap = false
-                            )
-                            Text("•", fontSize = 10.sp, color = Color.Gray)
-                            Text(
-                                "OUT ${String.format("%,.0f", activeOut)}",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = RedOut,
-                                maxLines = 1,
-                                softWrap = false
-                            )
-                            val cashSelected = dashboardPaymentFilter == "Cash"
-                            Surface(
-                                shape = RoundedCornerShape(4.dp),
-                                color = if (cashSelected) Color(0xFFDCFCE7) else Color(0xFFF1F5F9),
-                                border = if (cashSelected) BorderStroke(1.dp, GreenIn) else null,
-                                modifier = Modifier
-                                    .clickable {
-                                        dashboardPaymentFilter = if (cashSelected) "ALL" else "Cash"
-                                    }
-                                    .testTag("home_cash_split_chip")
-                            ) {
-                                Text(
-                                    text = "Cash: ${String.format("%,.0f", activeCashNet)}",
-                                    fontSize = 9.5.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (activeCashNet >= 0) Color(0xFF15803D) else RedOut,
-                                    maxLines = 1,
-                                    softWrap = false,
-                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
-                                )
-                            }
-                            val bankSelected = dashboardPaymentFilter == "BANK_ONLINE" || dashboardPaymentFilter == "Bank" || dashboardPaymentFilter == "Online"
-                            Surface(
-                                shape = RoundedCornerShape(4.dp),
-                                color = if (bankSelected) Color(0xFFDBEAFE) else Color(0xFFF1F5F9),
-                                border = if (bankSelected) BorderStroke(1.dp, Color(0xFF2563EB)) else null,
-                                modifier = Modifier
-                                    .clickable {
-                                        dashboardPaymentFilter = if (bankSelected) "ALL" else "BANK_ONLINE"
-                                    }
-                                    .testTag("home_bank_split_chip")
-                            ) {
-                                Text(
-                                    text = "Bank: ${String.format("%,.0f", activeBankNet)}",
-                                    fontSize = 9.5.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (activeBankNet >= 0) Color(0xFF1D4ED8) else RedOut,
-                                    maxLines = 1,
-                                    softWrap = false,
-                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
-                                )
-                            }
-                        }
-                    }
-
-                    if (activeBook != null) {
-                        Button(
-                            onClick = {
-                                val phone = activeBook?.phone ?: ""
-                                val customerName = activeBook?.name ?: "Customer"
-                                val bizName = activeBusiness?.name ?: "CashBook Pro"
-                                val dueLine = if (activeWasooliDue != null) {
-                                    " Due date: ${SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(activeWasooliDue))}."
-                                } else ""
-                                val remMsg = "Payment reminder from $bizName for $customerName: Pending balance is Rs. ${String.format("%,.0f", kotlin.math.abs(activeNet))}.$dueLine Please settle at your earliest convenience. Thank you!"
-                                val sendIntent = Intent().apply {
-                                    action = Intent.ACTION_SEND
-                                    putExtra(Intent.EXTRA_TEXT, remMsg)
-                                    type = "text/plain"
-                                    if (phone.isNotBlank()) {
-                                        putExtra("jid", "${phone.replace("+", "").replace("-", "").replace(" ", "")}@s.whatsapp.net")
-                                    }
-                                }
-                                try {
-                                    context.startActivity(Intent.createChooser(sendIntent, "Send Payment Reminder"))
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "Could not open sharing app", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C)),
-                            shape = RoundedCornerShape(16.dp),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                            modifier = Modifier
-                                .height(30.dp)
-                                .testTag("home_remind_button")
-                        ) {
-                            Text("REMIND", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = Color.White)
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Icon(Icons.Default.Send, contentDescription = "Send Payment Reminder", tint = Color.White, modifier = Modifier.size(12.dp))
-                        }
-                    }
-                }
-
-                // Slim Single-Row Small Icon Quick Actions
+                // Slim Single-Row Small Icon Quick Actions (Cleanly without Settle)
                 if (activeBook != null) {
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
                     Row(
@@ -2406,10 +3305,8 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                         val quickActions = listOf(
                             Triple("Wasooli", Icons.Default.EventAvailable, Color(0xFF0284C7)),
                             Triple("Call", Icons.Default.Call, Color(0xFF0D9488)),
-                            Triple("Settle", Icons.Default.CheckCircleOutline, Color(0xFF16A34A)),
                             Triple("PDF", Icons.Default.PictureAsPdf, Color(0xFF7C3AED)),
-                            Triple("Search", Icons.Default.Search, Color(0xFFD97706)),
-                            Triple("Manage", Icons.Default.BusinessCenter, Color(0xFF475569))
+                            Triple("Search", Icons.Default.Search, Color(0xFFD97706))
                         )
                         quickActions.forEach { (label, icon, color) ->
                             val highlighted = (label == "Wasooli" && activeWasooliDue != null) ||
@@ -2436,21 +3333,8 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                                                     }
                                                 }
                                             }
-                                            "Settle" -> {
-                                                if (!hasPermission(simulatedRole, "add_transaction")) {
-                                                    Toast.makeText(context, "Unauthorized role", Toast.LENGTH_SHORT).show()
-                                                } else if (kotlin.math.abs(activeNet) < 0.5) {
-                                                    Toast.makeText(context, "Balance is already Rs. 0 (Settled)", Toast.LENGTH_SHORT).show()
-                                                } else {
-                                                    val absBal = kotlin.math.abs(activeNet)
-                                                    prefillAmountForDialog = if (absBal % 1.0 == 0.0) absBal.toLong().toString() else String.format(Locale.US, "%.2f", absBal)
-                                                    prefillRemarksForDialog = "Full Settlement / Clear"
-                                                    showTransactionDialog = if (activeNet < 0) "IN" else "OUT"
-                                                }
-                                            }
                                             "PDF" -> showShareDialog = true
                                             "Search" -> showSearchBar = !showSearchBar
-                                            "Manage" -> viewModel.setScreen(Screen.MANAGE_WORKSPACE)
                                         }
                                     }
                                     .testTag("home_action_${label.lowercase()}")
@@ -2564,7 +3448,7 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Date • ${activeBook?.name ?: "Cashbook"} (${displayedActiveTxs.size})",
+                    text = "Date • Entries (${displayedActiveTxs.size})",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontWeight = FontWeight.Bold
@@ -2656,7 +3540,7 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(horizontal = 12.dp),
-                    contentPadding = PaddingValues(top = 4.dp, bottom = 68.dp),
+                    contentPadding = PaddingValues(top = 4.dp, bottom = if (hasPermission(simulatedRole, "add_transaction")) 68.dp else 16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     groupedActiveTxs.forEach { (headerTitle, dayData, _) ->
@@ -2682,9 +3566,11 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                                         fontWeight = FontWeight.Bold,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        if (dayIn > 0) Text("+${String.format("%,.0f", dayIn)}", style = MaterialTheme.typography.labelSmall, color = GreenIn, fontWeight = FontWeight.Bold)
-                                        if (dayOut > 0) Text("-${String.format("%,.0f", dayOut)}", style = MaterialTheme.typography.labelSmall, color = RedOut, fontWeight = FontWeight.Bold)
+                                    if (!hideTotalBalance) {
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            if (dayIn > 0) Text("+${String.format("%,.0f", dayIn)}", style = MaterialTheme.typography.labelSmall, color = GreenIn, fontWeight = FontWeight.Bold)
+                                            if (dayOut > 0) Text("-${String.format("%,.0f", dayOut)}", style = MaterialTheme.typography.labelSmall, color = RedOut, fontWeight = FontWeight.Bold)
+                                        }
                                     }
                                 }
                             }
@@ -2693,18 +3579,29 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                         items(dayTxs) { tx ->
                             val isSelected = selectedIds.contains(tx.id)
                             val txRunningBal = runningBalanceMap[tx.id] ?: 0.0
+                            val resolvedAuthor = resolveTransactionAddedBy(
+                                tx = tx,
+                                ownerEmail = activeBusiness?.userEmail ?: "",
+                                currentUserEmail = currentUserEmail,
+                                currentUserName = currentUserName,
+                                teamMembers = allTeamMembers.filter { activeBusiness == null || it.businessId == activeBusiness?.id },
+                                globalAccounts = globalAccounts
+                            )
                             TransactionItemCard(
                                 transaction = tx,
                                 runningBalance = txRunningBal,
+                                hideBalance = hideTotalBalance,
                                 bookName = activeBook?.name ?: "",
                                 businessName = activeBusiness?.name ?: "",
+                                resolvedAddedBy = resolvedAuthor.displayName,
+                                isAddedByOwner = resolvedAuthor.isOwner,
                                 isSelected = isSelected,
                                 onToggleSelection = { viewModel.toggleTransactionSelection(tx.id) },
                                 onDelete = {
                                     if (hasPermission(simulatedRole, "delete_transaction")) {
                                         txPendingDelete = tx
                                     } else {
-                                        Toast.makeText(context, "Unauthorized role: Partner cannot delete entries.", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "Unauthorized role: Cannot delete entries.", Toast.LENGTH_SHORT).show()
                                     }
                                 },
                                 onEdit = {
@@ -2720,75 +3617,74 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                 }
             }
 
-            // Floating CashBook-Style Solid Green & Red Buttons (Zero separate bar!)
-            Row(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Button(
-                    onClick = {
-                        if (activeBook == null) {
-                            Toast.makeText(context, "Please select or create a cashbook first", Toast.LENGTH_SHORT).show()
-                        } else if (hasPermission(simulatedRole, "add_transaction")) {
-                            prefillAmountForDialog = ""
-                            prefillRemarksForDialog = ""
-                            showTransactionDialog = "IN"
-                        } else {
-                            Toast.makeText(context, "Unauthorized role", Toast.LENGTH_SHORT).show()
-                        }
-                    },
+            // Floating CashBook-Style Solid Green & Red Buttons (hidden cleanly for Viewer Read-Only role!)
+            if (hasPermission(simulatedRole, "add_transaction")) {
+                Row(
                     modifier = Modifier
-                        .weight(1f)
-                        .height(46.dp)
-                        .minimumInteractiveComponentSize()
-                        .testTag("quick_cash_in_btn"),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF16A34A),
-                        contentColor = Color.White
-                    ),
-                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp, pressedElevation = 2.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                    shape = RoundedCornerShape(10.dp)
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("CASH IN", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = Color.White, maxLines = 1, softWrap = false)
-                }
+                    Button(
+                        onClick = {
+                            if (activeBook == null) {
+                                Toast.makeText(context, "Please select or create a cashbook first", Toast.LENGTH_SHORT).show()
+                            } else {
+                                prefillAmountForDialog = ""
+                                prefillRemarksForDialog = ""
+                                showTransactionDialog = "IN"
+                            }
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(46.dp)
+                            .minimumInteractiveComponentSize()
+                            .testTag("quick_cash_in_btn"),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF16A34A),
+                            contentColor = Color.White
+                        ),
+                        elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp, pressedElevation = 2.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("CASH IN", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = Color.White, maxLines = 1, softWrap = false)
+                    }
 
-                Button(
-                    onClick = {
-                        if (activeBook == null) {
-                            Toast.makeText(context, "Please select or create a cashbook first", Toast.LENGTH_SHORT).show()
-                        } else if (hasPermission(simulatedRole, "add_transaction")) {
-                            prefillAmountForDialog = ""
-                            prefillRemarksForDialog = ""
-                            showTransactionDialog = "OUT"
-                        } else {
-                            Toast.makeText(context, "Unauthorized role", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(46.dp)
-                        .minimumInteractiveComponentSize()
-                        .testTag("quick_cash_out_btn"),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFFDC2626),
-                        contentColor = Color.White
-                    ),
-                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp, pressedElevation = 2.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Icon(Icons.Default.Remove, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("CASH OUT", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = Color.White, maxLines = 1, softWrap = false)
+                    Button(
+                        onClick = {
+                            if (activeBook == null) {
+                                Toast.makeText(context, "Please select or create a cashbook first", Toast.LENGTH_SHORT).show()
+                            } else {
+                                prefillAmountForDialog = ""
+                                prefillRemarksForDialog = ""
+                                showTransactionDialog = "OUT"
+                            }
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(46.dp)
+                            .minimumInteractiveComponentSize()
+                            .testTag("quick_cash_out_btn"),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFFDC2626),
+                            contentColor = Color.White
+                        ),
+                        elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp, pressedElevation = 2.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.Remove, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("CASH OUT", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = Color.White, maxLines = 1, softWrap = false)
+                    }
                 }
             }
         }
+    }
     }
 
     // Add Transaction Dialog
@@ -2846,6 +3742,17 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                     )
                 )
                 selectedTxForEdit = null
+            }
+        )
+    }
+
+    if (showHomeAddBusinessDialog) {
+        CreateBusinessWithOptionalBookDialog(
+            onDismiss = { showHomeAddBusinessDialog = false },
+            onCreate = { bizName, firstBookName, firstBookPhone ->
+                viewModel.createBusiness(bizName, firstBookName, firstBookPhone)
+                showHomeAddBusinessDialog = false
+                Toast.makeText(context, "Business created!", Toast.LENGTH_SHORT).show()
             }
         )
     }
@@ -2966,7 +3873,12 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
     val selectedPaymentMethod by viewModel.selectedPaymentMethod.collectAsStateWithLifecycle()
     val selectedIds by viewModel.selectedTransactionIds.collectAsStateWithLifecycle()
     val simulatedRole by viewModel.simulatedRole.collectAsStateWithLifecycle()
+    val hideTotalBalance by viewModel.hideTotalBalanceForActiveBusiness.collectAsStateWithLifecycle()
     val wasooliDueDates by viewModel.wasooliDueDates.collectAsStateWithLifecycle()
+    val allTeamMembers by viewModel.allTeamMembers.collectAsStateWithLifecycle()
+    val globalAccounts by viewModel.globalAccounts.collectAsStateWithLifecycle()
+    val currentUserEmail by viewModel.currentUserEmail.collectAsStateWithLifecycle()
+    val currentUserName = remember(currentUserEmail) { viewModel.syncManager.getName() }
 
     var showTransactionDialog by remember { mutableStateOf<String?>(null) }
     var prefillAmountForDialog by remember { mutableStateOf("") }
@@ -3171,18 +4083,30 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                                     Icon(Icons.Default.Edit, contentDescription = "Edit name", modifier = Modifier.size(13.dp), tint = Color.Gray)
                                 }
                             }
-                            if (activeBook?.phone?.isNotBlank() == true) {
+                            val subtitleText = buildString {
+                                if (!activeBusiness?.name.isNullOrBlank()) append(activeBusiness!!.name)
+                                if (activeBook?.phone?.isNotBlank() == true) {
+                                    if (isNotEmpty()) append(" • ")
+                                    append(activeBook!!.phone)
+                                }
+                            }
+                            if (subtitleText.isNotBlank()) {
                                 Text(
-                                    text = activeBook?.phone ?: "",
+                                    text = subtitleText,
                                     fontSize = 10.sp,
-                                    color = Color.Gray
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }
                     }
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = { viewModel.setScreen(Screen.REPORTS) }) {
+                        IconButton(onClick = {
+                            activeBook?.let { viewModel.openBookReport(it) } ?: viewModel.setScreen(Screen.REPORTS)
+                        }) {
                             Icon(Icons.Default.Analytics, contentDescription = "Reports", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
                         }
                         // PDF Statement button
@@ -3200,9 +4124,6 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                                     modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                                 )
                             }
-                        }
-                        IconButton(onClick = { showEditBookDialog = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "More options", tint = Color.Gray, modifier = Modifier.size(20.dp))
                         }
                     }
                 }
@@ -3222,118 +4143,145 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
                     verticalArrangement = Arrangement.spacedBy(5.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            val balanceText = "Rs. ${String.format("%,.0f", kotlin.math.abs(netBalance))}"
+                    if (hideTotalBalance) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
                             Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Text(
-                                    text = balanceText,
-                                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Black, fontSize = 20.sp),
-                                    color = if (netBalance >= 0) Color(0xFF16A34A) else RedOut,
-                                    maxLines = 1,
-                                    softWrap = false
+                                Icon(
+                                    Icons.Default.VisibilityOff,
+                                    contentDescription = "Balances Hidden",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(16.dp)
                                 )
                                 Text(
-                                    text = if (netBalance >= 0) "• Net Cash IN" else "• Net Cash OUT",
-                                    fontSize = 11.sp,
-                                    color = Color(0xFF64748B),
-                                    fontWeight = FontWeight.SemiBold,
-                                    maxLines = 1
+                                    text = "Total Balances Hidden by Admin",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
-                            }
-                            Spacer(modifier = Modifier.height(3.dp))
-                            Row(
-                                modifier = Modifier.horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                val cashSel = detailPaymentFilter == "Cash"
-                                Surface(
-                                    shape = RoundedCornerShape(5.dp),
-                                    color = if (cashSel) Color(0xFFDCFCE7) else Color(0xFFF1F5F9),
-                                    border = if (cashSel) BorderStroke(1.dp, GreenIn) else null,
-                                    modifier = Modifier.clickable {
-                                        detailPaymentFilter = if (cashSel) "ALL" else "Cash"
-                                    }
-                                ) {
-                                    Text(
-                                        text = "Cash: Rs. ${String.format("%,.0f", cashNet)}",
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (cashNet >= 0) Color(0xFF15803D) else RedOut,
-                                        maxLines = 1,
-                                        softWrap = false,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
-                                }
-                                val bankSel = detailPaymentFilter == "BANK_ONLINE"
-                                Surface(
-                                    shape = RoundedCornerShape(5.dp),
-                                    color = if (bankSel) Color(0xFFDBEAFE) else Color(0xFFF1F5F9),
-                                    border = if (bankSel) BorderStroke(1.dp, Color(0xFF2563EB)) else null,
-                                    modifier = Modifier.clickable {
-                                        detailPaymentFilter = if (bankSel) "ALL" else "BANK_ONLINE"
-                                    }
-                                ) {
-                                    Text(
-                                        text = "Bank: Rs. ${String.format("%,.0f", bankNet)}",
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (bankNet >= 0) Color(0xFF1D4ED8) else RedOut,
-                                        maxLines = 1,
-                                        softWrap = false,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
-                                }
                             }
                         }
-
-                        // Compact Orange REMIND Button
-                        Button(
-                            onClick = {
-                                val phone = activeBook?.phone ?: ""
-                                val customerName = activeBook?.name ?: "Account"
-                                val dueLine = if (activeWasooliDueDate != null) {
-                                    " Due date: ${SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(activeWasooliDueDate))}."
-                                } else ""
-                                val remMsg = "Payment reminder for $customerName: Pending balance Rs. ${String.format("%,.0f", kotlin.math.abs(netBalance))}.$dueLine Please settle at your earliest convenience. Thank you!"
-                                val sendIntent = Intent().apply {
-                                    action = Intent.ACTION_SEND
-                                    putExtra(Intent.EXTRA_TEXT, remMsg)
-                                    type = "text/plain"
-                                    if (phone.isNotBlank()) {
-                                        putExtra("jid", "${phone.replace("+", "").replace("-", "").replace(" ", "")}@s.whatsapp.net")
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                val balanceText = "Rs. ${String.format("%,.0f", kotlin.math.abs(netBalance))}"
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = balanceText,
+                                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Black, fontSize = 20.sp),
+                                        color = if (netBalance >= 0) Color(0xFF16A34A) else RedOut,
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
+                                    Text(
+                                        text = if (netBalance >= 0) "• Net Cash IN" else "• Net Cash OUT",
+                                        fontSize = 11.sp,
+                                        color = Color(0xFF64748B),
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(3.dp))
+                                Row(
+                                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    val cashSel = detailPaymentFilter == "Cash"
+                                    Surface(
+                                        shape = RoundedCornerShape(5.dp),
+                                        color = if (cashSel) Color(0xFFDCFCE7) else Color(0xFFF1F5F9),
+                                        border = if (cashSel) BorderStroke(1.dp, GreenIn) else null,
+                                        modifier = Modifier.clickable {
+                                            detailPaymentFilter = if (cashSel) "ALL" else "Cash"
+                                        }
+                                    ) {
+                                        Text(
+                                            text = "Cash: Rs. ${String.format("%,.0f", cashNet)}",
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (cashNet >= 0) Color(0xFF15803D) else RedOut,
+                                            maxLines = 1,
+                                            softWrap = false,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                    val bankSel = detailPaymentFilter == "BANK_ONLINE"
+                                    Surface(
+                                        shape = RoundedCornerShape(5.dp),
+                                        color = if (bankSel) Color(0xFFDBEAFE) else Color(0xFFF1F5F9),
+                                        border = if (bankSel) BorderStroke(1.dp, Color(0xFF2563EB)) else null,
+                                        modifier = Modifier.clickable {
+                                            detailPaymentFilter = if (bankSel) "ALL" else "BANK_ONLINE"
+                                        }
+                                    ) {
+                                        Text(
+                                            text = "Bank: Rs. ${String.format("%,.0f", bankNet)}",
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (bankNet >= 0) Color(0xFF1D4ED8) else RedOut,
+                                            maxLines = 1,
+                                            softWrap = false,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
                                     }
                                 }
-                                try {
-                                    context.startActivity(Intent.createChooser(sendIntent, "Send Payment Reminder"))
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "Could not open sharing app", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C)),
-                            shape = RoundedCornerShape(16.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
-                            modifier = Modifier
-                                .height(30.dp)
-                                .testTag("remind_button")
-                        ) {
-                            Text("REMIND", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = Color.White)
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Icon(Icons.Default.Send, contentDescription = null, tint = Color.White, modifier = Modifier.size(12.dp))
+                            }
+
+                            // Compact Orange REMIND Button
+                            Button(
+                                onClick = {
+                                    val phone = activeBook?.phone ?: ""
+                                    val customerName = activeBook?.name ?: "Account"
+                                    val dueLine = if (activeWasooliDueDate != null) {
+                                        " Due date: ${SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(activeWasooliDueDate))}."
+                                    } else ""
+                                    val remMsg = "Payment reminder for $customerName: Pending balance Rs. ${String.format("%,.0f", kotlin.math.abs(netBalance))}.$dueLine Please settle at your earliest convenience. Thank you!"
+                                    val sendIntent = Intent().apply {
+                                        action = Intent.ACTION_SEND
+                                        putExtra(Intent.EXTRA_TEXT, remMsg)
+                                        type = "text/plain"
+                                        if (phone.isNotBlank()) {
+                                            putExtra("jid", "${phone.replace("+", "").replace("-", "").replace(" ", "")}@s.whatsapp.net")
+                                        }
+                                    }
+                                    try {
+                                        context.startActivity(Intent.createChooser(sendIntent, "Send Payment Reminder"))
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "Could not open sharing app", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C)),
+                                shape = RoundedCornerShape(16.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
+                                modifier = Modifier
+                                    .height(30.dp)
+                                    .testTag("remind_button")
+                            ) {
+                                Text("REMIND", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = Color.White)
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Icon(Icons.Default.Send, contentDescription = null, tint = Color.White, modifier = Modifier.size(12.dp))
+                            }
                         }
                     }
 
                     HorizontalDivider(color = Color(0xFFE2E8F0).copy(alpha = 0.7f))
 
-                    // Small Compact Action Pills (Wasooli, Call, Settle, Search) in 1 slim row
+                    // Small Compact Action Pills (Wasooli, Call, Search) in 1 slim row
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -3343,7 +4291,6 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                         val actions = listOf(
                             Triple("Wasooli", Icons.Default.EventAvailable, Color(0xFF0284C7)),
                             Triple("Call", Icons.Default.Call, Color(0xFF0D9488)),
-                            Triple("Settle", Icons.Default.CheckCircleOutline, Color(0xFF16A34A)),
                             Triple("Search", Icons.Default.Search, Color(0xFFD97706))
                         )
                         actions.forEach { (label, icon, color) ->
@@ -3376,18 +4323,6 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                                                     } catch (e: Exception) {
                                                         Toast.makeText(context, "Unable to open phone dialer", Toast.LENGTH_SHORT).show()
                                                     }
-                                                }
-                                            }
-                                            "Settle" -> {
-                                                if (!hasPermission(simulatedRole, "add_transaction")) {
-                                                    Toast.makeText(context, "Unauthorized role: Read-only partners cannot add entries.", Toast.LENGTH_SHORT).show()
-                                                } else if (kotlin.math.abs(netBalance) < 0.5) {
-                                                    Toast.makeText(context, "Khata balance is already Rs. 0 (Settled)", Toast.LENGTH_SHORT).show()
-                                                } else {
-                                                    val absBal = kotlin.math.abs(netBalance)
-                                                    prefillAmountForDialog = if (absBal % 1.0 == 0.0) absBal.toLong().toString() else String.format(Locale.US, "%.2f", absBal)
-                                                    prefillRemarksForDialog = "Full Settlement / Clear"
-                                                    showTransactionDialog = if (netBalance < 0) "IN" else "OUT"
                                                 }
                                             }
                                             "Search" -> {
@@ -3545,7 +4480,10 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Text(
-                                "Tap 'CASH IN' or 'CASH OUT' below to add entries.",
+                                text = if (hasPermission(simulatedRole, "add_transaction"))
+                                    "Tap 'CASH IN' or 'CASH OUT' below to add entries."
+                                else
+                                    "Read-only Viewer access — entries appear here as staff record them.",
                                 style = MaterialTheme.typography.bodySmall,
                                 textAlign = TextAlign.Center,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
@@ -3571,7 +4509,7 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(horizontal = 14.dp),
-                        contentPadding = PaddingValues(top = 4.dp, bottom = 74.dp),
+                        contentPadding = PaddingValues(top = 4.dp, bottom = if (hasPermission(simulatedRole, "add_transaction")) 74.dp else 16.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         groupedTransactions.forEach { (headerTitle, dayData, _) ->
@@ -3597,9 +4535,11 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                                             fontWeight = FontWeight.Bold,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
-                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            if (dayOut > 0) Text("OUT: Rs. ${String.format("%,.0f", dayOut)}", style = MaterialTheme.typography.labelSmall, color = RedOut, fontWeight = FontWeight.Bold)
-                                            if (dayIn > 0) Text("IN: Rs. ${String.format("%,.0f", dayIn)}", style = MaterialTheme.typography.labelSmall, color = GreenIn, fontWeight = FontWeight.Bold)
+                                        if (!hideTotalBalance) {
+                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                if (dayOut > 0) Text("OUT: Rs. ${String.format("%,.0f", dayOut)}", style = MaterialTheme.typography.labelSmall, color = RedOut, fontWeight = FontWeight.Bold)
+                                                if (dayIn > 0) Text("IN: Rs. ${String.format("%,.0f", dayIn)}", style = MaterialTheme.typography.labelSmall, color = GreenIn, fontWeight = FontWeight.Bold)
+                                            }
                                         }
                                     }
                                 }
@@ -3608,25 +4548,36 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                             items(dayTxs) { tx ->
                                 val isSelected = selectedIds.contains(tx.id)
                                 val txRunningBal = runningBalanceMap[tx.id] ?: 0.0
+                                val resolvedAuthor = resolveTransactionAddedBy(
+                                    tx = tx,
+                                    ownerEmail = activeBusiness?.userEmail ?: "",
+                                    currentUserEmail = currentUserEmail,
+                                    currentUserName = currentUserName,
+                                    teamMembers = allTeamMembers.filter { activeBusiness == null || it.businessId == activeBusiness?.id },
+                                    globalAccounts = globalAccounts
+                                )
                                 TransactionItemCard(
                                     transaction = tx,
                                     runningBalance = txRunningBal,
+                                    hideBalance = hideTotalBalance,
                                     bookName = activeBook?.name ?: "",
                                     businessName = activeBusiness?.name ?: "",
+                                    resolvedAddedBy = resolvedAuthor.displayName,
+                                    isAddedByOwner = resolvedAuthor.isOwner,
                                     isSelected = isSelected,
                                     onToggleSelection = { viewModel.toggleTransactionSelection(tx.id) },
                                     onDelete = {
                                         if (hasPermission(simulatedRole, "delete_transaction")) {
                                             txPendingDelete = tx
                                         } else {
-                                            Toast.makeText(context, "Unauthorized role: Partner cannot delete transactions.", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, "Unauthorized role: Cannot delete transactions.", Toast.LENGTH_SHORT).show()
                                         }
                                     },
                                     onEdit = {
                                         if (hasPermission(simulatedRole, "edit_transaction")) {
                                             selectedTxForEdit = tx
                                         } else {
-                                            Toast.makeText(context, "Unauthorized role: Partner/Data Entry cannot modify entries.", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, "Unauthorized role cannot modify entries.", Toast.LENGTH_SHORT).show()
                                         }
                                     }
                                 )
@@ -3635,69 +4586,71 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                     }
                 }
 
-                // Floating CashBook-Style Solid Green & Red Buttons (Zero separate bar!)
-                Row(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .navigationBarsPadding()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Button(
-                        onClick = {
-                            if (hasPermission(simulatedRole, "add_transaction")) {
-                                prefillAmountForDialog = ""
-                                prefillRemarksForDialog = ""
-                                showTransactionDialog = "IN"
-                            } else {
-                                Toast.makeText(context, "Unauthorized role: Read-only partners cannot add entries.", Toast.LENGTH_SHORT).show()
-                            }
-                        },
+                // Floating CashBook-Style Solid Green & Red Buttons (hidden cleanly for Viewer Read-Only role)
+                if (hasPermission(simulatedRole, "add_transaction")) {
+                    Row(
                         modifier = Modifier
-                            .weight(1f)
-                            .height(46.dp)
-                            .minimumInteractiveComponentSize()
-                            .testTag("cash_in_button"),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF16A34A),
-                            contentColor = Color.White
-                        ),
-                        elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp, pressedElevation = 2.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                        shape = RoundedCornerShape(10.dp)
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Icon(Icons.Default.Add, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("CASH IN", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = Color.White, maxLines = 1, softWrap = false)
-                    }
+                        Button(
+                            onClick = {
+                                if (hasPermission(simulatedRole, "add_transaction")) {
+                                    prefillAmountForDialog = ""
+                                    prefillRemarksForDialog = ""
+                                    showTransactionDialog = "IN"
+                                } else {
+                                    Toast.makeText(context, "Unauthorized role: Read-only users cannot add entries.", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(46.dp)
+                                .minimumInteractiveComponentSize()
+                                .testTag("cash_in_button"),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF16A34A),
+                                contentColor = Color.White
+                            ),
+                            elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp, pressedElevation = 2.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("CASH IN", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = Color.White, maxLines = 1, softWrap = false)
+                        }
 
-                    Button(
-                        onClick = {
-                            if (hasPermission(simulatedRole, "add_transaction")) {
-                                prefillAmountForDialog = ""
-                                prefillRemarksForDialog = ""
-                                showTransactionDialog = "OUT"
-                            } else {
-                                Toast.makeText(context, "Unauthorized role: Read-only partners cannot add entries.", Toast.LENGTH_SHORT).show()
-                            }
-                        },
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(46.dp)
-                            .minimumInteractiveComponentSize()
-                            .testTag("cash_out_button"),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFFDC2626),
-                            contentColor = Color.White
-                        ),
-                        elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp, pressedElevation = 2.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Icon(Icons.Default.Remove, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("CASH OUT", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = Color.White, maxLines = 1, softWrap = false)
+                        Button(
+                            onClick = {
+                                if (hasPermission(simulatedRole, "add_transaction")) {
+                                    prefillAmountForDialog = ""
+                                    prefillRemarksForDialog = ""
+                                    showTransactionDialog = "OUT"
+                                } else {
+                                    Toast.makeText(context, "Unauthorized role: Read-only users cannot add entries.", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(46.dp)
+                                .minimumInteractiveComponentSize()
+                                .testTag("cash_out_button"),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFFDC2626),
+                                contentColor = Color.White
+                            ),
+                            elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp, pressedElevation = 2.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.Remove, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("CASH OUT", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = Color.White, maxLines = 1, softWrap = false)
+                        }
                     }
                 }
             }
@@ -4148,8 +5101,11 @@ fun TransactionSyncCheckIndicator(
 fun TransactionItemCard(
     transaction: Transaction,
     runningBalance: Double = 0.0,
+    hideBalance: Boolean = false,
     bookName: String = "",
     businessName: String = "",
+    resolvedAddedBy: String = transaction.addedByName,
+    isAddedByOwner: Boolean = false,
     isSelected: Boolean,
     onToggleSelection: () -> Unit,
     onDelete: () -> Unit,
@@ -4306,7 +5262,7 @@ fun TransactionItemCard(
 
                     Spacer(modifier = Modifier.height(3.dp))
 
-                    // Full-width Running Balance + Type + Category + Payment Mode row (never clips!)
+                    // Full-width Type + (Optional) Running Balance + Category + Payment Mode + Added By badge row
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(5.dp),
@@ -4326,19 +5282,21 @@ fun TransactionItemCard(
                                 modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
                             )
                         }
-                        Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = Color(0xFFFCE7F3)
-                        ) {
-                            Text(
-                                text = formattedRunningBal,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFF9D174D),
-                                maxLines = 1,
-                                softWrap = false,
-                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
-                            )
+                        if (!hideBalance) {
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = Color(0xFFFCE7F3)
+                            ) {
+                                Text(
+                                    text = formattedRunningBal,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color(0xFF9D174D),
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                )
+                            }
                         }
                         if (transaction.category.isNotBlank()) {
                             Surface(
@@ -4369,6 +5327,38 @@ fun TransactionItemCard(
                                 softWrap = false,
                                 modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
                             )
+                        }
+                        val effectiveAddedByLabel = resolvedAddedBy.ifBlank {
+                            transaction.addedByName.ifBlank { transaction.addedByEmail.substringBefore("@") }
+                        }
+                        if (effectiveAddedByLabel.isNotBlank()) {
+                            val badgeBg = if (isAddedByOwner) Color(0xFFECFDF5) else Color(0xFFEEF2FF)
+                            val badgeTint = if (isAddedByOwner) Color(0xFF15803D) else Color(0xFF3730A3)
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = badgeBg
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Person,
+                                        contentDescription = "Added By",
+                                        tint = badgeTint,
+                                        modifier = Modifier.size(10.dp)
+                                    )
+                                    Text(
+                                        text = "By $effectiveAddedByLabel",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = badgeTint,
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
+                                }
+                            }
                         }
                     }
 
@@ -4485,16 +5475,30 @@ fun TransactionItemCard(
                                 fontWeight = FontWeight.ExtraBold,
                                 color = if (isIn) GreenIn else RedOut
                             )
-                            Text(
-                                text = "Balance after entry: ${balPrefix}Rs. ${String.format("%,.0f", kotlin.math.abs(runningBalance))}",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFF9D174D)
-                            )
+                            if (!hideBalance) {
+                                Text(
+                                    text = "Balance after entry: ${balPrefix}Rs. ${String.format("%,.0f", kotlin.math.abs(runningBalance))}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color(0xFF9D174D)
+                                )
+                            }
                         }
                     }
 
                     DetailInfoRow(label = "Date & Time", value = fullDateStr)
+                    val detailAddedBy = resolvedAddedBy.ifBlank {
+                        transaction.addedByName.ifBlank { transaction.addedByEmail }
+                    }
+                    if (detailAddedBy.isNotBlank() || transaction.addedByEmail.isNotBlank()) {
+                        val addedByDisplay = buildString {
+                            append(detailAddedBy.ifBlank { transaction.addedByEmail })
+                            if (transaction.addedByEmail.isNotBlank() && !detailAddedBy.contains(transaction.addedByEmail, ignoreCase = true)) {
+                                append(" (${transaction.addedByEmail})")
+                            }
+                        }
+                        DetailInfoRow(label = "Added By", value = addedByDisplay)
+                    }
                     if (businessName.isNotBlank() || bookName.isNotBlank()) {
                         DetailInfoRow(
                             label = "Business / Cashbook",
@@ -4533,10 +5537,11 @@ fun TransactionItemCard(
                                     append("${if (isIn) "CASH IN (+)" else "CASH OUT (-)"}\n")
                                     append("Amount: Rs. ${String.format("%,.0f", transaction.amount)}\n")
                                     append("Date: $fullDateStr\n")
+                                    if (detailAddedBy.isNotBlank()) append("Added By: $detailAddedBy\n")
                                     if (bookName.isNotBlank()) append("Cashbook: $bookName\n")
                                     append("Category: ${transaction.category.ifBlank { "General" }}\n")
                                     append("Mode: ${transaction.paymentMethod.ifBlank { "Cash" }}\n")
-                                    append("$formattedRunningBal\n")
+                                    if (!hideBalance) append("$formattedRunningBal\n")
                                     if (transaction.remarks.isNotBlank()) append("Note: ${transaction.remarks}")
                                 }
                                 val sendIntent = Intent().apply {
@@ -5959,70 +6964,612 @@ fun UdharScreen(viewModel: LedgerViewModel) {
 
 // --- SCREEN 3: REPORTS ---
 
+private fun formatReportEntryCount(count: Int): String =
+    if (count == 1) "1 entry" else "$count entries"
+
+private fun formatReportBookCount(count: Int): String =
+    if (count == 1) "1 Book" else "$count Books"
+
+private fun formatDatePresetLabel(preset: String, startMs: Long?, endMs: Long?): String {
+    return when (preset) {
+        "TODAY" -> "Today"
+        "YESTERDAY" -> "Yesterday"
+        "WEEK" -> "Last 7 Days"
+        "MONTH" -> "This Month"
+        "LAST_MONTH" -> "Last Month"
+        "CUSTOM" -> {
+            if (startMs != null && endMs != null) {
+                val fmt = SimpleDateFormat("dd MMM", Locale.getDefault())
+                "${fmt.format(Date(minOf(startMs, endMs)))} - ${fmt.format(Date(maxOf(startMs, endMs)))}"
+            } else "Custom Range"
+        }
+        else -> "All Time"
+    }
+}
+
+private fun matchesPaymentModeFilter(paymentMethod: String, filter: String): Boolean {
+    return when (filter) {
+        "CASH" -> paymentMethod.equals("Cash", ignoreCase = true)
+        "BANK" -> paymentMethod.equals("Bank", ignoreCase = true) || paymentMethod.equals("Online", ignoreCase = true)
+        else -> true
+    }
+}
+
+private fun shareReportPdfFile(context: Context, pdfFile: File, chooserTitle: String) {
+    val pdfUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", pdfFile)
+    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+        type = "application/pdf"
+        putExtra(Intent.EXTRA_STREAM, pdfUri)
+        clipData = ClipData.newRawUri(chooserTitle, pdfUri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    val chooserIntent = Intent.createChooser(shareIntent, chooserTitle).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    context.startActivity(chooserIntent)
+}
+
+@Composable
+private fun ReportsCompactFilterBar(
+    dateRangePreset: String,
+    customStartMillis: Long?,
+    customEndMillis: Long?,
+    onSelectPreset: (String) -> Unit,
+    onCustomRangeSelected: (Long, Long) -> Unit,
+    paymentModeFilter: String? = null,
+    onSelectPaymentMode: ((String) -> Unit)? = null,
+    showPdfButton: Boolean = false,
+    onPdfClick: (() -> Unit)? = null
+) {
+    val context = LocalContext.current
+    var showDateMenu by remember { mutableStateOf(false) }
+    var showModeMenu by remember { mutableStateOf(false) }
+
+    val openCustomDatePickers = {
+        val initStart = Calendar.getInstance().apply {
+            if (customStartMillis != null) timeInMillis = customStartMillis
+            else add(Calendar.DAY_OF_YEAR, -7)
+        }
+        Toast.makeText(context, "Select Start Date", Toast.LENGTH_SHORT).show()
+        DatePickerDialog(
+            context,
+            { _, sYear, sMonth, sDay ->
+                val pickedStart = Calendar.getInstance().apply {
+                    set(Calendar.YEAR, sYear)
+                    set(Calendar.MONTH, sMonth)
+                    set(Calendar.DAY_OF_MONTH, sDay)
+                    set(Calendar.HOUR_OF_DAY, 0)
+                    set(Calendar.MINUTE, 0)
+                    set(Calendar.SECOND, 0)
+                }.timeInMillis
+                val initEnd = Calendar.getInstance().apply {
+                    if (customEndMillis != null) timeInMillis = customEndMillis
+                }
+                Toast.makeText(context, "Select End Date", Toast.LENGTH_SHORT).show()
+                DatePickerDialog(
+                    context,
+                    { _, eYear, eMonth, eDay ->
+                        val pickedEnd = Calendar.getInstance().apply {
+                            set(Calendar.YEAR, eYear)
+                            set(Calendar.MONTH, eMonth)
+                            set(Calendar.DAY_OF_MONTH, eDay)
+                            set(Calendar.HOUR_OF_DAY, 23)
+                            set(Calendar.MINUTE, 59)
+                            set(Calendar.SECOND, 59)
+                        }.timeInMillis
+                        onCustomRangeSelected(pickedStart, pickedEnd)
+                    },
+                    initEnd.get(Calendar.YEAR),
+                    initEnd.get(Calendar.MONTH),
+                    initEnd.get(Calendar.DAY_OF_MONTH)
+                ).show()
+            },
+            initStart.get(Calendar.YEAR),
+            initStart.get(Calendar.MONTH),
+            initStart.get(Calendar.DAY_OF_MONTH)
+        ).show()
+    }
+
+    val dateLabel = formatDatePresetLabel(dateRangePreset, customStartMillis, customEndMillis)
+    val modeLabel = when (paymentModeFilter) {
+        "CASH" -> "Cash Only"
+        "BANK" -> "Bank / Online"
+        else -> "All Modes"
+    }
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box {
+            Surface(
+                onClick = { showDateMenu = true },
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.8f)),
+                modifier = Modifier.heightIn(min = 38.dp).testTag("report_date_dropdown_btn")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Icon(Icons.Default.DateRange, contentDescription = null, tint = GreenIn, modifier = Modifier.size(15.dp))
+                    Text(dateLabel, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                    Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(16.dp))
+                }
+            }
+            DropdownMenu(
+                expanded = showDateMenu,
+                onDismissRequest = { showDateMenu = false }
+            ) {
+                listOf(
+                    "ALL" to "All Time",
+                    "TODAY" to "Today",
+                    "YESTERDAY" to "Yesterday",
+                    "WEEK" to "Last 7 Days",
+                    "MONTH" to "This Month",
+                    "LAST_MONTH" to "Last Month",
+                    "CUSTOM" to "Custom Date Range..."
+                ).forEach { (key, label) ->
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                text = label,
+                                fontWeight = if (dateRangePreset == key) FontWeight.Bold else FontWeight.Normal,
+                                color = if (dateRangePreset == key) GreenIn else MaterialTheme.colorScheme.onSurface
+                            )
+                        },
+                        leadingIcon = if (dateRangePreset == key) {
+                            { Icon(Icons.Default.Check, contentDescription = null, tint = GreenIn, modifier = Modifier.size(16.dp)) }
+                        } else null,
+                        onClick = {
+                            showDateMenu = false
+                            if (key == "CUSTOM") openCustomDatePickers() else onSelectPreset(key)
+                        }
+                    )
+                }
+            }
+        }
+
+        if (paymentModeFilter != null && onSelectPaymentMode != null) {
+            Box {
+                Surface(
+                    onClick = { showModeMenu = true },
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.8f)),
+                    modifier = Modifier.heightIn(min = 38.dp).testTag("report_mode_dropdown_btn")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        Icon(Icons.Default.Payments, contentDescription = null, tint = Color(0xFF2563EB), modifier = Modifier.size(15.dp))
+                        Text(modeLabel, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(16.dp))
+                    }
+                }
+                DropdownMenu(
+                    expanded = showModeMenu,
+                    onDismissRequest = { showModeMenu = false }
+                ) {
+                    listOf(
+                        "ALL" to "All Modes",
+                        "CASH" to "Cash Only",
+                        "BANK" to "Bank / Online"
+                    ).forEach { (key, label) ->
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    text = label,
+                                    fontWeight = if (paymentModeFilter == key) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (paymentModeFilter == key) GreenIn else MaterialTheme.colorScheme.onSurface
+                                )
+                            },
+                            leadingIcon = if (paymentModeFilter == key) {
+                                { Icon(Icons.Default.Check, contentDescription = null, tint = GreenIn, modifier = Modifier.size(16.dp)) }
+                            } else null,
+                            onClick = {
+                                showModeMenu = false
+                                onSelectPaymentMode(key)
+                            }
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.weight(1f))
+
+        if (showPdfButton && onPdfClick != null) {
+            FilledTonalButton(
+                onClick = onPdfClick,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.heightIn(min = 38.dp).testTag("reports_quick_pdf_button")
+            ) {
+                Icon(Icons.Default.PictureAsPdf, contentDescription = "Share PDF", modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("PDF", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ReportsScreen(viewModel: LedgerViewModel) {
     val businesses by viewModel.businesses.collectAsStateWithLifecycle()
     val allBooks by viewModel.allBooks.collectAsStateWithLifecycle()
     val allTransactions by viewModel.allTransactions.collectAsStateWithLifecycle()
+    val allTeamMembers by viewModel.allTeamMembers.collectAsStateWithLifecycle()
+    val globalAccounts by viewModel.globalAccounts.collectAsStateWithLifecycle()
+    val currentUserEmail by viewModel.currentUserEmail.collectAsStateWithLifecycle()
+    val reportSelectedBusinessId by viewModel.reportSelectedBusinessId.collectAsStateWithLifecycle()
+    val reportSelectedBookId by viewModel.reportSelectedBookId.collectAsStateWithLifecycle()
+    val currentUserName = remember(currentUserEmail) { viewModel.syncManager.getName() }
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
 
-    // null = Overall (All Businesses), non-null = Separate Business Report
-    var selectedBusinessId by remember { mutableStateOf<Int?>(null) }
-    val effectiveBusinessId = remember(selectedBusinessId, businesses) {
-        if (selectedBusinessId != null && businesses.any { it.id == selectedBusinessId }) selectedBusinessId else null
+    // 3-Level Strictly Isolated Reports Hierarchy:
+    // Level 1: reportSelectedBusinessId == null -> All Businesses (separate card per business)
+    // Level 2: reportSelectedBusinessId != null, reportSelectedBookId == null -> Business & Its Separate Books (Books tab default)
+    // Level 3: reportSelectedBookId != null -> Single Book Report (Overview / Daybook / Mode & Staff / Export)
+    val selectedBusiness = remember(reportSelectedBusinessId, businesses) {
+        if (reportSelectedBusinessId != null) businesses.find { it.id == reportSelectedBusinessId } else null
     }
-    val selectedBusiness = remember(effectiveBusinessId, businesses) {
-        businesses.find { it.id == effectiveBusinessId }
+    val isScopeBalanceHidden = remember(selectedBusiness, allTeamMembers) {
+        viewModel.isBalanceHiddenForBusiness(selectedBusiness, allTeamMembers)
     }
 
-    var selectedBookId by remember(effectiveBusinessId) { mutableStateOf<Int?>(null) }
-    val scopedBooks = remember(effectiveBusinessId, allBooks) {
-        if (effectiveBusinessId != null) allBooks.filter { it.businessId == effectiveBusinessId } else allBooks
+    val scopedBooks = remember(selectedBusiness?.id, allBooks) {
+        val bizId = selectedBusiness?.id ?: return@remember emptyList()
+        allBooks.filter { it.businessId == bizId }
     }
-    val effectiveBookId = remember(selectedBookId, scopedBooks) {
-        if (selectedBookId != null && scopedBooks.any { it.id == selectedBookId }) selectedBookId else null
+    val effectiveBookId = remember(reportSelectedBookId, scopedBooks) {
+        if (reportSelectedBookId != null && scopedBooks.any { it.id == reportSelectedBookId }) reportSelectedBookId else null
     }
     val selectedBook = remember(effectiveBookId, scopedBooks) {
         scopedBooks.find { it.id == effectiveBookId }
     }
 
+    var businessSearchQuery by remember { mutableStateOf("") }
     var dateRangePreset by remember { mutableStateOf("ALL") }
     var customStartMillis by remember { mutableStateOf<Long?>(null) }
     var customEndMillis by remember { mutableStateOf<Long?>(null) }
+    var paymentModeFilter by remember { mutableStateOf("ALL") } // "ALL", "CASH", "BANK"
+    var activeLevel2Tab by remember(selectedBusiness?.id) { mutableStateOf("BOOKS") } // "BOOKS", "ANALYTICS", "DAYBOOK", "EXPORT"
+    var activeLevel3Tab by remember(effectiveBookId) { mutableStateOf("OVERVIEW") } // "OVERVIEW", "DAYBOOK", "MODE_STAFF", "EXPORT"
     var categoryChartMode by remember { mutableStateOf("OUT") } // "OUT" or "IN"
+    var daybookTypeFilter by remember { mutableStateOf("ALL") } // "ALL", "IN", "OUT"
 
+    val bizLookup = remember(businesses) { businesses.associateBy { it.id } }
+    val bookLookup = remember(allBooks) { allBooks.associateBy { it.id } }
+    val dateLabel = formatDatePresetLabel(dateRangePreset, customStartMillis, customEndMillis)
+    val modeLabel = when (paymentModeFilter) {
+        "CASH" -> "Cash Only"
+        "BANK" -> "Bank / Online"
+        else -> "All Modes"
+    }
+
+    // --- LEVEL 1: ALL BUSINESSES DIRECTORY (STRICTLY SEPARATE, NEVER MIXED) ---
+    if (selectedBusiness == null) {
+        val filteredBusinesses = remember(businesses, businessSearchQuery) {
+            if (businessSearchQuery.isBlank()) businesses
+            else businesses.filter { it.name.contains(businessSearchQuery, ignoreCase = true) }
+        }
+
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "All Businesses (${businesses.size})",
+                                fontWeight = FontWeight.ExtraBold,
+                                style = MaterialTheme.typography.titleLarge
+                            )
+                            Text(
+                                text = "Tap a business to view its separate books & report",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    ReportsCompactFilterBar(
+                        dateRangePreset = dateRangePreset,
+                        customStartMillis = customStartMillis,
+                        customEndMillis = customEndMillis,
+                        onSelectPreset = { dateRangePreset = it },
+                        onCustomRangeSelected = { start, end ->
+                            customStartMillis = start
+                            customEndMillis = end
+                            dateRangePreset = "CUSTOM"
+                        }
+                    )
+
+                    if (businesses.size > 3) {
+                        OutlinedTextField(
+                            value = businessSearchQuery,
+                            onValueChange = { businessSearchQuery = it },
+                            placeholder = { Text("Search business...", fontSize = 13.sp) },
+                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                            trailingIcon = if (businessSearchQuery.isNotEmpty()) {
+                                {
+                                    IconButton(onClick = { businessSearchQuery = "" }) {
+                                        Icon(Icons.Default.Clear, contentDescription = "Clear", modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                            } else null,
+                            singleLine = true,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth().testTag("report_business_search")
+                        )
+                    }
+                }
+            }
+
+            if (filteredBusinesses.isEmpty()) {
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(Icons.Default.Storefront, contentDescription = null, tint = GreenIn, modifier = Modifier.size(36.dp))
+                            Text(
+                                text = if (businesses.isEmpty()) "No Businesses Yet" else "No Matching Business",
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Text(
+                                text = if (businesses.isEmpty()) {
+                                    "Create a business from Home to view separate reports and PDF statements."
+                                } else {
+                                    "Try clearing your search filter."
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                }
+            } else {
+                items(filteredBusinesses, key = { it.id }) { biz ->
+                    val bizHidden = viewModel.isBalanceHiddenForBusiness(biz, allTeamMembers)
+                    val bizBooks = allBooks.filter { it.businessId == biz.id }
+                    val bizBookIds = bizBooks.map { it.id }.toSet()
+                    val bizTxs = allTransactions.filter {
+                        it.bookId in bizBookIds &&
+                            isTransactionInDateRange(it.timestamp, dateRangePreset, customStartMillis, customEndMillis)
+                    }.sortedByDescending { it.timestamp }
+                    val bIn = bizTxs.filter { it.type == "IN" }.sumOf { it.amount }
+                    val bOut = bizTxs.filter { it.type == "OUT" }.sumOf { it.amount }
+                    val bNet = bIn - bOut
+                    val bCashNet = bizTxs.filter { it.paymentMethod.equals("Cash", ignoreCase = true) }
+                        .sumOf { if (it.type == "IN") it.amount else -it.amount }
+                    val bBankNet = bizTxs.filter { !it.paymentMethod.equals("Cash", ignoreCase = true) }
+                        .sumOf { if (it.type == "IN") it.amount else -it.amount }
+
+                    Card(
+                        onClick = { viewModel.openBusinessReport(biz) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("report_directory_biz_${biz.id}"),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    modifier = Modifier.weight(1f),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = GreenIn.copy(alpha = 0.12f),
+                                        modifier = Modifier.size(40.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(Icons.Default.Storefront, contentDescription = null, tint = GreenIn, modifier = Modifier.size(20.dp))
+                                        }
+                                    }
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = biz.name,
+                                            fontWeight = FontWeight.Bold,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "${formatReportBookCount(bizBooks.size)} • ${formatReportEntryCount(bizTxs.size)}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                if (!bizHidden) {
+                                    IconButton(
+                                        onClick = {
+                                            try {
+                                                val pdfFile = generateMultiBusinessPdfReport(
+                                                    context = context,
+                                                    scopeTitle = "${biz.name} • All Books ($dateLabel)",
+                                                    transactions = bizTxs,
+                                                    bookLookup = bookLookup,
+                                                    bizLookup = bizLookup
+                                                )
+                                                shareReportPdfFile(context, pdfFile, "Share ${biz.name} PDF Report")
+                                            } catch (e: Exception) {
+                                                Toast.makeText(context, "PDF Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                                            }
+                                        },
+                                        modifier = Modifier.minimumInteractiveComponentSize()
+                                    ) {
+                                        Icon(
+                                            Icons.Default.PictureAsPdf,
+                                            contentDescription = "Export ${biz.name} PDF",
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            if (!bizHidden) {
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text("Cash IN", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            Text(
+                                                text = "Rs. ${String.format("%,.0f", bIn)}",
+                                                style = MaterialTheme.typography.labelLarge,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = GreenIn
+                                            )
+                                        }
+                                        Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                                            Text("Cash OUT", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            Text(
+                                                text = "Rs. ${String.format("%,.0f", bOut)}",
+                                                style = MaterialTheme.typography.labelLarge,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = RedOut
+                                            )
+                                        }
+                                        Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
+                                            Text("Net Balance", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            Text(
+                                                text = "Rs. ${String.format("%,.0f", bNet)}",
+                                                style = MaterialTheme.typography.labelLarge,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = if (bNet >= 0) Color(0xFF1D4ED8) else RedOut
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = if (bizHidden) "Balances hidden by Admin" else "Cash: Rs. ${String.format("%,.0f", bCashNet)} • Online: Rs. ${String.format("%,.0f", bBankNet)}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text(
+                                    text = "View Books & Report →",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = GreenIn
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return
+    }
+
+    // --- LEVEL 2 & LEVEL 3 COMPUTATIONS (STRICTLY SCOPED TO selectedBusiness OR selectedBook) ---
     val targetBookIds = remember(effectiveBookId, scopedBooks) {
         if (effectiveBookId != null) setOf(effectiveBookId) else scopedBooks.map { it.id }.toSet()
     }
 
-    val scopedTransactions = remember(allTransactions, targetBookIds, dateRangePreset, customStartMillis, customEndMillis) {
+    val scopedTransactions = remember(
+        allTransactions,
+        targetBookIds,
+        dateRangePreset,
+        customStartMillis,
+        customEndMillis,
+        paymentModeFilter
+    ) {
         allTransactions.filter { tx ->
             tx.bookId in targetBookIds &&
-                isTransactionInDateRange(tx.timestamp, dateRangePreset, customStartMillis, customEndMillis)
-        }
+                isTransactionInDateRange(tx.timestamp, dateRangePreset, customStartMillis, customEndMillis) &&
+                matchesPaymentModeFilter(tx.paymentMethod, paymentModeFilter)
+        }.sortedByDescending { it.timestamp }
     }
 
-    // Core KPI Aggregations
     val totalIn = remember(scopedTransactions) { scopedTransactions.filter { it.type == "IN" }.sumOf { it.amount } }
     val totalOut = remember(scopedTransactions) { scopedTransactions.filter { it.type == "OUT" }.sumOf { it.amount } }
     val netBalance = totalIn - totalOut
     val inCount = remember(scopedTransactions) { scopedTransactions.count { it.type == "IN" } }
     val outCount = remember(scopedTransactions) { scopedTransactions.count { it.type == "OUT" } }
 
-    // Cash vs Bank/Online Split
-    val cashNet = remember(scopedTransactions) {
-        scopedTransactions.filter { it.paymentMethod.equals("Cash", ignoreCase = true) }
-            .sumOf { if (it.type == "IN") it.amount else -it.amount }
+    val cashIn = remember(scopedTransactions) {
+        scopedTransactions.filter { it.paymentMethod.equals("Cash", ignoreCase = true) && it.type == "IN" }.sumOf { it.amount }
     }
-    val bankOnlineNet = remember(scopedTransactions) {
-        scopedTransactions.filter {
-            it.paymentMethod.equals("Bank", ignoreCase = true) || it.paymentMethod.equals("Online", ignoreCase = true)
-        }.sumOf { if (it.type == "IN") it.amount else -it.amount }
+    val cashOut = remember(scopedTransactions) {
+        scopedTransactions.filter { it.paymentMethod.equals("Cash", ignoreCase = true) && it.type == "OUT" }.sumOf { it.amount }
+    }
+    val cashNet = cashIn - cashOut
+    val cashCount = remember(scopedTransactions) {
+        scopedTransactions.count { it.paymentMethod.equals("Cash", ignoreCase = true) }
     }
 
-    // Daily Trend Buckets (last 7 active/recent days in scope)
+    val bankOnlyIn = remember(scopedTransactions) {
+        scopedTransactions.filter { it.paymentMethod.equals("Bank", ignoreCase = true) && it.type == "IN" }.sumOf { it.amount }
+    }
+    val bankOnlyOut = remember(scopedTransactions) {
+        scopedTransactions.filter { it.paymentMethod.equals("Bank", ignoreCase = true) && it.type == "OUT" }.sumOf { it.amount }
+    }
+    val bankOnlyCount = remember(scopedTransactions) {
+        scopedTransactions.count { it.paymentMethod.equals("Bank", ignoreCase = true) }
+    }
+
+    val onlineIn = remember(scopedTransactions) {
+        scopedTransactions.filter { it.paymentMethod.equals("Online", ignoreCase = true) && it.type == "IN" }.sumOf { it.amount }
+    }
+    val onlineOut = remember(scopedTransactions) {
+        scopedTransactions.filter { it.paymentMethod.equals("Online", ignoreCase = true) && it.type == "OUT" }.sumOf { it.amount }
+    }
+    val onlineCount = remember(scopedTransactions) {
+        scopedTransactions.count { it.paymentMethod.equals("Online", ignoreCase = true) }
+    }
+    val bankOnlineNet = (bankOnlyIn + onlineIn) - (bankOnlyOut + onlineOut)
+
     val dailyTrendPoints = remember(scopedTransactions) {
         val dayKeyFmt = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
         val labelFmt = SimpleDateFormat("dd/MM", Locale.getDefault())
@@ -6042,27 +7589,49 @@ fun ReportsScreen(viewModel: LedgerViewModel) {
         }
     }
 
-    // Per-Business Comparison Breakdown (respecting selected date range)
-    val businessBreakdownList = remember(businesses, allBooks, allTransactions, dateRangePreset, customStartMillis, customEndMillis) {
-        businesses.map { biz ->
-            val bizBooks = allBooks.filter { it.businessId == biz.id }
-            val bizBookIds = bizBooks.map { it.id }.toSet()
-            val bizTxs = allTransactions.filter {
-                it.bookId in bizBookIds &&
-                    isTransactionInDateRange(it.timestamp, dateRangePreset, customStartMillis, customEndMillis)
+    val daybookGroups = remember(scopedTransactions, daybookTypeFilter) {
+        val dayKeyFmt = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+        val chronological = scopedTransactions.sortedBy { it.timestamp }
+        var runningBalance = 0.0
+        val dayClosingMap = mutableMapOf<String, Double>()
+        chronological.forEach { tx ->
+            runningBalance += if (tx.type == "IN") tx.amount else -tx.amount
+            val key = dayKeyFmt.format(Date(tx.timestamp))
+            dayClosingMap[key] = runningBalance
+        }
+
+        val displayed = if (daybookTypeFilter == "ALL") {
+            scopedTransactions
+        } else {
+            scopedTransactions.filter { it.type == daybookTypeFilter }
+        }
+
+        displayed
+            .groupBy { dayKeyFmt.format(Date(it.timestamp)) }
+            .entries
+            .sortedByDescending { it.key }
+            .map { (key, txs) ->
+                val dayTs = txs.first().timestamp
+                val dIn = txs.filter { it.type == "IN" }.sumOf { it.amount }
+                val dOut = txs.filter { it.type == "OUT" }.sumOf { it.amount }
+                val closing = dayClosingMap[key] ?: 0.0
+                Triple(key, dayTs, Triple(dIn, dOut, closing) to txs)
             }
-            val bizIn = bizTxs.filter { it.type == "IN" }.sumOf { it.amount }
-            val bizOut = bizTxs.filter { it.type == "OUT" }.sumOf { it.amount }
-            Triple(biz, bizBooks.size, Triple(bizIn, bizOut, bizTxs.size))
-        }.sortedByDescending { it.third.first + it.third.second }
     }
 
-    // Per-Cashbook Comparison Breakdown (respecting selected business scope & date range)
-    val cashbookBreakdownList = remember(scopedBooks, allTransactions, dateRangePreset, customStartMillis, customEndMillis) {
+    val cashbookBreakdownList = remember(
+        scopedBooks,
+        allTransactions,
+        dateRangePreset,
+        customStartMillis,
+        customEndMillis,
+        paymentModeFilter
+    ) {
         scopedBooks.map { book ->
             val bookTxs = allTransactions.filter {
                 it.bookId == book.id &&
-                    isTransactionInDateRange(it.timestamp, dateRangePreset, customStartMillis, customEndMillis)
+                    isTransactionInDateRange(it.timestamp, dateRangePreset, customStartMillis, customEndMillis) &&
+                    matchesPaymentModeFilter(it.paymentMethod, paymentModeFilter)
             }
             val bookIn = bookTxs.filter { it.type == "IN" }.sumOf { it.amount }
             val bookOut = bookTxs.filter { it.type == "OUT" }.sumOf { it.amount }
@@ -6070,7 +7639,34 @@ fun ReportsScreen(viewModel: LedgerViewModel) {
         }.sortedByDescending { it.second.first + it.second.second }
     }
 
-    // Category Breakdown (for selected OUT or IN mode)
+    val staffBreakdownList = remember(
+        scopedTransactions,
+        selectedBusiness,
+        currentUserEmail,
+        currentUserName,
+        allTeamMembers,
+        globalAccounts
+    ) {
+        val bizTeam = allTeamMembers.filter { it.businessId == selectedBusiness.id }
+        scopedTransactions
+            .groupBy { tx ->
+                resolveTransactionAddedBy(
+                    tx = tx,
+                    ownerEmail = selectedBusiness.userEmail,
+                    currentUserEmail = currentUserEmail,
+                    currentUserName = currentUserName,
+                    teamMembers = bizTeam,
+                    globalAccounts = globalAccounts
+                ).displayName.ifBlank { "Owner" }
+            }
+            .map { (authorName, txs) ->
+                val sIn = txs.filter { it.type == "IN" }.sumOf { it.amount }
+                val sOut = txs.filter { it.type == "OUT" }.sumOf { it.amount }
+                Triple(authorName, txs.size, sIn to sOut)
+            }
+            .sortedByDescending { it.second }
+    }
+
     val categoryTotals = remember(scopedTransactions, categoryChartMode) {
         scopedTransactions
             .filter { it.type == categoryChartMode }
@@ -6097,164 +7693,64 @@ fun ReportsScreen(viewModel: LedgerViewModel) {
         )
     }
 
-    val bizLookup = remember(businesses) { businesses.associateBy { it.id } }
-    val selectedBookBusinessName = selectedBook?.let { bizLookup[it.businessId]?.name }
-    val scopeTitle = when {
-        selectedBook != null && selectedBusiness != null -> "${selectedBusiness.name} • ${selectedBook.name}"
-        selectedBook != null -> "${selectedBookBusinessName ?: "Business"} • ${selectedBook.name}"
-        selectedBusiness == null -> "Overall Report (${businesses.size} Businesses • ${scopedBooks.size} Books)"
-        else -> "${selectedBusiness.name} (All ${scopedBooks.size} Books)"
+    val scopeTitle = if (selectedBook != null) {
+        "${selectedBusiness.name} • ${selectedBook.name}"
+    } else {
+        "${selectedBusiness.name} • ${formatReportBookCount(scopedBooks.size)}"
     }
 
-    val bookLookup = remember(allBooks) { allBooks.associateBy { it.id } }
+    val exportPdfAction: () -> Unit = {
+        try {
+            val pdfFile = if (selectedBook != null) {
+                generatePdfReport(
+                    context = context,
+                    activeBook = selectedBook,
+                    transactions = scopedTransactions,
+                    activeBusiness = selectedBusiness
+                )
+            } else {
+                generateMultiBusinessPdfReport(
+                    context = context,
+                    scopeTitle = "$scopeTitle ($dateLabel • $modeLabel)",
+                    transactions = scopedTransactions,
+                    bookLookup = bookLookup,
+                    bizLookup = bizLookup
+                )
+            }
+            shareReportPdfFile(context, pdfFile, "Share $scopeTitle PDF Report")
+        } catch (e: Exception) {
+            Toast.makeText(context, "PDF Error: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val currentTab = if (selectedBook == null) activeLevel2Tab else activeLevel3Tab
+    val tabOptions = if (selectedBook == null) {
+        listOf(
+            "BOOKS" to "Books (${scopedBooks.size})",
+            "ANALYTICS" to "Analytics",
+            "DAYBOOK" to "Daybook",
+            "EXPORT" to "Export"
+        )
+    } else {
+        listOf(
+            "OVERVIEW" to "Overview",
+            "DAYBOOK" to "Daybook",
+            "MODE_STAFF" to "Mode & Staff",
+            "EXPORT" to "Export"
+        )
+    }
 
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
             .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Header + Multi-Business & Cashbook Selector
+        // 1. Sleek 1-Row Filter Bar (Date Dropdown + Mode Dropdown + PDF) + Tabs
         item {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            "Financial Analytics",
-                            fontWeight = FontWeight.ExtraBold,
-                            style = MaterialTheme.typography.titleLarge
-                        )
-                        Text(
-                            scopeTitle,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    Surface(
-                        shape = RoundedCornerShape(20.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
-                    ) {
-                        Text(
-                            text = "${scopedTransactions.size} Entries",
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                    }
-                }
-
-                // Business Scope Pills: Overall + Separate per Business
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    item {
-                        FilterChip(
-                            selected = effectiveBusinessId == null,
-                            onClick = { selectedBusinessId = null },
-                            label = {
-                                Text(
-                                    "Overall (${businesses.size})",
-                                    fontWeight = if (effectiveBusinessId == null) FontWeight.Bold else FontWeight.Medium
-                                )
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Default.Assessment,
-                                    contentDescription = "Overall Report",
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            },
-                            modifier = Modifier.testTag("report_scope_overall")
-                        )
-                    }
-                    items(businesses, key = { it.id }) { biz ->
-                        val isBizSelected = effectiveBusinessId == biz.id
-                        FilterChip(
-                            selected = isBizSelected,
-                            onClick = { selectedBusinessId = biz.id },
-                            label = {
-                                Text(
-                                    biz.name,
-                                    fontWeight = if (isBizSelected) FontWeight.Bold else FontWeight.Medium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Default.Storefront,
-                                    contentDescription = biz.name,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            },
-                            modifier = Modifier.testTag("report_scope_biz_${biz.id}")
-                        )
-                    }
-                }
-
-                // Cashbook Filter Row: always available for Overall or Business scope so user can inspect any individual cashbook
-                if (scopedBooks.isNotEmpty()) {
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        item {
-                            FilterChip(
-                                selected = effectiveBookId == null,
-                                onClick = { selectedBookId = null },
-                                label = {
-                                    Text(
-                                        "All Cashbooks (${scopedBooks.size})",
-                                        fontWeight = if (effectiveBookId == null) FontWeight.Bold else FontWeight.Medium,
-                                        maxLines = 1,
-                                        softWrap = false
-                                    )
-                                },
-                                leadingIcon = {
-                                    Icon(Icons.Default.LibraryBooks, contentDescription = "All Cashbooks", modifier = Modifier.size(15.dp))
-                                },
-                                modifier = Modifier.testTag("report_scope_all_books")
-                            )
-                        }
-                        items(scopedBooks, key = { it.id }) { bk ->
-                            val isBookSelected = effectiveBookId == bk.id
-                            val bizLabel = if (effectiveBusinessId == null && businesses.size > 1) {
-                                bizLookup[bk.businessId]?.name?.let { " ($it)" } ?: ""
-                            } else {
-                                ""
-                            }
-                            FilterChip(
-                                selected = isBookSelected,
-                                onClick = { selectedBookId = bk.id },
-                                label = {
-                                    Text(
-                                        "${bk.name}$bizLabel",
-                                        fontWeight = if (isBookSelected) FontWeight.Bold else FontWeight.Medium,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                },
-                                leadingIcon = {
-                                    Icon(Icons.Default.Book, contentDescription = bk.name, modifier = Modifier.size(15.dp))
-                                },
-                                modifier = Modifier.testTag("report_scope_book_${bk.id}")
-                            )
-                        }
-                    }
-                }
-
-                // Date-Range Filters
-                DateRangeFilterStrip(
-                    selectedPreset = dateRangePreset,
+                ReportsCompactFilterBar(
+                    dateRangePreset = dateRangePreset,
                     customStartMillis = customStartMillis,
                     customEndMillis = customEndMillis,
                     onSelectPreset = { dateRangePreset = it },
@@ -6262,129 +7758,46 @@ fun ReportsScreen(viewModel: LedgerViewModel) {
                         customStartMillis = start
                         customEndMillis = end
                         dateRangePreset = "CUSTOM"
-                    }
+                    },
+                    paymentModeFilter = paymentModeFilter,
+                    onSelectPaymentMode = { paymentModeFilter = it },
+                    showPdfButton = !isScopeBalanceHidden,
+                    onPdfClick = exportPdfAction
                 )
-            }
-        }
 
-        // Executive KPI Summary Card + Cash vs Bank Split
-        item {
-            val netColor = if (netBalance >= 0) Color(0xFF2563EB) else Color(0xFFD97706)
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        modifier = Modifier.fillMaxWidth().padding(4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        Surface(
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(12.dp),
-                            color = GreenIn.copy(alpha = 0.1f)
-                        ) {
-                            Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text("CASH IN (+)", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = GreenIn)
-                                Text(
-                                    "Rs. ${String.format("%,.0f", totalIn)}",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = GreenIn,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text("$inCount entries", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        }
-                        Surface(
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(12.dp),
-                            color = RedOut.copy(alpha = 0.1f)
-                        ) {
-                            Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text("CASH OUT (-)", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = RedOut)
-                                Text(
-                                    "Rs. ${String.format("%,.0f", totalOut)}",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = RedOut,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text("$outCount entries", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        }
-                        Surface(
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(12.dp),
-                            color = netColor.copy(alpha = 0.1f)
-                        ) {
-                            Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text("NET BALANCE", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = netColor)
-                                Text(
-                                    "Rs. ${String.format("%,.0f", netBalance)}",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = netColor,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(if (netBalance >= 0) "Surplus" else "Deficit", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        }
-                    }
-
-                    // Cash vs Bank/Online Breakdown Strip
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Surface(
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(10.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
+                        tabOptions.forEach { (tabKey, tabTitle) ->
+                            val isSelected = currentTab == tabKey
+                            Surface(
+                                onClick = {
+                                    if (selectedBook == null) activeLevel2Tab = tabKey else activeLevel3Tab = tabKey
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (isSelected) MaterialTheme.colorScheme.surface else Color.Transparent,
+                                shadowElevation = if (isSelected) 1.dp else 0.dp,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 40.dp)
+                                    .testTag("report_tab_${tabKey.lowercase()}")
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                                    Icon(Icons.Default.Payments, contentDescription = null, tint = GreenIn, modifier = Modifier.size(16.dp))
-                                    Text("Cash", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                                Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp)) {
+                                    Text(
+                                        text = tabTitle,
+                                        fontSize = 11.sp,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (isSelected) GreenIn else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
                                 }
-                                Text(
-                                    "Rs. ${String.format("%,.0f", cashNet)}",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = if (cashNet >= 0) GreenIn else RedOut
-                                )
-                            }
-                        }
-                        Surface(
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(10.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                                    Icon(Icons.Default.AccountBalance, contentDescription = null, tint = Color(0xFF2563EB), modifier = Modifier.size(16.dp))
-                                    Text("Bank / Online", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-                                }
-                                Text(
-                                    "Rs. ${String.format("%,.0f", bankOnlineNet)}",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = if (bankOnlineNet >= 0) Color(0xFF2563EB) else RedOut
-                                )
                             }
                         }
                     }
@@ -6392,424 +7805,965 @@ fun ReportsScreen(viewModel: LedgerViewModel) {
             }
         }
 
-        // Chart 1: Cash IN vs Cash OUT Interactive Donut Chart
-        item {
-            val totalVolume = totalIn + totalOut
-            val inPct = if (totalVolume > 0) ((totalIn / totalVolume) * 100.0).toInt() else 0
-            val outPct = if (totalVolume > 0) 100 - inPct else 0
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    Column {
-                        Text("Cash In vs Cash Out Ratio", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                        Text("Visual inflow & outflow distribution for $scopeTitle", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-
+        // Hidden Balance Guard
+        if (isScopeBalanceHidden) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                ) {
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(14.dp))
-                            .padding(14.dp),
+                        modifier = Modifier.padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Box(
-                            modifier = Modifier.size(116.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Canvas(modifier = Modifier.fillMaxSize()) {
-                                val diameter = size.minDimension
-                                val strokeWidth = diameter * 0.2f
-                                val arcSize = Size(diameter - strokeWidth, diameter - strokeWidth)
-                                val topLeft = Offset((size.width - arcSize.width) / 2f, (size.height - arcSize.height) / 2f)
-
-                                if (totalVolume <= 0.0) {
-                                    drawArc(
-                                        color = Color(0xFFE2E8F0),
-                                        startAngle = 0f,
-                                        sweepAngle = 360f,
-                                        useCenter = false,
-                                        topLeft = topLeft,
-                                        size = arcSize,
-                                        style = Stroke(width = strokeWidth)
-                                    )
-                                } else {
-                                    val inSweep = ((totalIn / totalVolume) * 360.0).toFloat()
-                                    val outSweep = ((totalOut / totalVolume) * 360.0).toFloat()
-                                    if (inSweep > 0f) {
-                                        drawArc(
-                                            color = GreenIn,
-                                            startAngle = -90f,
-                                            sweepAngle = inSweep,
-                                            useCenter = false,
-                                            topLeft = topLeft,
-                                            size = arcSize,
-                                            style = Stroke(width = strokeWidth, cap = StrokeCap.Butt)
-                                        )
-                                    }
-                                    if (outSweep > 0f) {
-                                        drawArc(
-                                            color = RedOut,
-                                            startAngle = -90f + inSweep,
-                                            sweepAngle = outSweep,
-                                            useCenter = false,
-                                            topLeft = topLeft,
-                                            size = arcSize,
-                                            style = Stroke(width = strokeWidth, cap = StrokeCap.Butt)
-                                        )
-                                    }
-                                }
-                            }
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(
-                                    if (totalVolume > 0) "$inPct%" else "0%",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = GreenIn
-                                )
-                                Text(
-                                    "Inflow",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-
-                        Column(
-                            modifier = Modifier.weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(
-                                    modifier = Modifier.weight(1f),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Box(modifier = Modifier.size(10.dp).background(GreenIn, CircleShape))
-                                    Column {
-                                        Text(
-                                            "Cash IN ($inPct%)",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            fontWeight = FontWeight.Bold,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            "$inCount entries",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    "Rs. ${String.format("%,.0f", totalIn)}",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    fontWeight = FontWeight.Bold,
-                                    color = GreenIn,
-                                    maxLines = 1,
-                                    softWrap = false
-                                )
-                            }
-
-                            Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(
-                                    modifier = Modifier.weight(1f),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Box(modifier = Modifier.size(10.dp).background(RedOut, CircleShape))
-                                    Column {
-                                        Text(
-                                            "Cash OUT ($outPct%)",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            fontWeight = FontWeight.Bold,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            "$outCount entries",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    "Rs. ${String.format("%,.0f", totalOut)}",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    fontWeight = FontWeight.Bold,
-                                    color = RedOut,
-                                    maxLines = 1,
-                                    softWrap = false
-                                )
-                            }
+                        Icon(Icons.Default.VisibilityOff, contentDescription = "Balances Hidden", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp))
+                        Column {
+                            Text("Total Balances Hidden by Admin", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                            Text("Financial totals, charts, and PDF exports are restricted for your role.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
             }
-        }
-
-        // Chart 2: Daily Cash Flow Column Bar Chart (Last 7 Active Days)
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+        } else if (scopedBooks.isEmpty()) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Column {
-                            Text("Cash Flow Trend Chart", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                            Text("Recent active days comparison (IN vs OUT)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Box(modifier = Modifier.size(9.dp).background(GreenIn, RoundedCornerShape(2.dp)))
-                                Text("IN", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Box(modifier = Modifier.size(9.dp).background(RedOut, RoundedCornerShape(2.dp)))
-                                Text("OUT", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                        Icon(Icons.Default.MenuBook, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp))
+                        Text(
+                            text = "No cashbooks in ${selectedBusiness.name} yet",
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleSmall,
+                            textAlign = TextAlign.Center
+                        )
+                        Text(
+                            text = "Add a book from the Home tab to generate separate reports and PDF/CSV exports for ${selectedBusiness.name}.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            }
+        } else {
+            when (currentTab) {
+                // --- LEVEL 2 DEFAULT TAB: SEPARATE BOOKS IN THIS BUSINESS ---
+                "BOOKS" -> {
+                    item {
+                        val netColor = if (netBalance >= 0) Color(0xFF1D4ED8) else RedOut
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column {
+                                        Text("${selectedBusiness.name} Total", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text(
+                                            text = "Rs. ${String.format("%,.0f", netBalance)}",
+                                            style = MaterialTheme.typography.headlineSmall,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = netColor
+                                        )
+                                    }
+                                    Surface(
+                                        shape = RoundedCornerShape(16.dp),
+                                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
+                                    ) {
+                                        Text(
+                                            text = formatReportEntryCount(scopedTransactions.size),
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
+                                    }
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Surface(
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = GreenIn.copy(alpha = 0.1f)
+                                    ) {
+                                        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                            Text("CASH IN (+)", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = GreenIn)
+                                            Text(
+                                                text = "Rs. ${String.format("%,.0f", totalIn)}",
+                                                style = MaterialTheme.typography.titleSmall,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = GreenIn
+                                            )
+                                        }
+                                    }
+                                    Surface(
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = RedOut.copy(alpha = 0.1f)
+                                    ) {
+                                        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                            Text("CASH OUT (-)", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = RedOut)
+                                            Text(
+                                                text = "Rs. ${String.format("%,.0f", totalOut)}",
+                                                style = MaterialTheme.typography.titleSmall,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = RedOut
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
 
-                    if (dailyTrendPoints.isEmpty()) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(130.dp)
-                                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp)),
-                            contentAlignment = Alignment.Center
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("No transactions in this range to plot trend bars.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                text = "Separate Book Reports (${cashbookBreakdownList.size})",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Tap a book for full report",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    val maxBookVolume = cashbookBreakdownList.maxOf { maxOf(it.second.first, it.second.second) }.coerceAtLeast(1.0)
+                    items(cashbookBreakdownList, key = { it.first.id }) { (book, stats) ->
+                        val (bkIn, bkOut, bkTxCount) = stats
+                        val bkNet = bkIn - bkOut
+                        val inFrac = (bkIn / maxBookVolume).toFloat().coerceIn(0f, 1f)
+                        val outFrac = (bkOut / maxBookVolume).toFloat().coerceIn(0f, 1f)
+                        val bkFilteredTxs = allTransactions.filter {
+                            it.bookId == book.id &&
+                                isTransactionInDateRange(it.timestamp, dateRangePreset, customStartMillis, customEndMillis) &&
+                                matchesPaymentModeFilter(it.paymentMethod, paymentModeFilter)
+                        }.sortedByDescending { it.timestamp }
+
+                        Card(
+                            onClick = { viewModel.selectReportBook(book.id) },
+                            modifier = Modifier.fillMaxWidth().testTag("report_book_card_${book.id}"),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Surface(
+                                            shape = RoundedCornerShape(10.dp),
+                                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                                            modifier = Modifier.size(38.dp)
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Icon(Icons.Default.Book, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(19.dp))
+                                            }
+                                        }
+                                        Column {
+                                            Text(book.name, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            Text(formatReportEntryCount(bkTxCount), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            try {
+                                                val pdfFile = generatePdfReport(
+                                                    context = context,
+                                                    activeBook = book,
+                                                    transactions = bkFilteredTxs,
+                                                    activeBusiness = selectedBusiness
+                                                )
+                                                shareReportPdfFile(context, pdfFile, "Share ${book.name} PDF")
+                                            } catch (e: Exception) {
+                                                Toast.makeText(context, "PDF Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                                            }
+                                        },
+                                        modifier = Modifier.minimumInteractiveComponentSize()
+                                    ) {
+                                        Icon(Icons.Default.PictureAsPdf, contentDescription = "Export ${book.name} PDF", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                                    }
+                                }
+
+                                Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Text("IN", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = GreenIn, modifier = Modifier.width(30.dp))
+                                        Box(modifier = Modifier.weight(1f).height(8.dp).clip(RoundedCornerShape(4.dp)).background(GreenIn.copy(alpha = 0.12f))) {
+                                            Box(modifier = Modifier.fillMaxWidth(inFrac).height(8.dp).clip(RoundedCornerShape(4.dp)).background(GreenIn))
+                                        }
+                                        Text("Rs. ${String.format("%,.0f", bkIn)}", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = GreenIn)
+                                    }
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Text("OUT", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = RedOut, modifier = Modifier.width(30.dp))
+                                        Box(modifier = Modifier.weight(1f).height(8.dp).clip(RoundedCornerShape(4.dp)).background(RedOut.copy(alpha = 0.12f))) {
+                                            Box(modifier = Modifier.fillMaxWidth(outFrac).height(8.dp).clip(RoundedCornerShape(4.dp)).background(RedOut))
+                                        }
+                                        Text("Rs. ${String.format("%,.0f", bkOut)}", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = RedOut)
+                                    }
+                                }
+
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "Net: Rs. ${String.format("%,.0f", bkNet)}",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = if (bkNet >= 0) Color(0xFF1D4ED8) else RedOut
+                                    )
+                                    Text(
+                                        text = "Open Book Report →",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = GreenIn,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // --- LEVEL 3 OVERVIEW OR LEVEL 2 BUSINESS ANALYTICS ---
+                "OVERVIEW", "ANALYTICS" -> {
+                    if (selectedBook != null) {
+                        item {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Icon(Icons.Default.Book, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                                        Text(
+                                            text = "Isolated Book Report: ${selectedBook.name}",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                    Text(
+                                        text = formatReportEntryCount(scopedTransactions.size),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    item {
+                        val netColor = if (netBalance >= 0) Color(0xFF1D4ED8) else Color(0xFFD97706)
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = netColor.copy(alpha = 0.08f)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                            Text("NET BALANCE", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = netColor)
+                                            Text(
+                                                text = "Rs. ${String.format("%,.0f", netBalance)}",
+                                                style = MaterialTheme.typography.headlineSmall,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = netColor
+                                            )
+                                        }
+                                        Surface(
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = netColor.copy(alpha = 0.14f)
+                                        ) {
+                                            Text(
+                                                text = if (netBalance >= 0) "Surplus" else "Deficit",
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = netColor
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Surface(
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = GreenIn.copy(alpha = 0.1f)
+                                    ) {
+                                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                            Text("CASH IN (+)", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = GreenIn)
+                                            Text(
+                                                text = "Rs. ${String.format("%,.0f", totalIn)}",
+                                                style = MaterialTheme.typography.titleMedium,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = GreenIn
+                                            )
+                                            Text(formatReportEntryCount(inCount), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                    }
+                                    Surface(
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = RedOut.copy(alpha = 0.1f)
+                                    ) {
+                                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                            Text("CASH OUT (-)", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = RedOut)
+                                            Text(
+                                                text = "Rs. ${String.format("%,.0f", totalOut)}",
+                                                style = MaterialTheme.typography.titleMedium,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = RedOut
+                                            )
+                                            Text(formatReportEntryCount(outCount), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                    }
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Surface(
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                    ) {
+                                        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                                                Icon(Icons.Default.Payments, contentDescription = null, tint = GreenIn, modifier = Modifier.size(15.dp))
+                                                Text("Cash Net", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                                            }
+                                            Text(
+                                                text = "Rs. ${String.format("%,.0f", cashNet)}",
+                                                style = MaterialTheme.typography.labelLarge,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = if (cashNet >= 0) GreenIn else RedOut
+                                            )
+                                        }
+                                    }
+                                    Surface(
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                    ) {
+                                        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                                                Icon(Icons.Default.AccountBalance, contentDescription = null, tint = Color(0xFF2563EB), modifier = Modifier.size(15.dp))
+                                                Text("Bank / Online Net", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                                            }
+                                            Text(
+                                                text = "Rs. ${String.format("%,.0f", bankOnlineNet)}",
+                                                style = MaterialTheme.typography.labelLarge,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = if (bankOnlineNet >= 0) Color(0xFF2563EB) else RedOut
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    item {
+                        val totalVolume = totalIn + totalOut
+                        val inPct = if (totalVolume > 0) ((totalIn / totalVolume) * 100.0).toInt() else 0
+                        val outPct = if (totalVolume > 0) 100 - inPct else 0
+
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                                Column {
+                                    Text("Cash In vs Cash Out Ratio", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                                    Text("Distribution for $scopeTitle", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(14.dp))
+                                        .padding(14.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+                                ) {
+                                    Box(modifier = Modifier.size(110.dp), contentAlignment = Alignment.Center) {
+                                        Canvas(modifier = Modifier.fillMaxSize()) {
+                                            val diameter = size.minDimension
+                                            val strokeWidth = diameter * 0.2f
+                                            val arcSize = Size(diameter - strokeWidth, diameter - strokeWidth)
+                                            val topLeft = Offset((size.width - arcSize.width) / 2f, (size.height - arcSize.height) / 2f)
+
+                                            if (totalVolume <= 0.0) {
+                                                drawArc(
+                                                    color = Color(0xFFE2E8F0),
+                                                    startAngle = 0f,
+                                                    sweepAngle = 360f,
+                                                    useCenter = false,
+                                                    topLeft = topLeft,
+                                                    size = arcSize,
+                                                    style = Stroke(width = strokeWidth)
+                                                )
+                                            } else {
+                                                val inSweep = ((totalIn / totalVolume) * 360.0).toFloat()
+                                                val outSweep = ((totalOut / totalVolume) * 360.0).toFloat()
+                                                if (inSweep > 0f) {
+                                                    drawArc(
+                                                        color = GreenIn,
+                                                        startAngle = -90f,
+                                                        sweepAngle = inSweep,
+                                                        useCenter = false,
+                                                        topLeft = topLeft,
+                                                        size = arcSize,
+                                                        style = Stroke(width = strokeWidth, cap = StrokeCap.Butt)
+                                                    )
+                                                }
+                                                if (outSweep > 0f) {
+                                                    drawArc(
+                                                        color = RedOut,
+                                                        startAngle = -90f + inSweep,
+                                                        sweepAngle = outSweep,
+                                                        useCenter = false,
+                                                        topLeft = topLeft,
+                                                        size = arcSize,
+                                                        style = Stroke(width = strokeWidth, cap = StrokeCap.Butt)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                            Text(
+                                                if (totalVolume > 0) "$inPct%" else "0%",
+                                                style = MaterialTheme.typography.titleMedium,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = GreenIn
+                                            )
+                                            Text("Inflow", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                    }
+
+                                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                        Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            Box(modifier = Modifier.padding(top = 4.dp).size(10.dp).background(GreenIn, CircleShape))
+                                            Column {
+                                                Text(
+                                                    text = "Cash IN ($inPct%) • ${formatReportEntryCount(inCount)}",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
+                                                Text(
+                                                    text = "Rs. ${String.format("%,.0f", totalIn)}",
+                                                    style = MaterialTheme.typography.titleSmall,
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    color = GreenIn
+                                                )
+                                            }
+                                        }
+
+                                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                                        Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            Box(modifier = Modifier.padding(top = 4.dp).size(10.dp).background(RedOut, CircleShape))
+                                            Column {
+                                                Text(
+                                                    text = "Cash OUT ($outPct%) • ${formatReportEntryCount(outCount)}",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
+                                                Text(
+                                                    text = "Rs. ${String.format("%,.0f", totalOut)}",
+                                                    style = MaterialTheme.typography.titleSmall,
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    color = RedOut
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    item {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text("Cash Flow Trend", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                                        Text("Recent active days comparison (IN vs OUT)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            Box(modifier = Modifier.size(9.dp).background(GreenIn, RoundedCornerShape(2.dp)))
+                                            Text("IN", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                                        }
+                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            Box(modifier = Modifier.size(9.dp).background(RedOut, RoundedCornerShape(2.dp)))
+                                            Text("OUT", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+
+                                if (dailyTrendPoints.isEmpty()) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(120.dp)
+                                            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text("No entries in this filter to plot trend bars.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                } else {
+                                    val peakValue = dailyTrendPoints.maxOf { maxOf(it.second, it.third) }.coerceAtLeast(1.0)
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(14.dp))
+                                            .padding(14.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                            Text("Peak: Rs. ${String.format("%,.0f", peakValue)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            Text("Last ${dailyTrendPoints.size} active day(s)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                                        }
+
+                                        Canvas(modifier = Modifier.fillMaxWidth().height(155.dp)) {
+                                            val chartHeight = size.height
+                                            val chartWidth = size.width
+                                            val gridColor = Color(0xFFE2E8F0)
+                                            for (i in 0..3) {
+                                                val y = chartHeight * (i / 3f)
+                                                drawLine(color = gridColor, start = Offset(0f, y), end = Offset(chartWidth, y), strokeWidth = 1.5f)
+                                            }
+                                            val groupCount = dailyTrendPoints.size.coerceAtLeast(1)
+                                            val groupWidth = chartWidth / groupCount
+                                            val barWidth = (groupWidth * 0.28f).coerceIn(8f, 28f)
+                                            val gapBetweenBars = (barWidth * 0.35f).coerceAtLeast(4f)
+                                            dailyTrendPoints.forEachIndexed { idx, (_, dayIn, dayOut) ->
+                                                val centerX = groupWidth * idx + groupWidth / 2f
+                                                val inHeight = ((dayIn / peakValue).toFloat().coerceIn(0f, 1f)) * (chartHeight - 8f)
+                                                val outHeight = ((dayOut / peakValue).toFloat().coerceIn(0f, 1f)) * (chartHeight - 8f)
+                                                if (inHeight > 0f) {
+                                                    drawRoundRect(
+                                                        color = GreenIn,
+                                                        topLeft = Offset(centerX - barWidth - gapBetweenBars / 2f, chartHeight - inHeight),
+                                                        size = Size(barWidth, inHeight),
+                                                        cornerRadius = CornerRadius(6f, 6f)
+                                                    )
+                                                }
+                                                if (outHeight > 0f) {
+                                                    drawRoundRect(
+                                                        color = RedOut,
+                                                        topLeft = Offset(centerX + gapBetweenBars / 2f, chartHeight - outHeight),
+                                                        size = Size(barWidth, outHeight),
+                                                        cornerRadius = CornerRadius(6f, 6f)
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
+                                            dailyTrendPoints.forEach { (dLbl, _, _) ->
+                                                Text(text = dLbl, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    item {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text("Category Breakdown", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                                        Text(
+                                            if (categoryChartMode == "OUT") "Where money went (Cash OUT)" else "Where money came from (Cash IN)",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        FilterChip(selected = categoryChartMode == "OUT", onClick = { categoryChartMode = "OUT" }, label = { Text("OUT", fontWeight = FontWeight.Bold) })
+                                        FilterChip(selected = categoryChartMode == "IN", onClick = { categoryChartMode = "IN" }, label = { Text("IN", fontWeight = FontWeight.Bold) })
+                                    }
+                                }
+
+                                if (categoryTotals.isEmpty()) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(100.dp)
+                                            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            "No ${if (categoryChartMode == "OUT") "Cash OUT" else "Cash IN"} entries in this filter.",
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                    }
+                                } else {
+                                    val topCategories = categoryTotals.take(5)
+                                    val otherTotal = categoryTotals.drop(5).sumOf { it.second }
+                                    val slices = if (otherTotal > 0.0) topCategories + ("Other" to otherTotal) else topCategories
+                                    val categorySum = slices.sumOf { it.second }.coerceAtLeast(1.0)
+                                    val maxCat = slices.maxOf { it.second }.coerceAtLeast(1.0)
+
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(14.dp))
+                                            .padding(14.dp),
+                                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(16.dp)
+                                        ) {
+                                            Box(modifier = Modifier.size(106.dp), contentAlignment = Alignment.Center) {
+                                                Canvas(modifier = Modifier.fillMaxSize()) {
+                                                    val diameter = size.minDimension
+                                                    val strokeWidth = diameter * 0.22f
+                                                    val arcSize = Size(diameter - strokeWidth, diameter - strokeWidth)
+                                                    val topLeft = Offset((size.width - arcSize.width) / 2f, (size.height - arcSize.height) / 2f)
+                                                    var currentAngle = -90f
+                                                    slices.forEachIndexed { idx, (_, amount) ->
+                                                        val sweep = ((amount / categorySum) * 360.0).toFloat()
+                                                        if (sweep > 0f) {
+                                                            drawArc(
+                                                                color = chartPalette[idx % chartPalette.size],
+                                                                startAngle = currentAngle,
+                                                                sweepAngle = sweep,
+                                                                useCenter = false,
+                                                                topLeft = topLeft,
+                                                                size = arcSize,
+                                                                style = Stroke(width = strokeWidth)
+                                                            )
+                                                            currentAngle += sweep
+                                                        }
+                                                    }
+                                                }
+                                                Text("${slices.size}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold)
+                                            }
+
+                                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                slices.forEachIndexed { idx, (label, amount) ->
+                                                    val pct = ((amount / categorySum) * 100.0).toInt()
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.weight(1f)) {
+                                                            Box(modifier = Modifier.size(10.dp).background(chartPalette[idx % chartPalette.size], CircleShape))
+                                                            Text(label, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                        }
+                                                        Text("$pct%", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+
+                                        slices.forEachIndexed { idx, (category, total) ->
+                                            val barColor = chartPalette[idx % chartPalette.size]
+                                            val fraction = (total / maxCat).toFloat().coerceIn(0f, 1f)
+                                            Column {
+                                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                                    Text(category, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                    Text("Rs. ${String.format("%,.0f", total)}", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = barColor)
+                                                }
+                                                Spacer(modifier = Modifier.height(4.dp))
+                                                Box(modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)).background(barColor.copy(alpha = 0.12f))) {
+                                                    Box(modifier = Modifier.fillMaxWidth(fraction).height(8.dp).clip(RoundedCornerShape(4.dp)).background(barColor))
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // On Level 2 Business Analytics, also include Payment Mode & Staff summary right below charts
+                    if (selectedBook == null) {
+                        item {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                            ) {
+                                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    Text("Payment Mode Breakdown", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                                    val modes = listOf(
+                                        Triple("Cash", cashCount, cashIn to cashOut),
+                                        Triple("Bank", bankOnlyCount, bankOnlyIn to bankOnlyOut),
+                                        Triple("Online", onlineCount, onlineIn to onlineOut)
+                                    )
+                                    modes.forEach { (modeName, mCount, mSums) ->
+                                        val mNet = mSums.first - mSums.second
+                                        Surface(
+                                            shape = RoundedCornerShape(10.dp),
+                                            color = MaterialTheme.colorScheme.surface,
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                                    Text("$modeName • ${formatReportEntryCount(mCount)}", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                                                    Text(
+                                                        text = "Net: Rs. ${String.format("%,.0f", mNet)}",
+                                                        fontWeight = FontWeight.ExtraBold,
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = if (mNet >= 0) GreenIn else RedOut
+                                                    )
+                                                }
+                                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                                    Text("IN: Rs. ${String.format("%,.0f", mSums.first)}", style = MaterialTheme.typography.labelSmall, color = GreenIn, fontWeight = FontWeight.SemiBold)
+                                                    Text("OUT: Rs. ${String.format("%,.0f", mSums.second)}", style = MaterialTheme.typography.labelSmall, color = RedOut, fontWeight = FontWeight.SemiBold)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (staffBreakdownList.isNotEmpty()) {
+                            item {
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(16.dp),
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                                ) {
+                                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                        Column {
+                                            Text("Staff / Added By Summary", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                                            Text("Entries logged by Owner & team members", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                        staffBreakdownList.forEach { (authorName, cnt, sums) ->
+                                            Surface(
+                                                shape = RoundedCornerShape(10.dp),
+                                                color = MaterialTheme.colorScheme.surface,
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                                        Text(authorName, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                                                        Text(formatReportEntryCount(cnt), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                                                    }
+                                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                                        Text("IN: Rs. ${String.format("%,.0f", sums.first)}", style = MaterialTheme.typography.labelSmall, color = GreenIn, fontWeight = FontWeight.SemiBold)
+                                                        Text("OUT: Rs. ${String.format("%,.0f", sums.second)}", style = MaterialTheme.typography.labelSmall, color = RedOut, fontWeight = FontWeight.SemiBold)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // --- DAYBOOK (ROZNAMCHA) ---
+                "DAYBOOK" -> {
+                    item {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                        ) {
+                            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Column {
+                                    Text("Daybook (Daily Closing)", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                                    Text("Day-by-day Cash In, Cash Out & Closing Balance", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    listOf("ALL" to "All Entries", "IN" to "Cash In (+)", "OUT" to "Cash Out (-)").forEach { (k, lbl) ->
+                                        FilterChip(
+                                            selected = daybookTypeFilter == k,
+                                            onClick = { daybookTypeFilter = k },
+                                            label = { Text(lbl, fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                                            modifier = Modifier.height(32.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (daybookGroups.isEmpty()) {
+                        item {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().padding(24.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("No entries match this filter.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
                     } else {
-                        val peakValue = dailyTrendPoints.maxOf { maxOf(it.second, it.third) }.coerceAtLeast(1.0)
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(14.dp))
-                                .padding(14.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Row(
+                        items(daybookGroups, key = { it.first }) { (_, dayTs, pair) ->
+                            val (totals, txs) = pair
+                            val (dIn, dOut, closingBal) = totals
+                            val dayNet = dIn - dOut
+                            val dayLabel = when {
+                                DateUtils.isToday(dayTs) -> "Today • ${SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(dayTs))}"
+                                DateUtils.isToday(dayTs + DateUtils.DAY_IN_MILLIS) -> "Yesterday • ${SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(dayTs))}"
+                                else -> SimpleDateFormat("EEE, dd MMM yyyy", Locale.getDefault()).format(Date(dayTs))
+                            }
+
+                            Card(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
+                                shape = RoundedCornerShape(14.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f))
                             ) {
-                                Text("Peak: Rs. ${String.format("%,.0f", peakValue)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text("Last ${dailyTrendPoints.size} active day(s)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
-                            }
-
-                            Canvas(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(160.dp)
-                            ) {
-                                val chartHeight = size.height
-                                val chartWidth = size.width
-                                val gridColor = Color(0xFFE2E8F0)
-
-                                // Horizontal guide lines
-                                for (i in 0..3) {
-                                    val y = chartHeight * (i / 3f)
-                                    drawLine(
-                                        color = gridColor,
-                                        start = Offset(0f, y),
-                                        end = Offset(chartWidth, y),
-                                        strokeWidth = 1.5f
-                                    )
-                                }
-
-                                val groupCount = dailyTrendPoints.size.coerceAtLeast(1)
-                                val groupWidth = chartWidth / groupCount
-                                val barWidth = (groupWidth * 0.28f).coerceIn(8f, 28f)
-                                val gapBetweenBars = (barWidth * 0.35f).coerceAtLeast(4f)
-
-                                dailyTrendPoints.forEachIndexed { idx, (_, dayIn, dayOut) ->
-                                    val centerX = groupWidth * idx + groupWidth / 2f
-                                    val inHeight = ((dayIn / peakValue).toFloat().coerceIn(0f, 1f)) * (chartHeight - 8f)
-                                    val outHeight = ((dayOut / peakValue).toFloat().coerceIn(0f, 1f)) * (chartHeight - 8f)
-
-                                    if (inHeight > 0f) {
-                                        drawRoundRect(
-                                            color = GreenIn,
-                                            topLeft = Offset(centerX - barWidth - gapBetweenBars / 2f, chartHeight - inHeight),
-                                            size = Size(barWidth, inHeight),
-                                            cornerRadius = CornerRadius(6f, 6f)
-                                        )
-                                    }
-                                    if (outHeight > 0f) {
-                                        drawRoundRect(
-                                            color = RedOut,
-                                            topLeft = Offset(centerX + gapBetweenBars / 2f, chartHeight - outHeight),
-                                            size = Size(barWidth, outHeight),
-                                            cornerRadius = CornerRadius(6f, 6f)
-                                        )
-                                    }
-                                }
-                            }
-
-                            // X-axis date labels
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceAround
-                            ) {
-                                dailyTrendPoints.forEach { (dateLabel, _, _) ->
-                                    Text(
-                                        text = dateLabel,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Chart 3: Business-by-Business Performance Comparison (Shown in Overall Mode)
-        if (effectiveBusinessId == null && effectiveBookId == null && businessBreakdownList.isNotEmpty()) {
-            item {
-                val maxBizVolume = businessBreakdownList.maxOf { maxOf(it.third.first, it.third.second) }.coerceAtLeast(1.0)
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
-                ) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Column {
-                            Text("Business-by-Business Comparison", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                            Text("Tap any business below to open its separate report & charts", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-
-                        businessBreakdownList.forEach { (biz, bookCount, stats) ->
-                            val (bizIn, bizOut, txCount) = stats
-                            val bizNet = bizIn - bizOut
-                            val inFrac = (bizIn / maxBizVolume).toFloat().coerceIn(0f, 1f)
-                            val outFrac = (bizOut / maxBizVolume).toFloat().coerceIn(0f, 1f)
-
-                            Surface(
-                                onClick = { selectedBusinessId = biz.id },
-                                shape = RoundedCornerShape(12.dp),
-                                color = MaterialTheme.colorScheme.surface,
-                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-                                modifier = Modifier.fillMaxWidth().testTag("report_biz_card_${biz.id}")
-                            ) {
-                                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) {
-                                            Icon(Icons.Default.Storefront, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-                                            Column {
-                                                Text(biz.name, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                                Text("$bookCount book(s) • $txCount entries", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                            }
-                                        }
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Column(horizontalAlignment = Alignment.End) {
+                                        Text(dayLabel, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
+                                        Text(
+                                            text = "Closing: Rs. ${String.format("%,.0f", closingBal)}",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = if (closingBal >= 0) Color(0xFF1D4ED8) else RedOut
+                                        )
+                                    }
+
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text("In: Rs. ${String.format("%,.0f", dIn)}", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = GreenIn)
+                                            Text("Out: Rs. ${String.format("%,.0f", dOut)}", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = RedOut)
                                             Text(
-                                                "Net: Rs. ${String.format("%,.0f", bizNet)}",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                fontWeight = FontWeight.ExtraBold,
-                                                color = if (bizNet >= 0) GreenIn else RedOut,
-                                                maxLines = 1,
-                                                softWrap = false
+                                                text = "Day Net: Rs. ${String.format("%,.0f", dayNet)}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (dayNet >= 0) GreenIn else RedOut
                                             )
-                                            Text("View Report →", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
                                         }
                                     }
 
-                                    // Dual IN / OUT comparison bars
-                                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            Text("IN", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = GreenIn, modifier = Modifier.width(28.dp))
-                                            Box(modifier = Modifier.weight(1f).height(8.dp).clip(RoundedCornerShape(4.dp)).background(GreenIn.copy(alpha = 0.12f))) {
-                                                Box(modifier = Modifier.fillMaxWidth(inFrac).height(8.dp).clip(RoundedCornerShape(4.dp)).background(GreenIn))
-                                            }
-                                            Text("Rs. ${String.format("%,.0f", bizIn)}", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, color = GreenIn, maxLines = 1, softWrap = false)
+                                    val bizTeam = allTeamMembers.filter { it.businessId == selectedBusiness.id }
+                                    txs.forEachIndexed { index, tx ->
+                                        if (index > 0) {
+                                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
                                         }
-                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            Text("OUT", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = RedOut, modifier = Modifier.width(28.dp))
-                                            Box(modifier = Modifier.weight(1f).height(8.dp).clip(RoundedCornerShape(4.dp)).background(RedOut.copy(alpha = 0.12f))) {
-                                                Box(modifier = Modifier.fillMaxWidth(outFrac).height(8.dp).clip(RoundedCornerShape(4.dp)).background(RedOut))
-                                            }
-                                            Text("Rs. ${String.format("%,.0f", bizOut)}", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, color = RedOut, maxLines = 1, softWrap = false)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+                                        val isIn = tx.type == "IN"
+                                        val txBook = bookLookup[tx.bookId]
+                                        val author = resolveTransactionAddedBy(
+                                            tx = tx,
+                                            ownerEmail = selectedBusiness.userEmail,
+                                            currentUserEmail = currentUserEmail,
+                                            currentUserName = currentUserName,
+                                            teamMembers = bizTeam,
+                                            globalAccounts = globalAccounts
+                                        )
+                                        val titleText = tx.remarks.ifBlank { tx.category.ifBlank { if (isIn) "Cash In" else "Cash Out" } }
+                                        val timeText = SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date(tx.timestamp))
 
-        // Chart 3B: Cashbook-by-Cashbook Breakdown (Analytics for Every Cashbook)
-        if (effectiveBookId == null && cashbookBreakdownList.isNotEmpty()) {
-            item {
-                val maxBookVolume = cashbookBreakdownList.maxOf { maxOf(it.second.first, it.second.second) }.coerceAtLeast(1.0)
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
-                ) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Column {
-                            Text("Cashbook-by-Cashbook Breakdown", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                            Text("Tap any cashbook below to view its dedicated analytics & charts", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-
-                        cashbookBreakdownList.forEach { (book, stats) ->
-                            val (bkIn, bkOut, bkTxCount) = stats
-                            val bkNet = bkIn - bkOut
-                            val inFrac = (bkIn / maxBookVolume).toFloat().coerceIn(0f, 1f)
-                            val outFrac = (bkOut / maxBookVolume).toFloat().coerceIn(0f, 1f)
-                            val parentBizName = bizLookup[book.businessId]?.name
-
-                            Surface(
-                                onClick = { selectedBookId = book.id },
-                                shape = RoundedCornerShape(12.dp),
-                                color = MaterialTheme.colorScheme.surface,
-                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-                                modifier = Modifier.fillMaxWidth().testTag("report_book_card_${book.id}")
-                            ) {
-                                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) {
-                                            Icon(Icons.Default.Book, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-                                            Column {
-                                                Text(book.name, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                                Text(titleText, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                                 Text(
-                                                    buildString {
-                                                        if (parentBizName != null && effectiveBusinessId == null) append("$parentBizName • ")
-                                                        append("$bkTxCount entries")
+                                                    text = buildString {
+                                                        if (effectiveBookId == null && txBook != null) append("${txBook.name} • ")
+                                                        append("${tx.paymentMethod} • $timeText")
+                                                        if (author.displayName.isNotBlank()) append(" • By ${author.displayName}")
                                                     },
                                                     style = MaterialTheme.typography.labelSmall,
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -6817,35 +8771,13 @@ fun ReportsScreen(viewModel: LedgerViewModel) {
                                                     overflow = TextOverflow.Ellipsis
                                                 )
                                             }
-                                        }
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Column(horizontalAlignment = Alignment.End) {
+                                            Spacer(modifier = Modifier.width(8.dp))
                                             Text(
-                                                "Net: Rs. ${String.format("%,.0f", bkNet)}",
-                                                style = MaterialTheme.typography.bodySmall,
+                                                text = "${if (isIn) "+" else "-"} Rs. ${String.format("%,.0f", tx.amount)}",
+                                                style = MaterialTheme.typography.bodyMedium,
                                                 fontWeight = FontWeight.ExtraBold,
-                                                color = if (bkNet >= 0) GreenIn else RedOut,
-                                                maxLines = 1,
-                                                softWrap = false
+                                                color = if (isIn) GreenIn else RedOut
                                             )
-                                            Text("View Analytics →", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-                                        }
-                                    }
-
-                                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            Text("IN", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = GreenIn, modifier = Modifier.width(28.dp))
-                                            Box(modifier = Modifier.weight(1f).height(8.dp).clip(RoundedCornerShape(4.dp)).background(GreenIn.copy(alpha = 0.12f))) {
-                                                Box(modifier = Modifier.fillMaxWidth(inFrac).height(8.dp).clip(RoundedCornerShape(4.dp)).background(GreenIn))
-                                            }
-                                            Text("Rs. ${String.format("%,.0f", bkIn)}", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, color = GreenIn, maxLines = 1, softWrap = false)
-                                        }
-                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            Text("OUT", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = RedOut, modifier = Modifier.width(28.dp))
-                                            Box(modifier = Modifier.weight(1f).height(8.dp).clip(RoundedCornerShape(4.dp)).background(RedOut.copy(alpha = 0.12f))) {
-                                                Box(modifier = Modifier.fillMaxWidth(outFrac).height(8.dp).clip(RoundedCornerShape(4.dp)).background(RedOut))
-                                            }
-                                            Text("Rs. ${String.format("%,.0f", bkOut)}", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, color = RedOut, maxLines = 1, softWrap = false)
                                         }
                                     }
                                 }
@@ -6853,262 +8785,172 @@ fun ReportsScreen(viewModel: LedgerViewModel) {
                         }
                     }
                 }
-            }
-        }
 
-        // Chart 4: Category Breakdown Donut & Distribution Bars (OUT / IN toggle)
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Category Breakdown", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                if (categoryChartMode == "OUT") "Where money went (Cash OUT)" else "Where money came from (Cash IN)",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            FilterChip(
-                                selected = categoryChartMode == "OUT",
-                                onClick = { categoryChartMode = "OUT" },
-                                label = { Text("OUT", fontWeight = FontWeight.Bold) }
-                            )
-                            FilterChip(
-                                selected = categoryChartMode == "IN",
-                                onClick = { categoryChartMode = "IN" },
-                                label = { Text("IN", fontWeight = FontWeight.Bold) }
-                            )
-                        }
-                    }
-
-                    if (categoryTotals.isEmpty()) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(100.dp)
-                                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp)),
-                            contentAlignment = Alignment.Center
+                // --- LEVEL 3: MODE & STAFF TAB ---
+                "MODE_STAFF" -> {
+                    item {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
                         ) {
-                            Text(
-                                "No ${if (categoryChartMode == "OUT") "Cash OUT" else "Cash IN"} entries in this filter.",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                    } else {
-                        val topCategories = categoryTotals.take(5)
-                        val otherTotal = categoryTotals.drop(5).sumOf { it.second }
-                        val slices = if (otherTotal > 0.0) topCategories + ("Other" to otherTotal) else topCategories
-                        val categorySum = slices.sumOf { it.second }.coerceAtLeast(1.0)
-                        val maxCat = slices.maxOf { it.second }.coerceAtLeast(1.0)
-
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(14.dp))
-                                .padding(14.dp),
-                            verticalArrangement = Arrangement.spacedBy(14.dp)
-                        ) {
-                            // Multi-Slice Donut
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(16.dp)
-                            ) {
-                                Box(modifier = Modifier.size(112.dp), contentAlignment = Alignment.Center) {
-                                    Canvas(modifier = Modifier.fillMaxSize()) {
-                                        val diameter = size.minDimension
-                                        val strokeWidth = diameter * 0.22f
-                                        val arcSize = Size(diameter - strokeWidth, diameter - strokeWidth)
-                                        val topLeft = Offset((size.width - arcSize.width) / 2f, (size.height - arcSize.height) / 2f)
-                                        var currentAngle = -90f
-                                        slices.forEachIndexed { idx, (_, amount) ->
-                                            val sweep = ((amount / categorySum) * 360.0).toFloat()
-                                            if (sweep > 0f) {
-                                                drawArc(
-                                                    color = chartPalette[idx % chartPalette.size],
-                                                    startAngle = currentAngle,
-                                                    sweepAngle = sweep,
-                                                    useCenter = false,
-                                                    topLeft = topLeft,
-                                                    size = arcSize,
-                                                    style = Stroke(width = strokeWidth)
-                                                )
-                                                currentAngle += sweep
-                                            }
-                                        }
-                                    }
-                                    Text(
-                                        "${slices.size}",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.ExtraBold
-                                    )
-                                }
-
-                                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    slices.forEachIndexed { idx, (label, amount) ->
-                                        val pct = ((amount / categorySum) * 100.0).toInt()
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.weight(1f)) {
-                                                Box(modifier = Modifier.size(10.dp).background(chartPalette[idx % chartPalette.size], CircleShape))
-                                                Text(label, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                            }
-                                            Text("$pct%", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-                                        }
-                                    }
-                                }
-                            }
-
-                            Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-
-                            // Detailed category progress bars
-                            slices.forEachIndexed { idx, (category, total) ->
-                                val barColor = chartPalette[idx % chartPalette.size]
-                                val fraction = (total / maxCat).toFloat().coerceIn(0f, 1f)
-                                Column {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Text(category, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
-                                        Text("Rs. ${String.format("%,.0f", total)}", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = barColor)
-                                    }
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(8.dp)
-                                            .clip(RoundedCornerShape(4.dp))
-                                            .background(barColor.copy(alpha = 0.12f))
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxWidth(fraction)
-                                                .height(8.dp)
-                                                .clip(RoundedCornerShape(4.dp))
-                                                .background(barColor)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Export & Share Statement Reports (respects Selected Business vs Overall Scope + Date Range)
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Export & Share Reports", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "Share \"$scopeTitle\" statement with partners or clients via WhatsApp, PDF, or CSV.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    Button(
-                        onClick = {
-                            val textReport = generateMultiBusinessTextReport(
-                                scopeTitle = scopeTitle,
-                                transactions = scopedTransactions,
-                                businesses = if (selectedBusiness == null) businesses else listOf(selectedBusiness),
-                                allBooks = if (selectedBook != null) listOf(selectedBook) else scopedBooks
-                            )
-                            val sendIntent = Intent().apply {
-                                action = Intent.ACTION_SEND
-                                putExtra(Intent.EXTRA_TEXT, textReport)
-                                type = "text/plain"
-                            }
-                            try {
-                                sendIntent.setPackage("com.whatsapp")
-                                context.startActivity(sendIntent)
-                            } catch (e: Exception) {
-                                sendIntent.setPackage(null)
-                                context.startActivity(Intent.createChooser(sendIntent, "Share Text Statement Report"))
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth().testTag("share_text_report_button"),
-                        shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF25D366))
-                    ) {
-                        Icon(Icons.Default.Chat, contentDescription = null, tint = Color.White)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Share on WhatsApp as Text", fontWeight = FontWeight.Bold, color = Color.White)
-                    }
-
-                    Button(
-                        onClick = {
-                            try {
-                                val pdfFile = generateMultiBusinessPdfReport(
-                                    context = context,
-                                    scopeTitle = scopeTitle,
-                                    transactions = scopedTransactions,
-                                    bookLookup = bookLookup,
-                                    bizLookup = bizLookup
+                            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Text("Payment Mode Breakdown", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                                val modes = listOf(
+                                    Triple("Cash", cashCount, cashIn to cashOut),
+                                    Triple("Bank", bankOnlyCount, bankOnlyIn to bankOnlyOut),
+                                    Triple("Online", onlineCount, onlineIn to onlineOut)
                                 )
-                                val pdfUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", pdfFile)
-                                val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                                    type = "application/pdf"
-                                    putExtra(Intent.EXTRA_STREAM, pdfUri)
-                                    clipData = ClipData.newRawUri("PDF Statement Report", pdfUri)
-                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                modes.forEach { (modeName, mCount, mSums) ->
+                                    val mNet = mSums.first - mSums.second
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = MaterialTheme.colorScheme.surface,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                                Text("$modeName • ${formatReportEntryCount(mCount)}", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                                                Text(
+                                                    text = "Net: Rs. ${String.format("%,.0f", mNet)}",
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = if (mNet >= 0) GreenIn else RedOut
+                                                )
+                                            }
+                                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                                Text("IN: Rs. ${String.format("%,.0f", mSums.first)}", style = MaterialTheme.typography.labelSmall, color = GreenIn, fontWeight = FontWeight.SemiBold)
+                                                Text("OUT: Rs. ${String.format("%,.0f", mSums.second)}", style = MaterialTheme.typography.labelSmall, color = RedOut, fontWeight = FontWeight.SemiBold)
+                                            }
+                                        }
+                                    }
                                 }
-                                val chooserIntent = Intent.createChooser(shareIntent, "Share PDF Statement Report").apply {
-                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                }
-                                context.startActivity(chooserIntent)
-                            } catch (e: Exception) {
-                                Toast.makeText(context, "PDF Error: ${e.message}", Toast.LENGTH_SHORT).show()
                             }
-                        },
-                        modifier = Modifier.fillMaxWidth().testTag("share_pdf_report_button"),
-                        shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                    ) {
-                        Icon(Icons.Default.PictureAsPdf, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Share as PDF Document", fontWeight = FontWeight.Bold)
+                        }
                     }
 
-                    OutlinedButton(
-                        onClick = {
-                            val csvData = viewModel.getCSVDataForTransactions(scopedTransactions, bookLookup, bizLookup)
-                            clipboardManager.setText(AnnotatedString(csvData))
-                            Toast.makeText(context, "Statement CSV copied to clipboard!", Toast.LENGTH_LONG).show()
-
-                            val sendIntent = Intent().apply {
-                                action = Intent.ACTION_SEND
-                                putExtra(Intent.EXTRA_TEXT, csvData)
-                                type = "text/comma-separated-values"
+                    if (staffBreakdownList.isNotEmpty()) {
+                        item {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                            ) {
+                                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    Column {
+                                        Text("Staff / Added By Summary", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                                        Text("Entries logged by Owner & team members", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    staffBreakdownList.forEach { (authorName, cnt, sums) ->
+                                        Surface(
+                                            shape = RoundedCornerShape(10.dp),
+                                            color = MaterialTheme.colorScheme.surface,
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                                    Text(authorName, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                                                    Text(formatReportEntryCount(cnt), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                                                }
+                                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                                    Text("IN: Rs. ${String.format("%,.0f", sums.first)}", style = MaterialTheme.typography.labelSmall, color = GreenIn, fontWeight = FontWeight.SemiBold)
+                                                    Text("OUT: Rs. ${String.format("%,.0f", sums.second)}", style = MaterialTheme.typography.labelSmall, color = RedOut, fontWeight = FontWeight.SemiBold)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
-                            context.startActivity(Intent.createChooser(sendIntent, "Share CSV Statement Report"))
-                        },
-                        modifier = Modifier.fillMaxWidth().testTag("export_csv_button"),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Icon(Icons.Default.Share, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Share Corporate CSV Spreadsheet", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
+                // --- EXPORT TAB ---
+                "EXPORT" -> {
+                    item {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Text("Export & Share Statement", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    "Scope: $scopeTitle • $dateLabel • $modeLabel (${formatReportEntryCount(scopedTransactions.size)})",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+
+                                Button(
+                                    onClick = exportPdfAction,
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("share_pdf_report_button"),
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = GreenIn)
+                                ) {
+                                    Icon(Icons.Default.PictureAsPdf, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Share PDF Statement", fontWeight = FontWeight.Bold)
+                                }
+
+                                Button(
+                                    onClick = {
+                                        val textReport = generateMultiBusinessTextReport(
+                                            scopeTitle = "$scopeTitle ($dateLabel • $modeLabel)",
+                                            transactions = scopedTransactions,
+                                            businesses = listOf(selectedBusiness),
+                                            allBooks = if (selectedBook != null) listOf(selectedBook) else scopedBooks
+                                        )
+                                        val sendIntent = Intent().apply {
+                                            action = Intent.ACTION_SEND
+                                            putExtra(Intent.EXTRA_TEXT, textReport)
+                                            type = "text/plain"
+                                        }
+                                        try {
+                                            sendIntent.setPackage("com.whatsapp")
+                                            context.startActivity(sendIntent)
+                                        } catch (_: Exception) {
+                                            sendIntent.setPackage(null)
+                                            context.startActivity(Intent.createChooser(sendIntent, "Share Text Statement Report"))
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("share_text_report_button"),
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF25D366))
+                                ) {
+                                    Icon(Icons.Default.Chat, contentDescription = null, tint = Color.White)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Share on WhatsApp as Text", fontWeight = FontWeight.Bold, color = Color.White)
+                                }
+
+                                OutlinedButton(
+                                    onClick = {
+                                        val csvData = viewModel.getCSVDataForTransactions(scopedTransactions, bookLookup, bizLookup)
+                                        clipboardManager.setText(AnnotatedString(csvData))
+                                        try {
+                                            val safeName = scopeTitle.replace(Regex("[^a-zA-Z0-9_-]"), "_").ifBlank { "cashbook" }
+                                            val csvFile = File(context.cacheDir, "${safeName}_statement.csv")
+                                            csvFile.writeText(csvData)
+                                            val csvUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", csvFile)
+                                            val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                                                type = "text/csv"
+                                                putExtra(Intent.EXTRA_STREAM, csvUri)
+                                                clipData = ClipData.newRawUri("CashBook CSV", csvUri)
+                                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                            }
+                                            context.startActivity(Intent.createChooser(sendIntent, "Share Excel / CSV Statement"))
+                                        } catch (_: Exception) {
+                                            Toast.makeText(context, "CSV copied to clipboard!", Toast.LENGTH_LONG).show()
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("export_csv_button"),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Icon(Icons.Default.Share, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Share Excel / CSV File", fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -7430,6 +9272,7 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
     var staffEmail by remember { mutableStateOf("") }
     var staffPhone by remember { mutableStateOf("") }
     var staffRole by remember { mutableStateOf("Data Entry") } // Default role
+    var staffHideBalance by remember { mutableStateOf(false) }
 
     var showInvitationSuccessDialog by remember { mutableStateOf(false) }
     var lastAddedCollaboratorName by remember { mutableStateOf("") }
@@ -7444,7 +9287,7 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
     var memberToEdit by remember { mutableStateOf<TeamMember?>(null) }
     var memberToDelete by remember { mutableStateOf<TeamMember?>(null) }
 
-    val roles = listOf("Data Entry", "Partner", "Admin", "Boss")
+    val roles = listOf("Viewer", "Data Entry", "Partner", "Admin", "Boss")
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
 
@@ -7473,7 +9316,7 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        "Business: ${activeBusiness?.name ?: "Active Business"} • Role: $simulatedRole",
+                        "Your Role: $simulatedRole",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -7686,11 +9529,13 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                     val roleBadgeBg = when (tm.role) {
                         "Boss", "Admin" -> Color(0xFFEDE9FE)
                         "Partner" -> Color(0xFFDCFCE7)
+                        "Viewer" -> Color(0xFFF1F5F9)
                         else -> Color(0xFFE0F2FE)
                     }
                     val roleBadgeFg = when (tm.role) {
                         "Boss", "Admin" -> Color(0xFF5B21B6)
                         "Partner" -> Color(0xFF166534)
+                        "Viewer" -> Color(0xFF475569)
                         else -> Color(0xFF0369A1)
                     }
                     Card(
@@ -7775,6 +9620,26 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis
                                     )
+                                    if (tm.hideBalance && canRoleHideBalance(tm.role)) {
+                                        Surface(
+                                            color = Color(0xFFFEF3C7),
+                                            shape = RoundedCornerShape(5.dp)
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                            ) {
+                                                Icon(Icons.Default.VisibilityOff, contentDescription = null, tint = Color(0xFF92400E), modifier = Modifier.size(12.dp))
+                                                Text(
+                                                    "Total Balances Hidden",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = Color(0xFF92400E),
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
+                                            }
+                                        }
+                                    }
                                     Text(
                                         "Invite Code: $memberCode",
                                         style = MaterialTheme.typography.labelSmall,
@@ -7986,6 +9851,7 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
 
                     Text(
                         text = when (staffRole) {
+                            "Viewer" -> "Read-only: Can view allowed cashbooks and entries; cannot add, edit, or delete."
                             "Data Entry" -> "Can record Cash In / Out entries; cannot edit or delete existing records."
                             "Partner" -> "Can view, add, and edit Cash In / Out entries; cannot delete business or team."
                             else -> "Full access to books, transactions, reports, and team management."
@@ -8006,6 +9872,40 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                             formError = ""
                         }
                     )
+
+                    if (canRoleHideBalance(staffRole)) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        "Hide Total Balance",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        "Hide Net, Cash/Bank totals & reports from this $staffRole",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = staffHideBalance,
+                                    onCheckedChange = { staffHideBalance = it },
+                                    modifier = Modifier.testTag("team_hide_balance_switch")
+                                )
+                            }
+                        }
+                    }
 
                     if (formError.isNotBlank()) {
                         Text(formError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
@@ -8029,6 +9929,7 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                             } else {
                                 encodeAllowedBooks(selectedBookNames.toList())
                             }
+                            val effectiveHideBal = canRoleHideBalance(staffRole) && staffHideBalance
                             val code = syncManager.getOrGenerateInviteCode(activeBusiness?.name ?: "CB", cleanEmail)
                             lastAddedCollaboratorName = cleanName
                             lastAddedCollaboratorRole = staffRole
@@ -8044,7 +9945,8 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                                 email = cleanEmail,
                                 phone = staffPhone.trim(),
                                 role = staffRole,
-                                allowedBookNames = allowedRaw
+                                allowedBookNames = allowedRaw,
+                                hideBalance = effectiveHideBal
                             ) { inv, ok ->
                                 lastGeneratedInviteCode = inv.inviteCode
                                 invitePublishedCloud = ok
@@ -8055,6 +9957,7 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                             staffEmail = ""
                             staffPhone = ""
                             staffRole = "Data Entry"
+                            staffHideBalance = false
                             showAddStaffDialog = false
                             showInvitationSuccessDialog = true
                         }
@@ -8080,6 +9983,7 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
         var editEmail by remember(editing.id, editing.email) { mutableStateOf(editing.email) }
         var editPhone by remember(editing.id, editing.phone) { mutableStateOf(editing.phone) }
         var editRole by remember(editing.id, editing.role) { mutableStateOf(editing.role) }
+        var editHideBalance by remember(editing.id, editing.hideBalance) { mutableStateOf(editing.hideBalance) }
         var editShareAllBooks by remember(editing.id, editing.allowedBookNames) {
             mutableStateOf(isRoleFullBusinessAccess(editing.role) || parseAllowedBooks(editing.allowedBookNames).isEmpty())
         }
@@ -8192,6 +10096,7 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                     ) {
                         Text(
                             text = when (editRole) {
+                                "Viewer" -> "Viewer (Read-Only): Can view allowed cashbooks and entries; cannot add, edit, or delete."
                                 "Data Entry" -> "Data Entry: Can add Cash In / Out entries; cannot edit/delete existing entries or books."
                                 "Partner" -> "Partner: Can view, add, and edit Cash In / Out entries; cannot delete businesses or team."
                                 else -> "$editRole: Full access to books, transactions, reports, and team management."
@@ -8214,6 +10119,40 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                             editError = ""
                         }
                     )
+
+                    if (canRoleHideBalance(editRole)) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        "Hide Total Balance",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        "Hide Net, Cash/Bank totals & reports from this $editRole",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = editHideBalance,
+                                    onCheckedChange = { editHideBalance = it },
+                                    modifier = Modifier.testTag("edit_team_hide_balance_switch")
+                                )
+                            }
+                        }
+                    }
 
                     if (editError.isNotBlank()) {
                         Text(editError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
@@ -8247,6 +10186,7 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                                     } else {
                                         encodeAllowedBooks(editSelectedBookNames.toList())
                                     }
+                                    val effectiveHideBal = canRoleHideBalance(editRole) && editHideBalance
                                     isSavingEdit = true
                                     viewModel.updateTeamMember(
                                         oldMember = editing,
@@ -8254,7 +10194,8 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                                         newEmail = cleanEmail,
                                         newPhone = editPhone.trim(),
                                         newRole = editRole,
-                                        newAllowedBookNames = newAllowedRaw
+                                        newAllowedBookNames = newAllowedRaw,
+                                        newHideBalance = effectiveHideBal
                                     ) { _, ok ->
                                         isSavingEdit = false
                                         memberToEdit = null
@@ -9146,7 +11087,7 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                 }
             }
 
-            // Manual Backup and Portable JSON Import/Export
+            // Manual Backup and Portable Import/Export
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -9156,10 +11097,10 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Icon(Icons.Default.Share, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                            Text("Offline Manual Database Backup", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                            Text("Manual Backup & Restore", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
                         }
                         Text(
-                            "Export your local database to an encrypted JSON backup file or copy raw JSON text to transfer across devices.",
+                            "Export a portable backup or copy your backup data to move all businesses and books to another device.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f)
                         )
@@ -9170,7 +11111,7 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                         ) {
                             Button(
                                 onClick = {
-                                    val backupJsonStr = syncManager.serializeDatabase(
+                                    val backupPayload = syncManager.serializeDatabase(
                                         businesses = businesses,
                                         books = allBooks.ifEmpty { books },
                                         transactions = allTransactions,
@@ -9182,22 +11123,23 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                                     val shareIntent = Intent(Intent.ACTION_SEND).apply {
                                         type = "text/plain"
                                         putExtra(Intent.EXTRA_SUBJECT, "CashBook Offline Data Backup")
-                                        putExtra(Intent.EXTRA_TEXT, backupJsonStr)
+                                        putExtra(Intent.EXTRA_TEXT, backupPayload)
                                     }
-                                    context.startActivity(Intent.createChooser(shareIntent, "Share Backup JSON File via"))
+                                    context.startActivity(Intent.createChooser(shareIntent, "Share Backup Data via"))
                                 },
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
                                 shape = RoundedCornerShape(10.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = GreenIn)
                             ) {
-                                Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(15.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("Share Backup", fontSize = 12.sp)
+                                Text("Share", fontSize = 12.sp, maxLines = 1, softWrap = false)
                             }
 
                             OutlinedButton(
                                 onClick = {
-                                    val backupJsonStr = syncManager.serializeDatabase(
+                                    val backupPayload = syncManager.serializeDatabase(
                                         businesses = businesses,
                                         books = allBooks.ifEmpty { books },
                                         transactions = allTransactions,
@@ -9206,25 +11148,27 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                                         teamMembers = teamMembersList,
                                         isPartialExport = false
                                     )
-                                    clipboardManager.setText(AnnotatedString(backupJsonStr))
-                                    Toast.makeText(context, "Full Database JSON copied to clipboard!", Toast.LENGTH_LONG).show()
+                                    clipboardManager.setText(AnnotatedString(backupPayload))
+                                    Toast.makeText(context, "Backup data copied to clipboard!", Toast.LENGTH_LONG).show()
                                 },
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
                                 shape = RoundedCornerShape(10.dp)
                             ) {
-                                Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(15.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("Copy JSON", fontSize = 12.sp)
+                                Text("Copy", fontSize = 12.sp, maxLines = 1, softWrap = false)
                             }
 
                             OutlinedButton(
                                 onClick = { showBackupRestoreDialog = true },
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
                                 shape = RoundedCornerShape(10.dp)
                             ) {
-                                Icon(Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(15.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("Import JSON", fontSize = 12.sp)
+                                Text("Restore", fontSize = 12.sp, maxLines = 1, softWrap = false)
                             }
                         }
                     }
@@ -9368,17 +11312,17 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
         val coroutineScope = rememberCoroutineScope()
         AlertDialog(
             onDismissRequest = { showBackupRestoreDialog = false },
-            title = { Text("Restore Ledger Database") },
+            title = { Text("Restore CashBook Backup") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        "Paste a previously copied Backup JSON text payload below. This will merge existing business files without duplicates.",
+                        "Paste your previously copied backup data below. This merges existing businesses and books without duplicates.",
                         style = MaterialTheme.typography.bodySmall
                     )
                     OutlinedTextField(
                         value = rawJsonText,
                         onValueChange = { rawJsonText = it },
-                        label = { Text("Raw Backup JSON payload") },
+                        label = { Text("Paste Backup Data") },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(160.dp),
@@ -9394,18 +11338,18 @@ fun SyncCenterScreen(viewModel: LedgerViewModel) {
                                 val db = LedgerDatabase.getDatabase(context)
                                 val outcome = syncManager.restoreDatabase(rawJsonText, db.ledgerDao())
                                 if (outcome) {
-                                    Toast.makeText(context, "Database restored and merged successfully!", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Backup restored and merged successfully!", Toast.LENGTH_SHORT).show()
                                     viewModel.triggerCloudSync()
                                     rawJsonText = ""
                                     showBackupRestoreDialog = false
                                 } else {
-                                    Toast.makeText(context, "Invalid Backup JSON structure. Please check and retry.", Toast.LENGTH_LONG).show()
+                                    Toast.makeText(context, "Invalid backup data. Please check the pasted text and retry.", Toast.LENGTH_LONG).show()
                                 }
                             }
                         }
                     }
                 ) {
-                    Text("Import and Recover")
+                    Text("Restore Backup")
                 }
             },
             dismissButton = {
@@ -10617,7 +12561,7 @@ fun OnboardingSetupScreen(
                                 syncManager.registerUser(name, email, un, pw)
                                 viewModel.registerCustomUser(name, email, un, pw)
                                 if (viewModel.businesses.value.isEmpty()) {
-                                    viewModel.createBusinessAndBook("Offline Business", "Main CashBook")
+                                    viewModel.createBusinessAndBook("Offline Business", "")
                                 }
                                 authStateVersion++
                                 Toast.makeText(context, "Operating in 100% Offline Local DB Mode.", Toast.LENGTH_SHORT).show()
@@ -10814,6 +12758,7 @@ fun OnboardingSetupScreen(
                 val isSyncingNow by viewModel.isSyncing.collectAsStateWithLifecycle()
                 val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
                 var quickBizName by remember { mutableStateOf("") }
+                var quickBookName by remember { mutableStateOf("") }
                 var showEmptyJoinDialog by remember { mutableStateOf(false) }
 
                 // Auto-sync cloud data once when entering signed-in empty workspace state
@@ -10873,10 +12818,18 @@ fun OnboardingSetupScreen(
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth()
                             )
+                            OutlinedTextField(
+                                value = quickBookName,
+                                onValueChange = { quickBookName = it },
+                                label = { Text("First Book Name (Optional)") },
+                                placeholder = { Text("e.g. Daily Cash or Party Name") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
                             Button(
                                 onClick = {
                                     val name = quickBizName.trim().ifBlank { "Main Business" }
-                                    viewModel.createBusinessAndBook(name, "Main CashBook")
+                                    viewModel.createBusinessAndBook(name, quickBookName.trim())
                                 },
                                 modifier = Modifier.fillMaxWidth().height(48.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
@@ -11351,6 +13304,30 @@ fun OnboardingSetupScreen(
                             modifier = Modifier.fillMaxWidth(),
                             colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = GreenIn, focusedLabelColor = GreenIn)
                         )
+
+                        if (verifiedSignupInvite == null && pendingEmailInvites.isEmpty() && inviteCodeInput.isBlank()) {
+                            HorizontalDivider(color = Color(0xFFE2E8F0))
+                            OutlinedTextField(
+                                value = businessName,
+                                onValueChange = { businessName = it },
+                                label = { Text("Business / Shop Name (Optional)") },
+                                placeholder = { Text("e.g. Apex Traders") },
+                                leadingIcon = { Icon(Icons.Default.Storefront, contentDescription = null, tint = GreenIn) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = GreenIn, focusedLabelColor = GreenIn)
+                            )
+                            OutlinedTextField(
+                                value = bookName,
+                                onValueChange = { bookName = it },
+                                label = { Text("First Book Name (Optional)") },
+                                placeholder = { Text("e.g. Daily Sales (leave blank to add later)") },
+                                leadingIcon = { Icon(Icons.Default.MenuBook, contentDescription = null, tint = GreenIn) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = GreenIn, focusedLabelColor = GreenIn)
+                            )
+                        }
                     }
                 }
 
@@ -11809,6 +13786,79 @@ fun OnboardingSetupScreen(
 }
 
 @Composable
+fun CreateBusinessWithOptionalBookDialog(
+    initialBusinessName: String = "",
+    onDismiss: () -> Unit,
+    onCreate: (businessName: String, firstBookName: String, firstBookPhone: String) -> Unit
+) {
+    var bizName by remember(initialBusinessName) { mutableStateOf(initialBusinessName) }
+    var firstBookName by remember { mutableStateOf("") }
+    var firstBookPhone by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text("Create New Business", fontWeight = FontWeight.Bold)
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = bizName,
+                    onValueChange = { bizName = it },
+                    label = { Text("Business / Shop Name *") },
+                    placeholder = { Text("e.g. RB Traders, Personal") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("add_business_dialog_input")
+                )
+                OutlinedTextField(
+                    value = firstBookName,
+                    onValueChange = { firstBookName = it },
+                    label = { Text("First Book / Customer Name (Optional)") },
+                    placeholder = { Text("e.g. Daily Cash or Party Name") },
+                    supportingText = { Text("Leave blank to add books later") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("add_business_first_book_input")
+                )
+                if (firstBookName.isNotBlank()) {
+                    OutlinedTextField(
+                        value = firstBookPhone,
+                        onValueChange = { firstBookPhone = it },
+                        label = { Text("Customer Phone (Optional)") },
+                        placeholder = { Text("e.g. 0300-1234567") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val cleanBiz = bizName.trim()
+                    if (cleanBiz.isNotEmpty()) {
+                        onCreate(cleanBiz, firstBookName.trim(), firstBookPhone.trim())
+                    }
+                },
+                enabled = bizName.trim().isNotEmpty(),
+                colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                modifier = Modifier.testTag("add_business_dialog_confirm")
+            ) {
+                Text("Create")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+@Composable
 fun AddBookConsumerDialog(
     onDismiss: () -> Unit,
     onCreate: (name: String, phone: String) -> Unit
@@ -11979,10 +14029,11 @@ fun ShareBusinessDialog(
     var collaboratorPhone by remember { mutableStateOf("") }
     var shareAllBooks by remember { mutableStateOf(true) }
     var selectedBookNames by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var hideBalanceForStaff by remember { mutableStateOf(false) }
     var showAddCollaboratorSection by remember { mutableStateOf(false) }
     var activeShareMember by remember { mutableStateOf<TeamMember?>(null) }
 
-    val roles = listOf("Data Entry", "Partner", "Admin", "Boss")
+    val roles = listOf("Viewer", "Data Entry", "Partner", "Admin", "Boss")
 
     val teamList by if (viewModel != null) {
         viewModel.allTeamMembers.collectAsStateWithLifecycle()
@@ -12061,6 +14112,7 @@ fun ShareBusinessDialog(
                 ) {
                     Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text("💡 Partner & Team Roles for '${business.name}':", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall, color = GreenIn)
+                        Text("👁️ Viewer: Read-only access to allowed books; cannot add, edit, or delete.", style = MaterialTheme.typography.bodySmall)
                         Text("✏️ Data Entry: Can log Cash In / Out entries & add books, cannot delete.", style = MaterialTheme.typography.bodySmall)
                         Text("🤝 Partner: Equal access to log, edit, and view Cash In / Out entries.", style = MaterialTheme.typography.bodySmall)
                         Text("🛡️ Admin / Boss: Full control over books, staff roster, and settings.", style = MaterialTheme.typography.bodySmall)
@@ -12125,6 +14177,14 @@ fun ShareBusinessDialog(
                                                 color = Color(0xFF0369A1),
                                                 fontWeight = FontWeight.SemiBold
                                             )
+                                            if (member.hideBalance && canRoleHideBalance(member.role)) {
+                                                Text(
+                                                    "Balances Hidden",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = Color(0xFF92400E),
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
+                                            }
                                             if (memberCode.isNotBlank()) {
                                                 Text("Invite Code: $memberCode", style = MaterialTheme.typography.labelSmall, color = GreenIn, fontWeight = FontWeight.Bold)
                                             }
@@ -12217,6 +14277,39 @@ fun ShareBusinessDialog(
                                 }
                             )
 
+                            if (canRoleHideBalance(selectedRole)) {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = MaterialTheme.colorScheme.surface,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                "Hide Total Balance",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                            Text(
+                                                "Hide Net & split totals from this $selectedRole",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        Switch(
+                                            checked = hideBalanceForStaff,
+                                            onCheckedChange = { hideBalanceForStaff = it }
+                                        )
+                                    }
+                                }
+                            }
+
                             Button(
                                 onClick = {
                                     val cName = collaboratorName.trim()
@@ -12233,12 +14326,14 @@ fun ShareBusinessDialog(
                                         } else {
                                             encodeAllowedBooks(selectedBookNames.toList())
                                         }
+                                        val effectiveHideBal = canRoleHideBalance(selectedRole) && hideBalanceForStaff
                                         viewModel.addTeamMember(
                                             name = cName,
                                             email = cEmail,
                                             phone = collaboratorPhone.trim(),
                                             role = selectedRole,
                                             allowedBookNames = allowedRaw,
+                                            hideBalance = effectiveHideBal,
                                             targetBusinessId = business.id
                                         ) { inv, published ->
                                             Toast.makeText(
@@ -12252,6 +14347,7 @@ fun ShareBusinessDialog(
                                         collaboratorPhone = ""
                                         shareAllBooks = true
                                         selectedBookNames = emptySet()
+                                        hideBalanceForStaff = false
                                         showAddCollaboratorSection = false
                                     }
                                 },
@@ -12322,27 +14418,54 @@ fun ShareBookDialog(
 ) {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
-    val syncManager = viewModel.syncManager
     val allTx by viewModel.allTransactions.collectAsStateWithLifecycle()
     val businesses by viewModel.businesses.collectAsStateWithLifecycle()
+    val allTeamMembers by viewModel.allTeamMembers.collectAsStateWithLifecycle()
+    val currentUserEmail by viewModel.currentUserEmail.collectAsStateWithLifecycle()
+    val isSuperAdmin by viewModel.isSuperAdmin.collectAsStateWithLifecycle()
+    val simulatedRole by viewModel.simulatedRole.collectAsStateWithLifecycle()
 
-    val shareText = """
-        📚 *Cashbook Pro - Book Details & Share*
-        
-        Book: *${book.name}*
-        Parent Business: $parentBusinessName
-        Total Transactions: $txCount
-        Net Balance: Rs. ${String.format("%,.2f", netBalance)} (In: Rs. ${String.format("%,.0f", totalIn)} | Out: Rs. ${String.format("%,.0f", totalOut)})
-    """.trimIndent()
+    val parentBiz = remember(businesses, book.businessId) {
+        businesses.find { it.id == book.businessId }
+    }
+    val bookTransactions = remember(allTx, book.id) {
+        allTx.filter { it.bookId == book.id }.sortedByDescending { it.timestamp }
+    }
+    val isBalanceHidden = viewModel.isBalanceHiddenForBusiness(parentBiz, allTeamMembers)
+    val canInviteToBook = parentBiz != null && (
+        isSuperAdmin ||
+            parentBiz.userEmail.isBlank() ||
+            parentBiz.userEmail.equals(currentUserEmail, ignoreCase = true) ||
+            hasPermission(simulatedRole, "share")
+        )
 
-    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+    var showBookInviteForm by remember { mutableStateOf(false) }
+    var staffName by remember { mutableStateOf("") }
+    var staffEmail by remember { mutableStateOf("") }
+    var staffRole by remember { mutableStateOf("Data Entry") }
+    var hideBalanceForStaff by remember { mutableStateOf(false) }
+    var lastInviteText by remember { mutableStateOf<String?>(null) }
+
+    val summaryReportText = remember(book, bookTransactions) {
+        generateTextReport(book, bookTransactions)
+    }
+
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Card(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            modifier = Modifier
+                .fillMaxWidth(0.92f)
+                .widthIn(max = 440.dp),
             shape = RoundedCornerShape(20.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
         ) {
             Column(
-                modifier = Modifier.fillMaxWidth().padding(20.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp)
+                    .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Row(
@@ -12350,75 +14473,348 @@ fun ShareBookDialog(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         Icon(Icons.Default.Share, contentDescription = null, tint = GreenIn)
-                        Text("Share Cashbook '${book.name}'", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text(
+                            text = "Share '${book.name}'",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
-                    IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.minimumInteractiveComponentSize()
+                    ) {
                         Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.Gray)
                     }
                 }
 
+                // Clean Book Summary Card
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("Book Name: ${book.name}", fontWeight = FontWeight.Bold)
-                        Text("Business: $parentBusinessName", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
-                        Text("Transactions: $txCount entries", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
                         Text(
-                            "Net Total: Rs. ${String.format("%,.2f", netBalance)}",
+                            text = book.name,
                             fontWeight = FontWeight.Bold,
-                            color = if (netBalance >= 0) GreenIn else RedOut
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            text = "$parentBusinessName • $txCount ${if (txCount == 1) "entry" else "entries"}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (!isBalanceHidden) {
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Net Balance: Rs. ${String.format("%,.0f", netBalance)}",
+                                fontWeight = FontWeight.Bold,
+                                color = if (netBalance >= 0) GreenIn else RedOut
+                            )
+                            Text(
+                                text = "Cash In: Rs. ${String.format("%,.0f", totalIn)}  •  Cash Out: Rs. ${String.format("%,.0f", totalOut)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Total balance hidden for your role",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                if (!isBalanceHidden) {
+                    Button(
+                        onClick = {
+                            try {
+                                val pdfFile = generatePdfReport(
+                                    context = context,
+                                    activeBook = book,
+                                    transactions = bookTransactions,
+                                    activeBusiness = parentBiz
+                                )
+                                val pdfUri = FileProvider.getUriForFile(
+                                    context,
+                                    "${context.packageName}.fileprovider",
+                                    pdfFile
+                                )
+                                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "application/pdf"
+                                    putExtra(Intent.EXTRA_STREAM, pdfUri)
+                                    clipData = ClipData.newRawUri("${book.name} Statement", pdfUri)
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                context.startActivity(
+                                    Intent.createChooser(shareIntent, "Share '${book.name}' PDF Statement")
+                                )
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Could not create PDF: ${e.message}", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .testTag("share_book_pdf_button"),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Share PDF Statement", maxLines = 1, softWrap = false, fontWeight = FontWeight.Bold)
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                val intent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_SUBJECT, "${book.name} - CashBook Statement")
+                                    putExtra(Intent.EXTRA_TEXT, summaryReportText)
+                                }
+                                context.startActivity(
+                                    Intent.createChooser(intent, "Share '${book.name}' Summary")
+                                )
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
+                                .testTag("share_book_text_button"),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Share Text", maxLines = 1, softWrap = false)
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                clipboardManager.setText(AnnotatedString(summaryReportText))
+                                Toast.makeText(context, "Book summary copied!", Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
+                                .testTag("copy_book_summary_button"),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Copy", maxLines = 1, softWrap = false)
+                        }
+                    }
+                } else {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "Statement sharing is turned off because Total Balance is hidden for your staff role.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(12.dp)
                         )
                     }
                 }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Button(
-                        onClick = {
-                            val bTx = allTx.filter { it.bookId == book.id }
-                            val parentBiz = businesses.find { it.id == book.businessId }
-                            val jsonPayload = syncManager.serializeDatabase(
-                                businesses = if (parentBiz != null) listOf(parentBiz) else emptyList(),
-                                books = listOf(book),
-                                transactions = bTx,
-                                parties = emptyList(),
-                                partyTransactions = emptyList(),
-                                teamMembers = emptyList(),
-                                isPartialExport = true
-                            )
-                            val intent = Intent(Intent.ACTION_SEND).apply {
-                                type = "text/plain"
-                                putExtra(Intent.EXTRA_SUBJECT, "CashBook Data Export: Book '${book.name}'")
-                                putExtra(Intent.EXTRA_TEXT, jsonPayload)
-                            }
-                            context.startActivity(Intent.createChooser(intent, "Share Book '${book.name}' JSON File"))
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Share Book JSON Data")
-                    }
+                if (canInviteToBook && parentBiz != null) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
 
                     OutlinedButton(
-                        onClick = {
-                            clipboardManager.setText(AnnotatedString(shareText))
-                            Toast.makeText(context, "Copied book summary to clipboard!", Toast.LENGTH_SHORT).show()
-                        },
-                        modifier = Modifier.weight(1f),
+                        onClick = { showBookInviteForm = !showBookInviteForm },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .testTag("toggle_invite_book_staff_button"),
                         shape = RoundedCornerShape(10.dp)
                     ) {
-                        Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Copy Text")
+                        Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(18.dp), tint = GreenIn)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (showBookInviteForm) "Hide Team Invite" else "Give Staff Access to '${book.name}'",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+
+                    if (showBookInviteForm) {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.18f)),
+                            border = BorderStroke(1.dp, GreenIn.copy(alpha = 0.3f)),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Text(
+                                    text = "They will ONLY see '${book.name}' inside $parentBusinessName.",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = GreenIn,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+
+                                OutlinedTextField(
+                                    value = staffName,
+                                    onValueChange = { staffName = it },
+                                    label = { Text("Staff / Partner Name *") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(8.dp)
+                                )
+
+                                OutlinedTextField(
+                                    value = staffEmail,
+                                    onValueChange = { staffEmail = it },
+                                    label = { Text("Email Address *") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(8.dp)
+                                )
+
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    listOf("Viewer", "Data Entry", "Partner").forEach { roleOpt ->
+                                        FilterChip(
+                                            selected = staffRole == roleOpt,
+                                            onClick = { staffRole = roleOpt },
+                                            label = { Text(roleOpt, fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                                            leadingIcon = if (staffRole == roleOpt) {
+                                                { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(12.dp)) }
+                                            } else null
+                                        )
+                                    }
+                                }
+
+                                if (canRoleHideBalance(staffRole)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = "Hide Total Balance",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        Switch(
+                                            checked = hideBalanceForStaff,
+                                            onCheckedChange = { hideBalanceForStaff = it }
+                                        )
+                                    }
+                                }
+
+                                Button(
+                                    onClick = {
+                                        val cleanName = staffName.trim()
+                                        val cleanEmail = staffEmail.trim().lowercase()
+                                        if (cleanName.isBlank()) {
+                                            Toast.makeText(context, "Please enter a name.", Toast.LENGTH_SHORT).show()
+                                        } else if (!android.util.Patterns.EMAIL_ADDRESS.matcher(cleanEmail).matches()) {
+                                            Toast.makeText(context, "Please enter a valid email address.", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            val scopedBooks = encodeAllowedBooks(listOf(book.name))
+                                            val effectiveHide = canRoleHideBalance(staffRole) && hideBalanceForStaff
+                                            viewModel.addTeamMember(
+                                                name = cleanName,
+                                                email = cleanEmail,
+                                                phone = "",
+                                                role = staffRole,
+                                                allowedBookNames = scopedBooks,
+                                                hideBalance = effectiveHide,
+                                                targetBusinessId = parentBiz.id
+                                            ) { inv, published ->
+                                                lastInviteText = buildTeamInviteMessage(
+                                                    businessName = parentBiz.name,
+                                                    collaboratorName = cleanName,
+                                                    invitedEmail = cleanEmail,
+                                                    role = staffRole,
+                                                    inviteCode = inv.inviteCode,
+                                                    apkDownloadUrl = viewModel.syncManager.getApkDownloadUrl(),
+                                                    allowedBookNames = scopedBooks
+                                                )
+                                                Toast.makeText(
+                                                    context,
+                                                    if (published) "Invite ready! Code: ${inv.inviteCode}" else "Added $cleanName locally. Sync online to publish.",
+                                                    Toast.LENGTH_LONG
+                                                ).show()
+                                            }
+                                            staffName = ""
+                                            staffEmail = ""
+                                            hideBalanceForStaff = false
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 48.dp)
+                                        .testTag("confirm_book_invite_button"),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Text("Create Book Invite", maxLines = 1, softWrap = false, fontWeight = FontWeight.Bold)
+                                }
+
+                                if (!lastInviteText.isNullOrBlank()) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        OutlinedButton(
+                                            onClick = {
+                                                clipboardManager.setText(AnnotatedString(lastInviteText!!))
+                                                Toast.makeText(context, "Invite copied!", Toast.LENGTH_SHORT).show()
+                                            },
+                                            modifier = Modifier.weight(1f).heightIn(min = 44.dp),
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Text("Copy Invite", maxLines = 1, softWrap = false, fontSize = 12.sp)
+                                        }
+                                        Button(
+                                            onClick = {
+                                                val intent = Intent(Intent.ACTION_SEND).apply {
+                                                    type = "text/plain"
+                                                    putExtra(Intent.EXTRA_TEXT, lastInviteText!!)
+                                                }
+                                                context.startActivity(Intent.createChooser(intent, "Send Invite via"))
+                                            },
+                                            colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                                            modifier = Modifier.weight(1f).heightIn(min = 44.dp),
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Text("Send Invite", maxLines = 1, softWrap = false, fontSize = 12.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -12959,6 +15355,159 @@ fun generateMultiBusinessPdfReport(
     bizLookup: Map<Int, Business>
 ): File {
     val pdfDocument = PdfDocument()
+    val paint = Paint()
+    val dateFmt = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
+    val todayStr = dateFmt.format(Date())
+    val genTimeStr = SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()).format(Date())
+
+    val firstPageRows = 25
+    val nextPageRows = 32
+    val totalPages = if (transactions.size <= firstPageRows) 1 else 1 + ((transactions.size - firstPageRows + nextPageRows - 1) / nextPageRows)
+
+    val totalIn = transactions.filter { it.type == "IN" }.sumOf { it.amount }
+    val totalOut = transactions.filter { it.type == "OUT" }.sumOf { it.amount }
+    val netBalance = totalIn - totalOut
+
+    var txOffset = 0
+    for (pageNum in 1..totalPages) {
+        val pageInfo = PdfDocument.PageInfo.Builder(595, 842, pageNum).create()
+        val page = pdfDocument.startPage(pageInfo)
+        val canvas = page.canvas
+
+        var headerY = 55f
+        if (pageNum == 1) {
+            paint.color = AndroidColor.parseColor("#111827")
+            paint.textSize = 17f
+            paint.isFakeBoldText = true
+            canvas.drawText(if (scopeTitle.length > 42) scopeTitle.take(40) + "..." else scopeTitle, 35f, 45f, paint)
+
+            paint.color = AndroidColor.parseColor("#4B5563")
+            paint.textSize = 10f
+            paint.isFakeBoldText = false
+            canvas.drawText("CashBook Financial Statement • ${transactions.size} entries", 35f, 62f, paint)
+
+            paint.textAlign = Paint.Align.RIGHT
+            canvas.drawText(todayStr, 560f, 45f, paint)
+            paint.textAlign = Paint.Align.LEFT
+
+            paint.color = AndroidColor.parseColor("#E5E7EB")
+            paint.strokeWidth = 1f
+            canvas.drawLine(35f, 76f, 560f, 76f, paint)
+
+            paint.color = AndroidColor.parseColor("#ECFDF5")
+            canvas.drawRoundRect(35f, 90f, 198f, 145f, 8f, 8f, paint)
+            paint.color = AndroidColor.parseColor("#065F46")
+            paint.textSize = 9f
+            paint.isFakeBoldText = true
+            canvas.drawText("Cash IN (+)", 45f, 108f, paint)
+            paint.textSize = 13f
+            canvas.drawText("Rs ${String.format("%,.0f", totalIn)}", 45f, 130f, paint)
+
+            paint.color = AndroidColor.parseColor("#FFF7ED")
+            canvas.drawRoundRect(208f, 90f, 371f, 145f, 8f, 8f, paint)
+            paint.color = AndroidColor.parseColor("#9A3412")
+            paint.textSize = 9f
+            paint.isFakeBoldText = true
+            canvas.drawText("Cash OUT (-)", 218f, 108f, paint)
+            paint.textSize = 13f
+            canvas.drawText("Rs ${String.format("%,.0f", totalOut)}", 218f, 130f, paint)
+
+            val isNeg = netBalance < 0
+            paint.color = if (isNeg) AndroidColor.parseColor("#FEF2F2") else AndroidColor.parseColor("#EFF6FF")
+            canvas.drawRoundRect(381f, 90f, 560f, 145f, 8f, 8f, paint)
+            paint.color = if (isNeg) AndroidColor.parseColor("#991B1B") else AndroidColor.parseColor("#1D4ED8")
+            paint.textSize = 9f
+            paint.isFakeBoldText = true
+            canvas.drawText("Net Balance", 391f, 108f, paint)
+            paint.textSize = 13f
+            canvas.drawText("Rs ${String.format("%,.0f", netBalance)}", 391f, 130f, paint)
+
+            headerY = 165f
+        } else {
+            paint.color = AndroidColor.parseColor("#4B5563")
+            paint.textSize = 10f
+            paint.isFakeBoldText = true
+            canvas.drawText("$scopeTitle (Continued)", 35f, 40f, paint)
+            headerY = 55f
+        }
+
+        paint.color = AndroidColor.parseColor("#F3F4F6")
+        canvas.drawRect(35f, headerY, 560f, headerY + 24f, paint)
+
+        paint.color = AndroidColor.parseColor("#374151")
+        paint.textSize = 9f
+        paint.isFakeBoldText = true
+        canvas.drawText("Date", 42f, headerY + 15f, paint)
+        canvas.drawText("Book / Details", 112f, headerY + 15f, paint)
+        canvas.drawText("Cash OUT (-)", 315f, headerY + 15f, paint)
+        canvas.drawText("Cash IN (+)", 405f, headerY + 15f, paint)
+        canvas.drawText("Mode", 495f, headerY + 15f, paint)
+
+        paint.isFakeBoldText = false
+        var currentY = headerY + 24f
+        val rowsLimit = if (pageNum == 1) firstPageRows else nextPageRows
+        val slice = transactions.drop(txOffset).take(rowsLimit)
+        txOffset += slice.size
+
+        slice.forEach { tx ->
+            val dateText = SimpleDateFormat("dd MMM yy", Locale.getDefault()).format(Date(tx.timestamp))
+            val isIn = tx.type == "IN"
+            val bk = bookLookup[tx.bookId]
+            val desc = tx.remarks.ifBlank { tx.category.ifBlank { bk?.name ?: "" } }
+            val prefix = if (bk != null) "${bk.name.take(12)}: " else ""
+            val combined = "$prefix$desc"
+
+            paint.color = AndroidColor.parseColor("#F1F5F9")
+            canvas.drawLine(35f, currentY + 22f, 560f, currentY + 22f, paint)
+
+            paint.color = AndroidColor.parseColor("#111827")
+            canvas.drawText(dateText, 42f, currentY + 15f, paint)
+            canvas.drawText(if (combined.length > 31) combined.take(29) + "..." else combined, 112f, currentY + 15f, paint)
+
+            if (!isIn) {
+                paint.color = AndroidColor.parseColor("#EA580C")
+                canvas.drawText("Rs ${String.format("%,.0f", tx.amount)}", 315f, currentY + 15f, paint)
+            } else {
+                paint.color = AndroidColor.GRAY
+                canvas.drawText("-", 315f, currentY + 15f, paint)
+            }
+
+            if (isIn) {
+                paint.color = AndroidColor.parseColor("#16A34A")
+                canvas.drawText("Rs ${String.format("%,.0f", tx.amount)}", 405f, currentY + 15f, paint)
+            } else {
+                paint.color = AndroidColor.GRAY
+                canvas.drawText("-", 405f, currentY + 15f, paint)
+            }
+
+            paint.color = AndroidColor.parseColor("#475569")
+            canvas.drawText(tx.paymentMethod.take(8), 495f, currentY + 15f, paint)
+            currentY += 22f
+        }
+
+        paint.color = AndroidColor.parseColor("#9CA3AF")
+        paint.textSize = 9f
+        canvas.drawText("Generated on $genTimeStr", 35f, 820f, paint)
+        paint.textAlign = Paint.Align.RIGHT
+        canvas.drawText("Page $pageNum of $totalPages", 560f, 820f, paint)
+        paint.textAlign = Paint.Align.LEFT
+
+        pdfDocument.finishPage(page)
+    }
+
+    val safeBizName = scopeTitle.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(32).ifBlank { "business" }
+    val file = File(context.cacheDir, "${safeBizName}_report.pdf")
+    pdfDocument.writeTo(file.outputStream())
+    pdfDocument.close()
+    return file
+}
+
+fun generateBusinessBooksSummaryPdf(
+    context: Context,
+    businessName: String,
+    rows: List<Triple<Book, Triple<Double, Double, Double>, Int>>
+): File {
+    val pdfDocument = PdfDocument()
     val pageInfo = PdfDocument.PageInfo.Builder(595, 842, 1).create()
     val page = pdfDocument.startPage(pageInfo)
     val canvas = page.canvas
@@ -12968,14 +15517,14 @@ fun generateMultiBusinessPdfReport(
     val todayStr = dateFmt.format(Date())
 
     paint.color = AndroidColor.parseColor("#111827")
-    paint.textSize = 17f
+    paint.textSize = 18f
     paint.isFakeBoldText = true
-    canvas.drawText(if (scopeTitle.length > 38) scopeTitle.take(36) + "..." else scopeTitle, 35f, 45f, paint)
+    canvas.drawText(if (businessName.length > 34) businessName.take(32) + "..." else businessName, 35f, 45f, paint)
 
     paint.color = AndroidColor.parseColor("#4B5563")
     paint.textSize = 10f
     paint.isFakeBoldText = false
-    canvas.drawText("CashBook Pro Financial Statement • ${transactions.size} entries", 35f, 62f, paint)
+    canvas.drawText("All Cashbooks Summary • ${rows.size} Book(s)", 35f, 62f, paint)
 
     paint.textAlign = Paint.Align.RIGHT
     canvas.drawText(todayStr, 560f, 45f, paint)
@@ -12985,37 +15534,37 @@ fun generateMultiBusinessPdfReport(
     paint.strokeWidth = 1f
     canvas.drawLine(35f, 76f, 560f, 76f, paint)
 
-    val totalIn = transactions.filter { it.type == "IN" }.sumOf { it.amount }
-    val totalOut = transactions.filter { it.type == "OUT" }.sumOf { it.amount }
-    val netBalance = totalIn - totalOut
+    val totalNetIn = rows.sumOf { if (it.second.third >= 0) it.second.third else 0.0 }
+    val totalNetOut = rows.sumOf { if (it.second.third < 0) kotlin.math.abs(it.second.third) else 0.0 }
+    val netBal = totalNetIn - totalNetOut
 
     paint.color = AndroidColor.parseColor("#ECFDF5")
     canvas.drawRoundRect(35f, 90f, 198f, 145f, 8f, 8f, paint)
-    paint.color = AndroidColor.parseColor("#065F46")
+    paint.color = AndroidColor.parseColor("#16A34A")
     paint.textSize = 9f
     paint.isFakeBoldText = true
-    canvas.drawText("Cash IN (+)", 45f, 108f, paint)
+    canvas.drawText("Total Net IN", 45f, 108f, paint)
     paint.textSize = 14f
-    canvas.drawText("Rs ${String.format("%,.0f", totalIn)}", 45f, 130f, paint)
+    canvas.drawText("Rs ${String.format("%,.0f", totalNetIn)}", 45f, 130f, paint)
 
     paint.color = AndroidColor.parseColor("#FFF7ED")
     canvas.drawRoundRect(208f, 90f, 371f, 145f, 8f, 8f, paint)
-    paint.color = AndroidColor.parseColor("#9A3412")
+    paint.color = AndroidColor.parseColor("#EA580C")
     paint.textSize = 9f
     paint.isFakeBoldText = true
-    canvas.drawText("Cash OUT (-)", 218f, 108f, paint)
+    canvas.drawText("Total Net OUT", 218f, 108f, paint)
     paint.textSize = 14f
-    canvas.drawText("Rs ${String.format("%,.0f", totalOut)}", 218f, 130f, paint)
+    canvas.drawText("Rs ${String.format("%,.0f", totalNetOut)}", 218f, 130f, paint)
 
-    val isNeg = netBalance < 0
+    val isNeg = netBal < 0
     paint.color = if (isNeg) AndroidColor.parseColor("#FEF2F2") else AndroidColor.parseColor("#EFF6FF")
     canvas.drawRoundRect(381f, 90f, 560f, 145f, 8f, 8f, paint)
     paint.color = if (isNeg) AndroidColor.parseColor("#991B1B") else AndroidColor.parseColor("#1D4ED8")
     paint.textSize = 9f
     paint.isFakeBoldText = true
-    canvas.drawText("Net Balance", 391f, 108f, paint)
+    canvas.drawText("Net Business Balance", 391f, 108f, paint)
     paint.textSize = 14f
-    canvas.drawText("Rs ${String.format("%,.0f", netBalance)}", 391f, 130f, paint)
+    canvas.drawText("Rs ${String.format("%,.0f", netBal)}", 391f, 130f, paint)
 
     val headerY = 165f
     paint.color = AndroidColor.parseColor("#F3F4F6")
@@ -13024,48 +15573,32 @@ fun generateMultiBusinessPdfReport(
     paint.color = AndroidColor.parseColor("#374151")
     paint.textSize = 9f
     paint.isFakeBoldText = true
-    canvas.drawText("Date", 42f, headerY + 15f, paint)
-    canvas.drawText("Business / Details", 115f, headerY + 15f, paint)
-    canvas.drawText("Cash OUT (-)", 315f, headerY + 15f, paint)
-    canvas.drawText("Cash IN (+)", 405f, headerY + 15f, paint)
-    canvas.drawText("Mode", 495f, headerY + 15f, paint)
+    canvas.drawText("Book / Customer", 42f, headerY + 15f, paint)
+    canvas.drawText("Entries", 235f, headerY + 15f, paint)
+    canvas.drawText("Cash IN", 295f, headerY + 15f, paint)
+    canvas.drawText("Cash OUT", 385f, headerY + 15f, paint)
+    canvas.drawText("Net Balance", 475f, headerY + 15f, paint)
 
     paint.isFakeBoldText = false
     var currentY = headerY + 24f
-    transactions.take(26).forEach { tx ->
-        val dateText = SimpleDateFormat("dd MMM yy", Locale.getDefault()).format(Date(tx.timestamp))
-        val isIn = tx.type == "IN"
-        val bk = bookLookup[tx.bookId]
-        val bz = bk?.businessId?.let { bizLookup[it] }
-        val desc = tx.remarks.ifBlank { tx.category.ifBlank { bk?.name ?: "" } }
-        val prefix = if (bz != null) "${bz.name.take(10)}: " else ""
-        val combined = "$prefix$desc"
-
+    rows.take(26).forEach { (bk, sums, cnt) ->
+        val (bkIn, bkOut, bkNet) = sums
         paint.color = AndroidColor.parseColor("#F1F5F9")
         canvas.drawLine(35f, currentY + 22f, 560f, currentY + 22f, paint)
 
         paint.color = AndroidColor.parseColor("#111827")
-        canvas.drawText(dateText, 42f, currentY + 15f, paint)
-        canvas.drawText(if (combined.length > 30) combined.take(28) + "..." else combined, 115f, currentY + 15f, paint)
+        canvas.drawText(if (bk.name.length > 26) bk.name.take(24) + "..." else bk.name, 42f, currentY + 15f, paint)
+        paint.color = AndroidColor.parseColor("#4B5563")
+        canvas.drawText("$cnt", 242f, currentY + 15f, paint)
+        paint.color = AndroidColor.parseColor("#16A34A")
+        canvas.drawText("Rs ${String.format("%,.0f", bkIn)}", 295f, currentY + 15f, paint)
+        paint.color = AndroidColor.parseColor("#DC2626")
+        canvas.drawText("Rs ${String.format("%,.0f", bkOut)}", 385f, currentY + 15f, paint)
+        paint.color = if (bkNet >= 0) AndroidColor.parseColor("#16A34A") else AndroidColor.parseColor("#EA580C")
+        paint.isFakeBoldText = true
+        canvas.drawText("Rs ${String.format("%,.0f", kotlin.math.abs(bkNet))}", 475f, currentY + 15f, paint)
+        paint.isFakeBoldText = false
 
-        if (!isIn) {
-            paint.color = AndroidColor.parseColor("#EA580C")
-            canvas.drawText("Rs ${String.format("%,.0f", tx.amount)}", 315f, currentY + 15f, paint)
-        } else {
-            paint.color = AndroidColor.GRAY
-            canvas.drawText("-", 315f, currentY + 15f, paint)
-        }
-
-        if (isIn) {
-            paint.color = AndroidColor.parseColor("#16A34A")
-            canvas.drawText("Rs ${String.format("%,.0f", tx.amount)}", 405f, currentY + 15f, paint)
-        } else {
-            paint.color = AndroidColor.GRAY
-            canvas.drawText("-", 405f, currentY + 15f, paint)
-        }
-
-        paint.color = AndroidColor.parseColor("#475569")
-        canvas.drawText(tx.paymentMethod.take(8), 495f, currentY + 15f, paint)
         currentY += 22f
     }
 
@@ -13076,7 +15609,8 @@ fun generateMultiBusinessPdfReport(
 
     pdfDocument.finishPage(page)
 
-    val file = File(context.cacheDir, "cashbook_analytics_report.pdf")
+    val safeBizName = businessName.replace(Regex("[^a-zA-Z0-9_-]"), "_").ifBlank { "business" }
+    val file = File(context.cacheDir, "${safeBizName}_books_summary.pdf")
     pdfDocument.writeTo(file.outputStream())
     pdfDocument.close()
     return file
@@ -13089,160 +15623,169 @@ fun generatePdfReport(
     activeBusiness: Business? = null
 ): File {
     val pdfDocument = PdfDocument()
-    // A4 Dimensions: 595 x 842 points
-    val pageInfo = PdfDocument.PageInfo.Builder(595, 842, 1).create()
-    val page = pdfDocument.startPage(pageInfo)
-    val canvas = page.canvas
-
     val paint = Paint()
 
     val bookName = activeBook?.name ?: "Customer Statement"
     val phoneStr = activeBook?.phone?.ifBlank { "" } ?: ""
-    val bizName = activeBusiness?.name?.ifBlank { "Guest Business" } ?: "Guest Business"
+    val bizName = activeBusiness?.name?.ifBlank { "Business" } ?: "Business"
 
-    val dateFmt = SimpleDateFormat("dd'th' MMM, yy", Locale.getDefault())
+    val dateFmt = SimpleDateFormat("dd MMM yy", Locale.getDefault())
     val todayStr = dateFmt.format(Date())
+    val genTimeStr = SimpleDateFormat("dd MMM yy, hh:mm a", Locale.getDefault()).format(Date())
 
-    // 1. Top Header
-    paint.color = AndroidColor.parseColor("#111827") // Dark Navy
-    paint.textSize = 18f
-    paint.isFakeBoldText = true
-    canvas.drawText("$bookName Statement", 35f, 45f, paint)
-
-    paint.color = AndroidColor.parseColor("#4B5563") // Gray 600
-    paint.textSize = 11f
-    paint.isFakeBoldText = false
-    canvas.drawText(bizName, 35f, 62f, paint)
-    if (phoneStr.isNotBlank()) {
-        canvas.drawText("Phone: $phoneStr", 35f, 77f, paint)
-    }
-
-    // Right aligned date range
-    paint.textAlign = Paint.Align.RIGHT
-    canvas.drawText("$todayStr - $todayStr", 560f, 45f, paint)
-    paint.textAlign = Paint.Align.LEFT
-
-    // Divider Line
-    paint.color = AndroidColor.parseColor("#E5E7EB")
-    paint.strokeWidth = 1f
-    canvas.drawLine(35f, 90f, 560f, 90f, paint)
-
-    // 2. Financial Summary Cards Box
     val totalIn = transactions.filter { it.type == "IN" }.sumOf { it.amount }
     val totalOut = transactions.filter { it.type == "OUT" }.sumOf { it.amount }
     val netBalance = totalIn - totalOut
 
-    // Card 1: Total Debit
-    paint.color = AndroidColor.parseColor("#FEF2F2") // Soft Red background
-    canvas.drawRoundRect(35f, 105f, 195f, 160f, 8f, 8f, paint)
-    paint.color = AndroidColor.parseColor("#991B1B")
-    paint.textSize = 9f
-    paint.isFakeBoldText = true
-    canvas.drawText("Total Debit (-)", 45f, 122f, paint)
-    paint.textSize = 14f
-    canvas.drawText("Rs ${String.format("%,.0f", totalOut)}", 45f, 145f, paint)
-
-    // Card 2: Total Credit
-    paint.color = AndroidColor.parseColor("#ECFDF5") // Soft Green background
-    canvas.drawRoundRect(205f, 105f, 365f, 160f, 8f, 8f, paint)
-    paint.color = AndroidColor.parseColor("#065F46")
-    paint.textSize = 9f
-    paint.isFakeBoldText = true
-    canvas.drawText("Total Credit (+)", 215f, 122f, paint)
-    paint.textSize = 14f
-    canvas.drawText("Rs ${String.format("%,.0f", totalIn)}", 215f, 145f, paint)
-
-    // Card 3: Net Balance
-    val isDebitNet = netBalance < 0
-    paint.color = if (isDebitNet) AndroidColor.parseColor("#FEF2F2") else AndroidColor.parseColor("#ECFDF5")
-    canvas.drawRoundRect(375f, 105f, 560f, 160f, 8f, 8f, paint)
-    paint.color = if (isDebitNet) AndroidColor.parseColor("#991B1B") else AndroidColor.parseColor("#065F46")
-    paint.textSize = 9f
-    paint.isFakeBoldText = true
-    canvas.drawText(if (isDebitNet) "Net Balance (Debit -)" else "Net Balance (Credit +)", 385f, 122f, paint)
-    paint.textSize = 14f
-    canvas.drawText("Rs ${String.format("%,.0f", kotlin.math.abs(netBalance))}", 385f, 145f, paint)
-
-    // 3. Table Headers
-    val headerY = 185f
-    paint.color = AndroidColor.parseColor("#F3F4F6")
-    canvas.drawRect(35f, headerY, 560f, headerY + 25f, paint)
-
-    paint.color = AndroidColor.parseColor("#374151")
-    paint.textSize = 10f
-    paint.isFakeBoldText = true
-    canvas.drawText("Date", 45f, headerY + 16f, paint)
-    canvas.drawText("Item Name / Remarks", 130f, headerY + 16f, paint)
-    canvas.drawText("Debit (-)", 290f, headerY + 16f, paint)
-    canvas.drawText("Credit (+)", 380f, headerY + 16f, paint)
-    canvas.drawText("Balance", 470f, headerY + 16f, paint)
-
-    // 4. Table Rows with Highlighted Balance Column
-    paint.isFakeBoldText = false
-    var currentY = headerY + 25f
+    val chronological = transactions.sortedBy { it.timestamp }
     var runningBal = 0.0
-
-    transactions.take(25).forEach { tx ->
-        val dateText = SimpleDateFormat("dd'th' MMM, yy", Locale.getDefault()).format(Date(tx.timestamp))
-        val isIn = tx.type == "IN"
-        if (isIn) runningBal += tx.amount else runningBal -= tx.amount
-
-        // Highlight rightmost Balance column background
-        paint.color = AndroidColor.parseColor("#F8FAFC")
-        canvas.drawRect(460f, currentY, 560f, currentY + 22f, paint)
-
-        // Row Separator Line
-        paint.color = AndroidColor.parseColor("#F1F5F9")
-        canvas.drawLine(35f, currentY + 22f, 560f, currentY + 22f, paint)
-
-        paint.color = AndroidColor.parseColor("#111827")
-        canvas.drawText(dateText, 45f, currentY + 15f, paint)
-
-        val itemName = if (tx.remarks.isNotBlank()) tx.remarks else if (tx.category.isNotBlank() && tx.category != "General") tx.category else ""
-        val displayDetails = if (itemName.length > 24) itemName.take(22) + "..." else itemName
-        canvas.drawText(displayDetails, 130f, currentY + 15f, paint)
-
-        // Debit column
-        if (!isIn) {
-            paint.color = AndroidColor.parseColor("#DC2626")
-            canvas.drawText("Rs ${String.format("%,.0f", tx.amount)}", 290f, currentY + 15f, paint)
-        } else {
-            paint.color = AndroidColor.GRAY
-            canvas.drawText("-", 290f, currentY + 15f, paint)
-        }
-
-        // Credit column
-        if (isIn) {
-            paint.color = AndroidColor.parseColor("#059669")
-            canvas.drawText("Rs ${String.format("%,.0f", tx.amount)}", 380f, currentY + 15f, paint)
-        } else {
-            paint.color = AndroidColor.GRAY
-            canvas.drawText("-", 380f, currentY + 15f, paint)
-        }
-
-        // Balance column
-        paint.color = if (runningBal < 0) AndroidColor.parseColor("#DC2626") else AndroidColor.parseColor("#059669")
-        paint.isFakeBoldText = true
-        val balLabel = if (runningBal < 0) "${String.format("%,.0f", kotlin.math.abs(runningBal))} (-)" else String.format("%,.0f", runningBal)
-        canvas.drawText(balLabel, 470f, currentY + 15f, paint)
-        paint.isFakeBoldText = false
-
-        currentY += 22f
+    val rowsWithBal = chronological.map { tx ->
+        runningBal += if (tx.type == "IN") tx.amount else -tx.amount
+        tx to runningBal
     }
 
-    // 5. Footer
-    paint.color = AndroidColor.parseColor("#9CA3AF")
-    paint.textSize = 9f
-    val genTimeStr = SimpleDateFormat("dd'th' MMM, yy, hh:mm a", Locale.getDefault()).format(Date())
-    canvas.drawText("Report Generated on $genTimeStr", 35f, 820f, paint)
+    val firstPageRows = 24
+    val nextPageRows = 31
+    val totalPages = if (rowsWithBal.size <= firstPageRows) 1 else 1 + ((rowsWithBal.size - firstPageRows + nextPageRows - 1) / nextPageRows)
 
-    paint.textAlign = Paint.Align.RIGHT
-    canvas.drawText("Page 1 of 1", 560f, 820f, paint)
-    paint.textAlign = Paint.Align.LEFT
+    var rowOffset = 0
+    for (pageNum in 1..totalPages) {
+        val pageInfo = PdfDocument.PageInfo.Builder(595, 842, pageNum).create()
+        val page = pdfDocument.startPage(pageInfo)
+        val canvas = page.canvas
 
-    pdfDocument.finishPage(page)
+        var headerY = 55f
+        if (pageNum == 1) {
+            paint.color = AndroidColor.parseColor("#111827")
+            paint.textSize = 18f
+            paint.isFakeBoldText = true
+            canvas.drawText("$bookName Statement", 35f, 45f, paint)
 
-    val file = File(context.cacheDir, "cashbook_report.pdf")
+            paint.color = AndroidColor.parseColor("#4B5563")
+            paint.textSize = 11f
+            paint.isFakeBoldText = false
+            canvas.drawText(bizName, 35f, 62f, paint)
+            if (phoneStr.isNotBlank()) {
+                canvas.drawText("Phone: $phoneStr", 35f, 77f, paint)
+            }
+
+            paint.textAlign = Paint.Align.RIGHT
+            canvas.drawText(todayStr, 560f, 45f, paint)
+            paint.textAlign = Paint.Align.LEFT
+
+            paint.color = AndroidColor.parseColor("#E5E7EB")
+            paint.strokeWidth = 1f
+            canvas.drawLine(35f, 90f, 560f, 90f, paint)
+
+            paint.color = AndroidColor.parseColor("#FEF2F2")
+            canvas.drawRoundRect(35f, 105f, 195f, 160f, 8f, 8f, paint)
+            paint.color = AndroidColor.parseColor("#991B1B")
+            paint.textSize = 9f
+            paint.isFakeBoldText = true
+            canvas.drawText("Cash OUT (-)", 45f, 122f, paint)
+            paint.textSize = 13f
+            canvas.drawText("Rs ${String.format("%,.0f", totalOut)}", 45f, 145f, paint)
+
+            paint.color = AndroidColor.parseColor("#ECFDF5")
+            canvas.drawRoundRect(205f, 105f, 365f, 160f, 8f, 8f, paint)
+            paint.color = AndroidColor.parseColor("#065F46")
+            paint.textSize = 9f
+            paint.isFakeBoldText = true
+            canvas.drawText("Cash IN (+)", 215f, 122f, paint)
+            paint.textSize = 13f
+            canvas.drawText("Rs ${String.format("%,.0f", totalIn)}", 215f, 145f, paint)
+
+            val isDebitNet = netBalance < 0
+            paint.color = if (isDebitNet) AndroidColor.parseColor("#FEF2F2") else AndroidColor.parseColor("#ECFDF5")
+            canvas.drawRoundRect(375f, 105f, 560f, 160f, 8f, 8f, paint)
+            paint.color = if (isDebitNet) AndroidColor.parseColor("#991B1B") else AndroidColor.parseColor("#065F46")
+            paint.textSize = 9f
+            paint.isFakeBoldText = true
+            canvas.drawText(if (isDebitNet) "Net Balance (Deficit -)" else "Net Balance (Surplus +)", 385f, 122f, paint)
+            paint.textSize = 13f
+            canvas.drawText("Rs ${String.format("%,.0f", kotlin.math.abs(netBalance))}", 385f, 145f, paint)
+
+            headerY = 185f
+        } else {
+            paint.color = AndroidColor.parseColor("#4B5563")
+            paint.textSize = 10f
+            paint.isFakeBoldText = true
+            canvas.drawText("$bizName • $bookName Statement (Continued)", 35f, 40f, paint)
+            headerY = 55f
+        }
+
+        paint.color = AndroidColor.parseColor("#F3F4F6")
+        canvas.drawRect(35f, headerY, 560f, headerY + 25f, paint)
+
+        paint.color = AndroidColor.parseColor("#374151")
+        paint.textSize = 9.5f
+        paint.isFakeBoldText = true
+        canvas.drawText("Date", 42f, headerY + 16f, paint)
+        canvas.drawText("Details / Remarks", 118f, headerY + 16f, paint)
+        canvas.drawText("OUT (-)", 295f, headerY + 16f, paint)
+        canvas.drawText("IN (+)", 382f, headerY + 16f, paint)
+        canvas.drawText("Balance", 470f, headerY + 16f, paint)
+
+        paint.isFakeBoldText = false
+        var currentY = headerY + 25f
+        val limit = if (pageNum == 1) firstPageRows else nextPageRows
+        val slice = rowsWithBal.drop(rowOffset).take(limit)
+        rowOffset += slice.size
+
+        slice.forEach { (tx, balAfter) ->
+            val dateText = SimpleDateFormat("dd MMM yy", Locale.getDefault()).format(Date(tx.timestamp))
+            val isIn = tx.type == "IN"
+
+            paint.color = AndroidColor.parseColor("#F8FAFC")
+            canvas.drawRect(460f, currentY, 560f, currentY + 22f, paint)
+
+            paint.color = AndroidColor.parseColor("#F1F5F9")
+            canvas.drawLine(35f, currentY + 22f, 560f, currentY + 22f, paint)
+
+            paint.color = AndroidColor.parseColor("#111827")
+            canvas.drawText(dateText, 42f, currentY + 15f, paint)
+
+            val itemName = if (tx.remarks.isNotBlank()) tx.remarks else if (tx.category.isNotBlank() && tx.category != "General") tx.category else tx.paymentMethod
+            val displayDetails = if (itemName.length > 26) itemName.take(24) + "..." else itemName
+            canvas.drawText(displayDetails, 118f, currentY + 15f, paint)
+
+            if (!isIn) {
+                paint.color = AndroidColor.parseColor("#DC2626")
+                canvas.drawText("Rs ${String.format("%,.0f", tx.amount)}", 295f, currentY + 15f, paint)
+            } else {
+                paint.color = AndroidColor.GRAY
+                canvas.drawText("-", 295f, currentY + 15f, paint)
+            }
+
+            if (isIn) {
+                paint.color = AndroidColor.parseColor("#059669")
+                canvas.drawText("Rs ${String.format("%,.0f", tx.amount)}", 382f, currentY + 15f, paint)
+            } else {
+                paint.color = AndroidColor.GRAY
+                canvas.drawText("-", 382f, currentY + 15f, paint)
+            }
+
+            paint.color = if (balAfter < 0) AndroidColor.parseColor("#DC2626") else AndroidColor.parseColor("#059669")
+            paint.isFakeBoldText = true
+            val balLabel = if (balAfter < 0) "${String.format("%,.0f", kotlin.math.abs(balAfter))} (-)" else String.format("%,.0f", balAfter)
+            canvas.drawText(balLabel, 470f, currentY + 15f, paint)
+            paint.isFakeBoldText = false
+
+            currentY += 22f
+        }
+
+        paint.color = AndroidColor.parseColor("#9CA3AF")
+        paint.textSize = 9f
+        canvas.drawText("Generated on $genTimeStr", 35f, 820f, paint)
+        paint.textAlign = Paint.Align.RIGHT
+        canvas.drawText("Page $pageNum of $totalPages", 560f, 820f, paint)
+        paint.textAlign = Paint.Align.LEFT
+
+        pdfDocument.finishPage(page)
+    }
+
+    val safeBook = bookName.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(30).ifBlank { "cashbook" }
+    val file = File(context.cacheDir, "${safeBook}_statement.pdf")
     pdfDocument.writeTo(file.outputStream())
     pdfDocument.close()
 
@@ -13743,39 +16286,17 @@ fun SettingsScreen(viewModel: LedgerViewModel) {
 
     // Create Business Dialog inside SettingsScreen
     if (showAddBusinessDialog) {
-        AlertDialog(
-            onDismissRequest = { showAddBusinessDialog = false },
-            title = { Text("Create New Business", fontWeight = FontWeight.Bold) },
-            text = {
-                OutlinedTextField(
-                    value = newBusinessName,
-                    onValueChange = { newBusinessName = it },
-                    label = { Text("Business / Company Name") },
-                    placeholder = { Text("e.g. RB Mengal Traders") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+        CreateBusinessWithOptionalBookDialog(
+            initialBusinessName = newBusinessName,
+            onDismiss = {
+                newBusinessName = ""
+                showAddBusinessDialog = false
             },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        val name = newBusinessName.trim()
-                        if (name.isNotEmpty()) {
-                            viewModel.createBusiness(name)
-                            newBusinessName = ""
-                            showAddBusinessDialog = false
-                            Toast.makeText(context, "Business created!", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = GreenIn)
-                ) {
-                    Text("Create")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showAddBusinessDialog = false }) {
-                    Text("Cancel")
-                }
+            onCreate = { bizName, firstBookName, firstBookPhone ->
+                viewModel.createBusiness(bizName, firstBookName, firstBookPhone)
+                newBusinessName = ""
+                showAddBusinessDialog = false
+                Toast.makeText(context, "Business created!", Toast.LENGTH_SHORT).show()
             }
         )
     }
@@ -13831,12 +16352,17 @@ fun SettingsScreen(viewModel: LedgerViewModel) {
 @Composable
 fun ManageWorkspaceScreen(viewModel: LedgerViewModel) {
     val businesses by viewModel.businesses.collectAsStateWithLifecycle()
-    val books by viewModel.books.collectAsStateWithLifecycle()
     val allBooks by viewModel.allBooks.collectAsStateWithLifecycle()
     val allTransactions by viewModel.allTransactions.collectAsStateWithLifecycle()
+    val allTeamMembers by viewModel.allTeamMembers.collectAsStateWithLifecycle()
     val activeBusiness by viewModel.activeBusiness.collectAsStateWithLifecycle()
     val activeBook by viewModel.activeBook.collectAsStateWithLifecycle()
     val context = LocalContext.current
+
+    val selectedManageBusinessId by viewModel.manageSelectedBusinessId.collectAsStateWithLifecycle()
+    val selectedManageBiz = remember(selectedManageBusinessId, businesses) {
+        businesses.find { it.id == selectedManageBusinessId }
+    }
 
     var showShareBusinessDialog by remember { mutableStateOf<com.example.data.Business?>(null) }
     var showShareBookDialog by remember { mutableStateOf<com.example.data.Book?>(null) }
@@ -13844,7 +16370,6 @@ fun ManageWorkspaceScreen(viewModel: LedgerViewModel) {
     var newBusinessName by remember { mutableStateOf("") }
 
     var showAddBookDialog by remember { mutableStateOf(false) }
-    var newBookName by remember { mutableStateOf("") }
 
     var businessToRename by remember { mutableStateOf<com.example.data.Business?>(null) }
     var renameBusinessName by remember { mutableStateOf("") }
@@ -13861,195 +16386,394 @@ fun ManageWorkspaceScreen(viewModel: LedgerViewModel) {
     val isBookRestricted by viewModel.isActiveBusinessBookRestricted.collectAsStateWithLifecycle()
     val isSuperAdmin by viewModel.isSuperAdmin.collectAsStateWithLifecycle()
 
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        // Welcome/Header
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.BusinessCenter,
-                        contentDescription = "Manage Workspaces",
-                        tint = GreenIn,
-                        modifier = Modifier.size(36.dp)
-                    )
-                    Column {
-                        Text(
-                            "Workspace Manager",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                        Text(
-                            "Create, join via invite code, switch, or manage businesses and cashbooks.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-                        )
-                    }
-                }
-            }
-        }
+    BackHandler(enabled = selectedManageBiz != null) {
+        viewModel.setManageSelectedBusinessId(null)
+    }
 
-        // Section 1: Businesses
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "My Businesses / Shops",
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(
-                        onClick = { showJoinByCodeDialog = true },
-                        modifier = Modifier.testTag("manage_join_code_button")
-                    ) {
-                        Icon(Icons.Default.GroupAdd, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Join Code", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold))
-                    }
-                    TextButton(
-                        onClick = { showAddBusinessDialog = true },
-                        colors = ButtonDefaults.textButtonColors(contentColor = GreenIn)
-                    ) {
-                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Add Business", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold))
-                    }
-                }
-            }
-        }
-
-        if (businesses.isEmpty()) {
+    if (selectedManageBiz == null) {
+        // LEVEL 1: Clean Businesses Directory (only Business names, book count, balance, no mixed books)
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
             item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
-                ) {
-                    Box(modifier = Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
-                        Text("No businesses available. Create one to get started!", style = MaterialTheme.typography.bodyMedium)
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Manage Businesses",
+                                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Tap any business to view its cashbooks & details",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { showJoinByCodeDialog = true },
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 44.dp)
+                                .testTag("manage_join_code_button"),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.GroupAdd, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Join Code", fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
+                        }
+                        Button(
+                            onClick = { showAddBusinessDialog = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 44.dp)
+                                .testTag("manage_add_business_button"),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Add Business", fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
+                        }
                     }
                 }
             }
-        } else {
-            items(businesses) { biz ->
-                val isActive = activeBusiness?.id == biz.id
-                val bizBooks = allBooks.filter { it.businessId == biz.id }
-                val bizBookIds = bizBooks.map { it.id }.toSet()
-                val bizTx = allTransactions.filter { bizBookIds.contains(it.bookId) }
-                val bizIn = bizTx.filter { it.type == "IN" }.sumOf { it.amount }
-                val bizOut = bizTx.filter { it.type == "OUT" }.sumOf { it.amount }
-                val bizNet = bizIn - bizOut
 
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .border(
-                            width = if (isActive) 1.5.dp else 1.dp,
-                            color = if (isActive) GreenIn else Color(0xFFE2E8F0),
-                            shape = RoundedCornerShape(12.dp)
+            if (businesses.isEmpty()) {
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                    ) {
+                        Box(modifier = Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                            Text("No businesses available. Create one to get started!", style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+            } else {
+                items(businesses, key = { it.id }) { biz ->
+                    val isActive = activeBusiness?.id == biz.id
+                    val bizHidden = viewModel.isBalanceHiddenForBusiness(biz, allTeamMembers)
+                    val bizBooks = allBooks.filter { it.businessId == biz.id }
+                    val bizBookIds = bizBooks.map { it.id }.toSet()
+                    val bizTx = allTransactions.filter { bizBookIds.contains(it.bookId) }
+                    val bizNet = bizTx.sumOf { if (it.type == "IN") it.amount else -it.amount }
+                    val isOwnBusiness = isSuperAdmin || biz.userEmail.isBlank() || biz.userEmail.equals(currentUserEmail, ignoreCase = true)
+
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { viewModel.setManageSelectedBusinessId(biz.id) }
+                            .testTag("manage_business_card_${biz.id}"),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isActive) GreenIn.copy(alpha = 0.05f) else MaterialTheme.colorScheme.surface
                         ),
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (isActive) Color.White else Color(0xFFF8FAFC)
-                    ),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        border = BorderStroke(
+                            width = if (isActive) 1.5.dp else 1.dp,
+                            color = if (isActive) GreenIn.copy(alpha = 0.7f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)
+                        ),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 14.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Row(
                                 modifier = Modifier.weight(1f),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = if (isActive) GreenIn.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceVariant,
+                                    modifier = Modifier.size(42.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Default.Storefront,
+                                            contentDescription = null,
+                                            tint = if (isActive) GreenIn else Color(0xFF475569),
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                    }
+                                }
+                                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(
+                                            text = biz.name,
+                                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f, fill = false)
+                                        )
+                                        if (isActive) {
+                                            Surface(
+                                                shape = RoundedCornerShape(6.dp),
+                                                color = GreenIn.copy(alpha = 0.15f)
+                                            ) {
+                                                Text(
+                                                    text = "Active",
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = GreenIn,
+                                                    maxLines = 1,
+                                                    softWrap = false,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
+                                        if (!isOwnBusiness) {
+                                            Surface(
+                                                shape = RoundedCornerShape(6.dp),
+                                                color = Color(0xFFE0F2FE)
+                                            ) {
+                                                Text(
+                                                    text = "Shared",
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = Color(0xFF0369A1),
+                                                    maxLines = 1,
+                                                    softWrap = false,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            text = "${bizBooks.size} ${if (bizBooks.size == 1) "Book" else "Books"}",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                        Text("•", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+                                        TransactionSyncCheckIndicator(isSynced = biz.isSynced)
+                                    }
+                                }
+                            }
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                if (bizHidden) {
+                                    Icon(
+                                        Icons.Default.VisibilityOff,
+                                        contentDescription = "Balances Hidden",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                } else {
+                                    Column(horizontalAlignment = Alignment.End) {
+                                        Text(
+                                            text = "Rs. ${String.format("%,.0f", kotlin.math.abs(bizNet))}",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = if (bizNet >= 0) GreenIn else RedOut,
+                                            maxLines = 1,
+                                            softWrap = false
+                                        )
+                                        Text(
+                                            text = if (bizNet >= 0) "Net IN" else "Net OUT",
+                                            fontSize = 10.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
                                 Icon(
-                                    imageVector = Icons.Default.Business,
-                                    contentDescription = null,
-                                    tint = if (isActive) GreenIn else Color(0xFF64748B)
+                                    Icons.Default.ChevronRight,
+                                    contentDescription = "Open Business Details",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
                                 )
-                                Column(modifier = Modifier.weight(1f)) {
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        // LEVEL 2: Clicked Business Details + ONLY this Business's Cashbooks
+        val biz = selectedManageBiz
+        val isActive = activeBusiness?.id == biz.id
+        val bizHidden = viewModel.isBalanceHiddenForBusiness(biz, allTeamMembers)
+        val bizBooks = remember(allBooks, biz.id) { allBooks.filter { it.businessId == biz.id } }
+        val bizBookIds = remember(bizBooks) { bizBooks.map { it.id }.toSet() }
+        val bizTx = remember(allTransactions, bizBookIds) { allTransactions.filter { bizBookIds.contains(it.bookId) } }
+        val bizIn = bizTx.filter { it.type == "IN" }.sumOf { it.amount }
+        val bizOut = bizTx.filter { it.type == "OUT" }.sumOf { it.amount }
+        val bizNet = bizIn - bizOut
+        val isOwnBusiness = isSuperAdmin || biz.userEmail.isBlank() || biz.userEmail.equals(currentUserEmail, ignoreCase = true)
+
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // Back to All Businesses bar
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(18.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                        modifier = Modifier
+                            .clickable { viewModel.setManageSelectedBusinessId(null) }
+                            .testTag("manage_back_to_businesses")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "All Businesses",
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = "All Businesses",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    if (!isActive) {
+                        Button(
+                            onClick = { viewModel.selectBusiness(biz) },
+                            colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.height(36.dp)
+                        ) {
+                            Text("Set Active", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    } else {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = GreenIn.copy(alpha = 0.14f),
+                            border = BorderStroke(1.dp, GreenIn.copy(alpha = 0.45f))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(Icons.Default.Check, contentDescription = null, tint = GreenIn, modifier = Modifier.size(13.dp))
+                                Text("Active Business", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = GreenIn)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Business Summary & Controls Card
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Icon(Icons.Default.Storefront, contentDescription = null, tint = GreenIn, modifier = Modifier.size(24.dp))
+                                Column {
                                     Text(
                                         text = biz.name,
                                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                        color = if (isActive) GreenIn else Color(0xFF0F172A),
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
                                     TransactionSyncCheckIndicator(isSynced = biz.isSynced)
                                 }
                             }
-                            if (isActive) {
+
+                            if (!isOwnBusiness) {
                                 Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = GreenIn.copy(alpha = 0.14f),
-                                    border = BorderStroke(1.dp, GreenIn.copy(alpha = 0.45f))
+                                    color = MaterialTheme.colorScheme.secondaryContainer,
+                                    shape = RoundedCornerShape(8.dp)
                                 ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                    ) {
-                                        Icon(Icons.Default.Check, contentDescription = null, tint = GreenIn, modifier = Modifier.size(12.dp))
-                                        Text(
-                                            text = "Active",
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = GreenIn,
-                                            maxLines = 1,
-                                            softWrap = false
-                                        )
-                                    }
+                                    Text(
+                                        text = if (isBookRestricted) "Shared • ${bizBooks.size} Book(s)" else "Shared",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
                                 }
                             }
                         }
 
-                        // Business Totals Summary Box
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)),
-                            shape = RoundedCornerShape(8.dp),
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                            shape = RoundedCornerShape(10.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(10.dp),
+                                    .padding(12.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Column {
-                                    Text("Business Net Balance", style = MaterialTheme.typography.labelSmall, color = Color.Gray, fontWeight = FontWeight.Bold)
+                                    Text("Net Balance", style = MaterialTheme.typography.labelSmall, color = Color.Gray, fontWeight = FontWeight.Bold)
                                     Text(
-                                        "Rs. ${String.format("%,.2f", bizNet)}",
-                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold),
-                                        color = if (bizNet >= 0) GreenIn else RedOut
+                                        if (bizHidden) "Hidden by Admin" else "Rs. ${String.format("%,.0f", bizNet)}",
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+                                        color = if (bizHidden) MaterialTheme.colorScheme.onSurfaceVariant else if (bizNet >= 0) GreenIn else RedOut
                                     )
                                 }
-
-                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    Column(horizontalAlignment = Alignment.End) {
-                                        Text("Cash In", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                                        Text("Rs. ${String.format("%,.0f", bizIn)}", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold), color = GreenIn)
-                                    }
-                                    Column(horizontalAlignment = Alignment.End) {
-                                        Text("Cash Out", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                                        Text("Rs. ${String.format("%,.0f", bizOut)}", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold), color = RedOut)
+                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    if (!bizHidden) {
+                                        Column(horizontalAlignment = Alignment.End) {
+                                            Text("Cash In", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                            Text("Rs. ${String.format("%,.0f", bizIn)}", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold), color = GreenIn)
+                                        }
+                                        Column(horizontalAlignment = Alignment.End) {
+                                            Text("Cash Out", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                            Text("Rs. ${String.format("%,.0f", bizOut)}", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold), color = RedOut)
+                                        }
                                     }
                                     Column(horizontalAlignment = Alignment.End) {
                                         Text("Books", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
@@ -14059,181 +16783,35 @@ fun ManageWorkspaceScreen(viewModel: LedgerViewModel) {
                             }
                         }
 
-                        // List books for this Business
-                        if (bizBooks.isNotEmpty()) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = 4.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Text(
-                                    "Books / Customers under ${biz.name}:",
-                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                    color = Color(0xFF475569)
-                                )
-                                bizBooks.forEach { bk ->
-                                    val isBkActive = activeBook?.id == bk.id && isActive
-                                    val bkTx = allTransactions.filter { it.bookId == bk.id }
-                                    val bkIn = bkTx.filter { it.type == "IN" }.sumOf { it.amount }
-                                    val bkOut = bkTx.filter { it.type == "OUT" }.sumOf { it.amount }
-                                    val bkNet = bkIn - bkOut
-
-                                    Card(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable { viewModel.selectBook(bk) },
-                                        colors = CardDefaults.cardColors(
-                                            containerColor = if (isBkActive) GreenIn.copy(alpha = 0.08f) else Color.White
-                                        ),
-                                        border = BorderStroke(
-                                            width = if (isBkActive) 1.5.dp else 1.dp,
-                                            color = if (isBkActive) GreenIn else Color(0xFFE2E8F0)
-                                        ),
-                                        shape = RoundedCornerShape(8.dp)
-                                    ) {
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(horizontal = 10.dp, vertical = 8.dp),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                                modifier = Modifier.weight(1f)
-                                            ) {
-                                                Icon(
-                                                    Icons.Default.Book,
-                                                    contentDescription = null,
-                                                    tint = if (isBkActive) GreenIn else Color(0xFF64748B),
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                                Column {
-                                                    Text(
-                                                        bk.name,
-                                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                                        color = if (isBkActive) GreenIn else Color(0xFF0F172A)
-                                                    )
-                                                    Text(
-                                                        "Net: Rs. ${String.format("%,.0f", bkNet)}",
-                                                        style = MaterialTheme.typography.labelSmall,
-                                                        color = if (bkNet >= 0) GreenIn else RedOut
-                                                    )
-                                                }
-                                            }
-
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(2.dp)
-                                            ) {
-                                                if (isBkActive) {
-                                                    Surface(
-                                                        shape = RoundedCornerShape(6.dp),
-                                                        color = GreenIn.copy(alpha = 0.14f),
-                                                        border = BorderStroke(1.dp, GreenIn.copy(alpha = 0.4f))
-                                                    ) {
-                                                        Row(
-                                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
-                                                            verticalAlignment = Alignment.CenterVertically,
-                                                            horizontalArrangement = Arrangement.spacedBy(3.dp)
-                                                        ) {
-                                                            Icon(Icons.Default.Check, contentDescription = null, tint = GreenIn, modifier = Modifier.size(11.dp))
-                                                            Text(
-                                                                "Active",
-                                                                fontSize = 10.sp,
-                                                                fontWeight = FontWeight.Bold,
-                                                                color = GreenIn,
-                                                                maxLines = 1,
-                                                                softWrap = false
-                                                            )
-                                                        }
-                                                    }
-                                                } else {
-                                                    TextButton(
-                                                        onClick = { viewModel.selectBook(bk) },
-                                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                                                    ) {
-                                                        Text("Select", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = GreenIn)
-                                                    }
-                                                }
-
-                                                IconButton(
-                                                    onClick = { showShareBookDialog = bk },
-                                                    modifier = Modifier.size(28.dp)
-                                                ) {
-                                                    Icon(Icons.Default.Share, contentDescription = "Share Book", tint = GreenIn, modifier = Modifier.size(14.dp))
-                                                }
-
-                                                IconButton(
-                                                    onClick = {
-                                                        bookToRename = bk
-                                                        renameBookName = bk.name
-                                                    },
-                                                    modifier = Modifier.size(28.dp)
-                                                ) {
-                                                    Icon(Icons.Default.Edit, contentDescription = "Rename Book", tint = Color(0xFF475569), modifier = Modifier.size(14.dp))
-                                                }
-
-                                                IconButton(
-                                                    onClick = { bookToDelete = bk },
-                                                    modifier = Modifier.size(28.dp)
-                                                ) {
-                                                    Icon(Icons.Default.Delete, contentDescription = "Delete Book", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(14.dp))
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        val isOwnBusiness = isSuperAdmin || biz.userEmail.isBlank() || biz.userEmail.equals(currentUserEmail, ignoreCase = true)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            if (!isActive) {
-                                Button(
-                                    onClick = { viewModel.selectBusiness(biz) },
-                                    modifier = Modifier.weight(1f),
-                                    colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
-                                    shape = RoundedCornerShape(8.dp)
-                                ) {
-                                    Text("Switch to", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold))
-                                }
-                            } else if (!isOwnBusiness) {
-                                Surface(
-                                    color = MaterialTheme.colorScheme.secondaryContainer,
-                                    shape = RoundedCornerShape(8.dp)
-                                ) {
-                                    Text(
-                                        text = if (isBookRestricted) "Shared • $simulatedRole • ${bizBooks.size} Book(s)" else "Shared • $simulatedRole",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                    )
-                                }
-                            }
-
                             if (isOwnBusiness || hasPermission(simulatedRole, "add_team_member")) {
-                                IconButton(
-                                    onClick = { showShareBusinessDialog = biz }
+                                OutlinedButton(
+                                    onClick = { showShareBusinessDialog = biz },
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
                                 ) {
-                                    Icon(Icons.Default.Share, contentDescription = "Share Business", tint = GreenIn)
+                                    Icon(Icons.Default.Share, contentDescription = "Share Business", tint = GreenIn, modifier = Modifier.size(15.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Share", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = GreenIn, maxLines = 1, softWrap = false)
                                 }
-
-                                IconButton(
+                                OutlinedButton(
                                     onClick = {
                                         businessToRename = biz
                                         renameBusinessName = biz.name
-                                    }
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
                                 ) {
-                                    Icon(Icons.Default.Edit, contentDescription = "Rename Business", tint = Color(0xFF475569))
+                                    Icon(Icons.Default.Edit, contentDescription = "Rename Business", modifier = Modifier.size(15.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Rename", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
                                 }
-
                                 IconButton(
                                     onClick = {
                                         businessToDelete = biz
@@ -14243,203 +16821,190 @@ fun ManageWorkspaceScreen(viewModel: LedgerViewModel) {
                                     Icon(Icons.Default.Delete, contentDescription = "Delete Business", tint = MaterialTheme.colorScheme.error)
                                 }
                             } else {
-                                TextButton(
+                                OutlinedButton(
                                     onClick = {
                                         viewModel.leaveSharedBusiness(biz) { msg ->
+                                            viewModel.setManageSelectedBusinessId(null)
                                             Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                                         }
                                     },
-                                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
+                                    shape = RoundedCornerShape(8.dp)
                                 ) {
-                                    Text("Leave", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    Text("Leave Business", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
                     }
                 }
             }
-        }
 
-        // Section 2: All Cashbooks across all businesses
-        item {
-            Divider(color = Color(0xFFE2E8F0), modifier = Modifier.padding(vertical = 8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text(
-                        text = "All Cashbooks / Customers",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = "Total ${allBooks.size} cashbooks across ${businesses.size} businesses",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF64748B)
-                    )
-                }
-                if (hasPermission(simulatedRole, "add_book", isBookRestricted)) {
-                    TextButton(
-                        onClick = { showAddBookDialog = true },
-                        enabled = activeBusiness != null,
-                        colors = ButtonDefaults.textButtonColors(contentColor = GreenIn)
-                    ) {
-                        Icon(Icons.Default.AddCard, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Add Book", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold))
-                    }
-                }
-            }
-        }
-
-        if (allBooks.isEmpty()) {
+            // Cashbooks Header for THIS Business only
             item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth().padding(20.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text("No customers or cashbooks available yet.", style = MaterialTheme.typography.bodyMedium)
-                        if (hasPermission(simulatedRole, "add_book", isBookRestricted)) {
-                            Button(
-                                onClick = { showAddBookDialog = true },
-                                colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
-                                shape = RoundedCornerShape(8.dp)
-                            ) {
-                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("+ Add Customer / Book", fontWeight = FontWeight.Bold)
-                            }
+                    Text(
+                        text = "Cashbooks",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (isOwnBusiness || hasPermission(simulatedRole, "add_book", isBookRestricted)) {
+                        TextButton(
+                            onClick = {
+                                if (!isActive) viewModel.selectBusiness(biz)
+                                showAddBookDialog = true
+                            },
+                            colors = ButtonDefaults.textButtonColors(contentColor = GreenIn)
+                        ) {
+                            Icon(Icons.Default.AddCard, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Add Book", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold))
                         }
                     }
                 }
             }
-        } else {
-            items(allBooks) { bk ->
-                val isActive = activeBook?.id == bk.id
-                val parentBiz = businesses.find { it.id == bk.businessId }
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .border(
-                            width = if (isActive) 1.5.dp else 1.dp,
-                            color = if (isActive) GreenIn else Color(0xFFE2E8F0),
-                            shape = RoundedCornerShape(12.dp)
-                        ),
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (isActive) Color.White else Color(0xFFF8FAFC)
-                    ),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
+
+            if (bizBooks.isEmpty()) {
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(20.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
+                            Text("No cashbooks in ${biz.name} yet.", style = MaterialTheme.typography.bodyMedium)
+                            if (isOwnBusiness || hasPermission(simulatedRole, "add_book", isBookRestricted)) {
+                                Button(
+                                    onClick = {
+                                        if (!isActive) viewModel.selectBusiness(biz)
+                                        showAddBookDialog = true
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Add Cashbook", fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                items(bizBooks, key = { it.id }) { bk ->
+                    val isBkActive = activeBook?.id == bk.id && isActive
+                    val bkTx = allTransactions.filter { it.bookId == bk.id }
+                    val bkNet = bkTx.sumOf { if (it.type == "IN") it.amount else -it.amount }
+
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { viewModel.openBookLedger(bk) },
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isBkActive) GreenIn.copy(alpha = 0.06f) else MaterialTheme.colorScheme.surface
+                        ),
+                        border = BorderStroke(
+                            width = if (isBkActive) 1.5.dp else 1.dp,
+                            color = if (isBkActive) GreenIn.copy(alpha = 0.7f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Row(
-                                modifier = Modifier.weight(1f),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.Book,
-                                    contentDescription = null,
-                                    tint = if (isActive) GreenIn else Color(0xFF64748B)
-                                )
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = bk.name,
-                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                        color = if (isActive) GreenIn else Color(0xFF0F172A),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
+                                Row(
+                                    modifier = Modifier.weight(1f),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Book,
+                                        contentDescription = null,
+                                        tint = if (isBkActive) GreenIn else Color(0xFF64748B)
                                     )
-                                    if (parentBiz != null) {
+                                    Column(modifier = Modifier.weight(1f)) {
                                         Text(
-                                            text = "Business: ${parentBiz.name}",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.primary,
+                                            text = bk.name,
+                                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                            color = if (isBkActive) GreenIn else MaterialTheme.colorScheme.onSurface,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
                                         )
-                                    }
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    TransactionSyncCheckIndicator(isSynced = bk.isSynced)
-                                }
-                            }
-                            if (isActive) {
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = GreenIn.copy(alpha = 0.14f),
-                                    border = BorderStroke(1.dp, GreenIn.copy(alpha = 0.45f))
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                    ) {
-                                        Icon(Icons.Default.Check, contentDescription = null, tint = GreenIn, modifier = Modifier.size(12.dp))
                                         Text(
-                                            text = "Active Book",
+                                            text = buildString {
+                                                append("${bkTx.size} ${if (bkTx.size == 1) "entry" else "entries"}")
+                                                if (!bizHidden) append(" • Net Rs. ${String.format("%,.0f", bkNet)}")
+                                            },
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (bizHidden) MaterialTheme.colorScheme.onSurfaceVariant else if (bkNet >= 0) GreenIn else RedOut
+                                        )
+                                    }
+                                }
+
+                                if (isBkActive) {
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = GreenIn.copy(alpha = 0.14f)
+                                    ) {
+                                        Text(
+                                            text = "Active",
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Bold,
                                             color = GreenIn,
-                                            maxLines = 1,
-                                            softWrap = false
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                         )
                                     }
                                 }
                             }
-                        }
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            if (!isActive) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Button(
-                                    onClick = { viewModel.selectBook(bk) },
+                                    onClick = { viewModel.openBookLedger(bk) },
                                     modifier = Modifier.weight(1f),
                                     colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
                                     shape = RoundedCornerShape(8.dp)
                                 ) {
-                                    Text("Switch to", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold))
-                                }
-                            } else {
-                                OutlinedButton(
-                                    onClick = { viewModel.setScreen(Screen.DASHBOARD) },
-                                    modifier = Modifier.weight(1f),
-                                    border = BorderStroke(1.dp, GreenIn),
-                                    shape = RoundedCornerShape(8.dp)
-                                ) {
-                                    Text("Open on Home", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = GreenIn)
-                                }
-                            }
-
-                            if (hasPermission(simulatedRole, "delete_book")) {
-                                IconButton(
-                                    onClick = {
-                                        bookToRename = bk
-                                        renameBookName = bk.name
-                                    }
-                                ) {
-                                    Icon(Icons.Default.Edit, contentDescription = "Rename Book", tint = Color(0xFF475569))
+                                    Text("Open Book", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold))
                                 }
 
                                 IconButton(
-                                    onClick = {
-                                        bookToDelete = bk
-                                    }
+                                    onClick = { showShareBookDialog = bk }
                                 ) {
-                                    Icon(Icons.Default.Delete, contentDescription = "Delete Book", tint = MaterialTheme.colorScheme.error)
+                                    Icon(Icons.Default.Share, contentDescription = "Share Book", tint = GreenIn)
+                                }
+
+                                if (isOwnBusiness || hasPermission(simulatedRole, "delete_book")) {
+                                    IconButton(
+                                        onClick = {
+                                            bookToRename = bk
+                                            renameBookName = bk.name
+                                        }
+                                    ) {
+                                        Icon(Icons.Default.Edit, contentDescription = "Rename Book", tint = Color(0xFF475569))
+                                    }
+
+                                    IconButton(
+                                        onClick = { bookToDelete = bk }
+                                    ) {
+                                        Icon(Icons.Default.Delete, contentDescription = "Delete Book", tint = MaterialTheme.colorScheme.error)
+                                    }
                                 }
                             }
                         }
@@ -14453,40 +17018,17 @@ fun ManageWorkspaceScreen(viewModel: LedgerViewModel) {
 
     // 1. Add Business Dialog
     if (showAddBusinessDialog) {
-        AlertDialog(
-            onDismissRequest = { showAddBusinessDialog = false },
-            title = { Text("Create New Business", fontWeight = FontWeight.Bold) },
-            text = {
-                OutlinedTextField(
-                    value = newBusinessName,
-                    onValueChange = { newBusinessName = it },
-                    label = { Text("Business / Company Name") },
-                    placeholder = { Text("e.g. RB Mengal Traders") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().testTag("add_business_dialog_input")
-                )
+        CreateBusinessWithOptionalBookDialog(
+            initialBusinessName = newBusinessName,
+            onDismiss = {
+                newBusinessName = ""
+                showAddBusinessDialog = false
             },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        val name = newBusinessName.trim()
-                        if (name.isNotEmpty()) {
-                            viewModel.createBusiness(name)
-                            newBusinessName = ""
-                            showAddBusinessDialog = false
-                            Toast.makeText(context, "Business created!", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
-                    modifier = Modifier.testTag("add_business_dialog_confirm")
-                ) {
-                    Text("Create")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showAddBusinessDialog = false }) {
-                    Text("Cancel")
-                }
+            onCreate = { bizName, firstBookName, firstBookPhone ->
+                viewModel.createBusiness(bizName, firstBookName, firstBookPhone)
+                newBusinessName = ""
+                showAddBusinessDialog = false
+                Toast.makeText(context, "Business created!", Toast.LENGTH_SHORT).show()
             }
         )
     }
