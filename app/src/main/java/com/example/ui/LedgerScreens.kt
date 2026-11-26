@@ -93,10 +93,19 @@ fun hasPermission(role: String, action: String, isBookRestricted: Boolean = fals
     return when (role.trim().lowercase()) {
         "super admin", "boss", "owner", "admin" -> true
         "partner" -> action == "view" || action == "switch_business" || action == "add_transaction" || action == "edit_transaction" || (action == "add_book" && !isBookRestricted)
-        "data entry" -> action == "view" || action == "switch_business" || action == "add_transaction" || (action == "add_book" && !isBookRestricted)
+        "data entry" -> action == "view" || action == "switch_business" || action == "add_transaction" || action == "edit_transaction" || action == "delete_transaction" || (action == "add_book" && !isBookRestricted)
         "viewer", "read only", "read-only" -> action == "view" || action == "switch_business"
         else -> action == "view" || action == "switch_business"
     }
+}
+
+fun hasTransactionEntryPermission(
+    role: String,
+    action: String,
+    txTimestamp: Long,
+    lockPastEntries: Boolean
+): Boolean {
+    return canModifyTransactionByRoleAndLock(role, action, txTimestamp, lockPastEntries)
 }
 
 data class ResolvedAuthor(val displayName: String, val isOwner: Boolean)
@@ -171,7 +180,7 @@ fun buildTeamInviteMessage(
     val roleSummary = when (role.trim().lowercase()) {
         "viewer", "read only", "read-only" -> "Viewer (Read-Only access; cannot add, edit, or delete entries)"
         "partner" -> "Partner (View, add & edit Cash In / Cash Out entries)"
-        "data entry" -> "Data Entry (Add Cash In / Cash Out entries; cannot edit or delete)"
+        "data entry" -> "Data Entry (Add entries; today's fixes allowed, past days locked by default)"
         "admin", "boss" -> "$role (Full workspace, team & report control)"
         else -> role
     }
@@ -827,6 +836,8 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
     val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
     val isSuperAdmin by viewModel.isSuperAdmin.collectAsStateWithLifecycle()
     val isUserSignedIn by viewModel.isUserSignedIn.collectAsStateWithLifecycle()
+    val trashItems by viewModel.trashItems.collectAsStateWithLifecycle()
+    val auditLogs by viewModel.auditLogs.collectAsStateWithLifecycle()
 
     val isAppLockEnabled by viewModel.isAppLockEnabled.collectAsStateWithLifecycle()
     val isAppUnlocked by viewModel.isAppUnlocked.collectAsStateWithLifecycle()
@@ -1130,6 +1141,41 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         }
                     )
 
+                    NavigationDrawerItem(
+                        icon = { Icon(Icons.Default.History, contentDescription = null) },
+                        label = { Text("Audit History") },
+                        selected = currentScreen == Screen.AUDIT_HISTORY,
+                        badge = if (auditLogs.isNotEmpty()) {
+                            {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = MaterialTheme.colorScheme.primaryContainer
+                                ) {
+                                    Text(
+                                        text = "${auditLogs.size}",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                        } else null,
+                        colors = NavigationDrawerItemDefaults.colors(
+                            selectedContainerColor = GreenIn.copy(alpha = 0.15f),
+                            unselectedContainerColor = Color.Transparent,
+                            selectedIconColor = GreenIn,
+                            unselectedIconColor = Color(0xFF475569),
+                            selectedTextColor = GreenIn,
+                            unselectedTextColor = Color(0xFF1E293B)
+                        ),
+                        onClick = {
+                            viewModel.setScreen(Screen.AUDIT_HISTORY)
+                            scope.launch { drawerState.close() }
+                        },
+                        modifier = Modifier.testTag("drawer_audit_history_item")
+                    )
+
                     val isSynced = viewModel.syncManager.isUserSignedIn()
                     NavigationDrawerItem(
                         icon = { 
@@ -1215,6 +1261,41 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                             showSecuritySettingsDialog = true
                             scope.launch { drawerState.close() }
                         }
+                    )
+
+                    NavigationDrawerItem(
+                        icon = { Icon(Icons.Default.DeleteOutline, contentDescription = null) },
+                        label = { Text("Trash / Deleted Items") },
+                        selected = currentScreen == Screen.TRASH,
+                        badge = if (trashItems.isNotEmpty()) {
+                            {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = RedOut.copy(alpha = 0.14f)
+                                ) {
+                                    Text(
+                                        text = "${trashItems.size}",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = RedOut,
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                        } else null,
+                        colors = NavigationDrawerItemDefaults.colors(
+                            selectedContainerColor = GreenIn.copy(alpha = 0.15f),
+                            unselectedContainerColor = Color.Transparent,
+                            selectedIconColor = GreenIn,
+                            unselectedIconColor = Color(0xFF475569),
+                            selectedTextColor = GreenIn,
+                            unselectedTextColor = Color(0xFF1E293B)
+                        ),
+                        onClick = {
+                            viewModel.setScreen(Screen.TRASH)
+                            scope.launch { drawerState.close() }
+                        },
+                        modifier = Modifier.testTag("drawer_trash_item")
                     )
 
                     NavigationDrawerItem(
@@ -1400,6 +1481,26 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                                         contentDescription = "Back to All Businesses"
                                     )
                                 }
+                            } else if (currentScreen == Screen.TRASH) {
+                                IconButton(
+                                    onClick = { viewModel.setScreen(Screen.DASHBOARD) },
+                                    modifier = Modifier.testTag("trash_back_btn")
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.ArrowBack,
+                                        contentDescription = "Back to Home"
+                                    )
+                                }
+                            } else if (currentScreen == Screen.AUDIT_HISTORY) {
+                                IconButton(
+                                    onClick = { viewModel.setScreen(Screen.DASHBOARD) },
+                                    modifier = Modifier.testTag("audit_history_back_btn")
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.ArrowBack,
+                                        contentDescription = "Back to Home"
+                                    )
+                                }
                             } else {
                                 IconButton(onClick = { scope.launch { drawerState.open() } }) {
                                     Icon(Icons.Default.Menu, contentDescription = "Open Navigation Drawer")
@@ -1534,6 +1635,20 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                                 } else if (currentScreen == Screen.REPORTS) {
                                     Text(
                                         text = "Reports",
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                } else if (currentScreen == Screen.TRASH) {
+                                    Text(
+                                        text = "Trash",
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                } else if (currentScreen == Screen.AUDIT_HISTORY) {
+                                    Text(
+                                        text = "Audit History",
                                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
@@ -1758,6 +1873,8 @@ fun LedgerAppScreen(viewModel: LedgerViewModel) {
                         Screen.SETTINGS -> SettingsScreen(viewModel)
                         Screen.MANAGE_WORKSPACE -> ManageWorkspaceScreen(viewModel)
                         Screen.PROFILE -> ProfileScreen(viewModel)
+                        Screen.TRASH -> TrashScreen(viewModel)
+                        Screen.AUDIT_HISTORY -> AuditHistoryScreen(viewModel)
                     }
                 }
 
@@ -2193,6 +2310,7 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
     val isHomeBusinessesListVisible by viewModel.isHomeBusinessesListVisible.collectAsStateWithLifecycle()
     val isHomeBooksHubVisible by viewModel.isHomeBooksHubVisible.collectAsStateWithLifecycle()
     val hideTotalBalance by viewModel.hideTotalBalanceForActiveBusiness.collectAsStateWithLifecycle()
+    val lockPastEntries by viewModel.lockPastEntriesForActiveBusiness.collectAsStateWithLifecycle()
     val activeBook by viewModel.activeBook.collectAsStateWithLifecycle()
     val activeBookTransactions by viewModel.activeBookTransactions.collectAsStateWithLifecycle()
     val selectedIds by viewModel.selectedTransactionIds.collectAsStateWithLifecycle()
@@ -3587,6 +3705,9 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                                 teamMembers = allTeamMembers.filter { activeBusiness == null || it.businessId == activeBusiness?.id },
                                 globalAccounts = globalAccounts
                             )
+                            val canEditThisTx = hasTransactionEntryPermission(simulatedRole, "edit_transaction", tx.timestamp, lockPastEntries)
+                            val canDeleteThisTx = hasTransactionEntryPermission(simulatedRole, "delete_transaction", tx.timestamp, lockPastEntries)
+                            val isLockedPastDay = lockPastEntries && canRoleLockPastEntries(simulatedRole) && isPastDayTimestamp(tx.timestamp)
                             TransactionItemCard(
                                 transaction = tx,
                                 runningBalance = txRunningBal,
@@ -3596,19 +3717,32 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
                                 resolvedAddedBy = resolvedAuthor.displayName,
                                 isAddedByOwner = resolvedAuthor.isOwner,
                                 isSelected = isSelected,
+                                canEditEntry = canEditThisTx,
+                                canDeleteEntry = canDeleteThisTx,
+                                isLockedPastDay = isLockedPastDay,
                                 onToggleSelection = { viewModel.toggleTransactionSelection(tx.id) },
                                 onDelete = {
-                                    if (hasPermission(simulatedRole, "delete_transaction")) {
+                                    if (canDeleteThisTx) {
                                         txPendingDelete = tx
                                     } else {
-                                        Toast.makeText(context, "Unauthorized role: Cannot delete entries.", Toast.LENGTH_SHORT).show()
+                                        val msg = if (isLockedPastDay) {
+                                            "Locked: Staff cannot delete past days' entries."
+                                        } else {
+                                            "Unauthorized role: Cannot delete entries."
+                                        }
+                                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                                     }
                                 },
                                 onEdit = {
-                                    if (hasPermission(simulatedRole, "edit_transaction")) {
+                                    if (canEditThisTx) {
                                         selectedTxForEdit = tx
                                     } else {
-                                        Toast.makeText(context, "Unauthorized role cannot modify entries.", Toast.LENGTH_SHORT).show()
+                                        val msg = if (isLockedPastDay) {
+                                            "Locked: Staff cannot edit past days' entries."
+                                        } else {
+                                            "Unauthorized role cannot modify entries."
+                                        }
+                                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                                     }
                                 }
                             )
@@ -3852,9 +3986,15 @@ fun DashboardScreen(viewModel: LedgerViewModel) {
             count = selectedIds.size,
             onDismiss = { showBatchDeleteConfirm = false },
             onConfirm = {
-                viewModel.batchDeleteSelectedTransactions()
+                viewModel.batchDeleteSelectedTransactions { deletedCount, skippedCount ->
+                    val msg = when {
+                        skippedCount > 0 && deletedCount > 0 -> "Moved $deletedCount to Trash ($skippedCount locked past-day entries skipped)."
+                        skippedCount > 0 -> "Locked: Cannot delete past days' entries."
+                        else -> "Selected entries moved to Trash."
+                    }
+                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                }
                 showBatchDeleteConfirm = false
-                Toast.makeText(context, "Selected entries deleted.", Toast.LENGTH_SHORT).show()
             }
         )
     }
@@ -3874,6 +4014,7 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
     val selectedIds by viewModel.selectedTransactionIds.collectAsStateWithLifecycle()
     val simulatedRole by viewModel.simulatedRole.collectAsStateWithLifecycle()
     val hideTotalBalance by viewModel.hideTotalBalanceForActiveBusiness.collectAsStateWithLifecycle()
+    val lockPastEntries by viewModel.lockPastEntriesForActiveBusiness.collectAsStateWithLifecycle()
     val wasooliDueDates by viewModel.wasooliDueDates.collectAsStateWithLifecycle()
     val allTeamMembers by viewModel.allTeamMembers.collectAsStateWithLifecycle()
     val globalAccounts by viewModel.globalAccounts.collectAsStateWithLifecycle()
@@ -4556,6 +4697,9 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                                     teamMembers = allTeamMembers.filter { activeBusiness == null || it.businessId == activeBusiness?.id },
                                     globalAccounts = globalAccounts
                                 )
+                                val canEditThisTx = hasTransactionEntryPermission(simulatedRole, "edit_transaction", tx.timestamp, lockPastEntries)
+                                val canDeleteThisTx = hasTransactionEntryPermission(simulatedRole, "delete_transaction", tx.timestamp, lockPastEntries)
+                                val isLockedPastDay = lockPastEntries && canRoleLockPastEntries(simulatedRole) && isPastDayTimestamp(tx.timestamp)
                                 TransactionItemCard(
                                     transaction = tx,
                                     runningBalance = txRunningBal,
@@ -4565,19 +4709,32 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                                     resolvedAddedBy = resolvedAuthor.displayName,
                                     isAddedByOwner = resolvedAuthor.isOwner,
                                     isSelected = isSelected,
+                                    canEditEntry = canEditThisTx,
+                                    canDeleteEntry = canDeleteThisTx,
+                                    isLockedPastDay = isLockedPastDay,
                                     onToggleSelection = { viewModel.toggleTransactionSelection(tx.id) },
                                     onDelete = {
-                                        if (hasPermission(simulatedRole, "delete_transaction")) {
+                                        if (canDeleteThisTx) {
                                             txPendingDelete = tx
                                         } else {
-                                            Toast.makeText(context, "Unauthorized role: Cannot delete transactions.", Toast.LENGTH_SHORT).show()
+                                            val msg = if (isLockedPastDay) {
+                                                "Locked: Staff cannot delete past days' entries."
+                                            } else {
+                                                "Unauthorized role: Cannot delete transactions."
+                                            }
+                                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                                         }
                                     },
                                     onEdit = {
-                                        if (hasPermission(simulatedRole, "edit_transaction")) {
+                                        if (canEditThisTx) {
                                             selectedTxForEdit = tx
                                         } else {
-                                            Toast.makeText(context, "Unauthorized role cannot modify entries.", Toast.LENGTH_SHORT).show()
+                                            val msg = if (isLockedPastDay) {
+                                                "Locked: Staff cannot edit past days' entries."
+                                            } else {
+                                                "Unauthorized role cannot modify entries."
+                                            }
+                                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                                         }
                                     }
                                 )
@@ -4804,9 +4961,15 @@ fun BookDetailScreen(viewModel: LedgerViewModel) {
                 count = selectedIds.size,
                 onDismiss = { showBatchDeleteConfirm = false },
                 onConfirm = {
-                    viewModel.batchDeleteSelectedTransactions()
+                    viewModel.batchDeleteSelectedTransactions { deletedCount, skippedCount ->
+                        val msg = when {
+                            skippedCount > 0 && deletedCount > 0 -> "Moved $deletedCount to Trash ($skippedCount locked past-day entries skipped)."
+                            skippedCount > 0 -> "Locked: Cannot delete past days' entries."
+                            else -> "Batch transactions moved to Trash."
+                        }
+                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                    }
                     showBatchDeleteConfirm = false
-                    Toast.makeText(context, "Batch transactions deleted successfully.", Toast.LENGTH_SHORT).show()
                 }
             )
         }
@@ -5107,6 +5270,9 @@ fun TransactionItemCard(
     resolvedAddedBy: String = transaction.addedByName,
     isAddedByOwner: Boolean = false,
     isSelected: Boolean,
+    canEditEntry: Boolean = true,
+    canDeleteEntry: Boolean = true,
+    isLockedPastDay: Boolean = false,
     onToggleSelection: () -> Unit,
     onDelete: () -> Unit,
     onEdit: () -> Unit
@@ -5240,16 +5406,38 @@ fun TransactionItemCard(
                                         }
                                     )
                                     DropdownMenuItem(
-                                        text = { Text("Edit Entry") },
-                                        leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                                        text = {
+                                            Text(
+                                                text = if (isLockedPastDay && !canEditEntry) "Edit Locked (Past Day)" else "Edit Entry",
+                                                color = if (canEditEntry) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                if (isLockedPastDay && !canEditEntry) Icons.Default.Lock else Icons.Default.Edit,
+                                                contentDescription = null,
+                                                tint = if (canEditEntry) MaterialTheme.colorScheme.onSurface else Color(0xFFD97706)
+                                            )
+                                        },
                                         onClick = {
                                             expandedMenu = false
                                             onEdit()
                                         }
                                     )
                                     DropdownMenuItem(
-                                        text = { Text("Delete Entry", color = MaterialTheme.colorScheme.error) },
-                                        leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                                        text = {
+                                            Text(
+                                                text = if (isLockedPastDay && !canDeleteEntry) "Delete Locked (Past Day)" else "Delete Entry",
+                                                color = if (canDeleteEntry) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                if (isLockedPastDay && !canDeleteEntry) Icons.Default.Lock else Icons.Default.Delete,
+                                                contentDescription = null,
+                                                tint = if (canDeleteEntry) MaterialTheme.colorScheme.error else Color(0xFFD97706)
+                                            )
+                                        },
                                         onClick = {
                                             expandedMenu = false
                                             onDelete()
@@ -5354,6 +5542,33 @@ fun TransactionItemCard(
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.SemiBold,
                                         color = badgeTint,
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
+                                }
+                            }
+                        }
+                        if (isLockedPastDay) {
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = Color(0xFFFEF3C7)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Lock,
+                                        contentDescription = "Past Day Locked",
+                                        tint = Color(0xFF92400E),
+                                        modifier = Modifier.size(10.dp)
+                                    )
+                                    Text(
+                                        text = "Locked",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color(0xFF92400E),
                                         maxLines = 1,
                                         softWrap = false
                                     )
@@ -5557,16 +5772,27 @@ fun TransactionItemCard(
                             Spacer(modifier = Modifier.width(4.dp))
                             Text("Share", maxLines = 1, softWrap = false)
                         }
-                        FilledTonalButton(
-                            onClick = {
-                                showDetailsDialog = false
-                                onEdit()
-                            },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Edit", maxLines = 1, softWrap = false)
+                        if (canEditEntry) {
+                            FilledTonalButton(
+                                onClick = {
+                                    showDetailsDialog = false
+                                    onEdit()
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Edit", maxLines = 1, softWrap = false)
+                            }
+                        } else if (isLockedPastDay) {
+                            OutlinedButton(
+                                onClick = { onEdit() },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.Lock, contentDescription = null, tint = Color(0xFFD97706), modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Locked", maxLines = 1, softWrap = false, color = Color(0xFF92400E))
+                            }
                         }
                     }
                 }
@@ -5577,13 +5803,15 @@ fun TransactionItemCard(
                 }
             },
             dismissButton = {
-                TextButton(
-                    onClick = {
-                        showDetailsDialog = false
-                        onDelete()
+                if (canDeleteEntry) {
+                    TextButton(
+                        onClick = {
+                            showDetailsDialog = false
+                            onDelete()
+                        }
+                    ) {
+                        Text("Delete", color = MaterialTheme.colorScheme.error)
                     }
-                ) {
-                    Text("Delete", color = MaterialTheme.colorScheme.error)
                 }
             }
         )
@@ -5705,7 +5933,7 @@ private fun ConfirmDeleteTransactionDialog(
                 }
 
                 Text(
-                    text = "Do you want to permanently delete this $typeLower entry of Rs. $formattedAmount?\n\nYour balance will be recalculated automatically, and this action cannot be undone.",
+                    text = "Move this $typeLower entry of Rs. $formattedAmount to Trash?\n\nYour balance will be recalculated immediately, and you can restore or delete it permanently anytime from Trash.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -5722,7 +5950,7 @@ private fun ConfirmDeleteTransactionDialog(
                     .minimumInteractiveComponentSize()
                     .testTag("confirm_delete_tx_button")
             ) {
-                Text("Delete Entry", maxLines = 1, softWrap = false, fontWeight = FontWeight.Bold)
+                Text("Move to Trash", maxLines = 1, softWrap = false, fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
@@ -5758,14 +5986,14 @@ private fun ConfirmBatchDeleteTransactionsDialog(
         },
         title = {
             Text(
-                text = "Delete $count Selected $titleNoun?",
+                text = "Move $count Selected $titleNoun to Trash?",
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center
             )
         },
         text = {
             Text(
-                text = "Do you want to permanently delete $count selected $noun from this cashbook?\n\nYour cashbook balance will be recalculated automatically, and deleted entries cannot be recovered.",
+                text = "Move $count selected $noun from this cashbook to Trash?\n\nYour cashbook balance will be recalculated immediately, and you can restore or delete them permanently from Trash.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -9273,6 +9501,7 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
     var staffPhone by remember { mutableStateOf("") }
     var staffRole by remember { mutableStateOf("Data Entry") } // Default role
     var staffHideBalance by remember { mutableStateOf(false) }
+    var staffLockPastEntries by remember { mutableStateOf(true) }
 
     var showInvitationSuccessDialog by remember { mutableStateOf(false) }
     var lastAddedCollaboratorName by remember { mutableStateOf("") }
@@ -9456,6 +9685,75 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
             }
         }
 
+        // Staff Edit Lock & Audit History Controls Card
+        val dataEntryMembers = activeTeamMembers.filter { it.role.equals("Data Entry", ignoreCase = true) }
+        val allDataEntryLocked = dataEntryMembers.isNotEmpty() && dataEntryMembers.all { it.lockPastEntries }
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f))
+        ) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (hasPermission(simulatedRole, "add_team_member") && activeBusiness != null) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Icon(Icons.Default.LockClock, contentDescription = null, tint = Color(0xFFD97706), modifier = Modifier.size(18.dp))
+                                Text(
+                                    text = "Staff Edit Lock (Past Days)",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Text(
+                                text = when {
+                                    dataEntryMembers.isEmpty() -> "Data Entry staff are locked from past days' edits/deletes by default."
+                                    allDataEntryLocked -> "${dataEntryMembers.size} Data Entry staff cannot edit or delete past days' entries."
+                                    else -> "Some Data Entry staff can currently edit past days' entries."
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (dataEntryMembers.isNotEmpty()) {
+                            Switch(
+                                checked = allDataEntryLocked,
+                                onCheckedChange = { locked ->
+                                    activeBusiness?.let { biz ->
+                                        viewModel.setLockPastEntriesForBusinessDataEntry(biz.id, locked)
+                                        Toast.makeText(
+                                            context,
+                                            if (locked) "Locked past days' entries for all Data Entry staff." else "Unlocked past days' entries for Data Entry staff.",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                },
+                                modifier = Modifier.testTag("team_global_lock_past_switch")
+                            )
+                        }
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+                }
+                OutlinedButton(
+                    onClick = { viewModel.setScreen(Screen.AUDIT_HISTORY) },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 42.dp).testTag("team_open_audit_history_btn"),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(17.dp), tint = GreenIn)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("View Audit History (Edits & Deletes)", fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
 
 
         // Team members lazy column or empty state
@@ -9635,6 +9933,31 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                                                     "Total Balances Hidden",
                                                     style = MaterialTheme.typography.labelSmall,
                                                     color = Color(0xFF92400E),
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
+                                            }
+                                        }
+                                    }
+                                    if (canRoleLockPastEntries(tm.role)) {
+                                        Surface(
+                                            color = if (tm.lockPastEntries) Color(0xFFDBEAFE) else MaterialTheme.colorScheme.surfaceVariant,
+                                            shape = RoundedCornerShape(5.dp)
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                            ) {
+                                                Icon(
+                                                    if (tm.lockPastEntries) Icons.Default.Lock else Icons.Default.LockOpen,
+                                                    contentDescription = null,
+                                                    tint = if (tm.lockPastEntries) Color(0xFF1D4ED8) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    modifier = Modifier.size(12.dp)
+                                                )
+                                                Text(
+                                                    text = if (tm.lockPastEntries) "Past Days Locked" else "Past Days Unlocked",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = if (tm.lockPastEntries) Color(0xFF1D4ED8) else MaterialTheme.colorScheme.onSurfaceVariant,
                                                     fontWeight = FontWeight.SemiBold
                                                 )
                                             }
@@ -9842,6 +10165,7 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                                     text = { Text(roleOpt) },
                                     onClick = {
                                         staffRole = roleOpt
+                                        staffLockPastEntries = defaultLockPastEntriesForRole(roleOpt)
                                         expandedRoleMenu = false
                                     }
                                 )
@@ -9852,7 +10176,7 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                     Text(
                         text = when (staffRole) {
                             "Viewer" -> "Read-only: Can view allowed cashbooks and entries; cannot add, edit, or delete."
-                            "Data Entry" -> "Can record Cash In / Out entries; cannot edit or delete existing records."
+                            "Data Entry" -> "Can record entries & fix today's mistakes; past days locked by default."
                             "Partner" -> "Can view, add, and edit Cash In / Out entries; cannot delete business or team."
                             else -> "Full access to books, transactions, reports, and team management."
                         },
@@ -9907,6 +10231,40 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                         }
                     }
 
+                    if (canRoleLockPastEntries(staffRole)) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        "Lock Past Days' Entries",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        "Block $staffRole from editing or deleting yesterday & older entries",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = staffLockPastEntries,
+                                    onCheckedChange = { staffLockPastEntries = it },
+                                    modifier = Modifier.testTag("team_lock_past_entries_switch")
+                                )
+                            }
+                        }
+                    }
+
                     if (formError.isNotBlank()) {
                         Text(formError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
                     }
@@ -9930,6 +10288,7 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                                 encodeAllowedBooks(selectedBookNames.toList())
                             }
                             val effectiveHideBal = canRoleHideBalance(staffRole) && staffHideBalance
+                            val effectiveLockPast = canRoleLockPastEntries(staffRole) && staffLockPastEntries
                             val code = syncManager.getOrGenerateInviteCode(activeBusiness?.name ?: "CB", cleanEmail)
                             lastAddedCollaboratorName = cleanName
                             lastAddedCollaboratorRole = staffRole
@@ -9946,7 +10305,8 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                                 phone = staffPhone.trim(),
                                 role = staffRole,
                                 allowedBookNames = allowedRaw,
-                                hideBalance = effectiveHideBal
+                                hideBalance = effectiveHideBal,
+                                lockPastEntries = effectiveLockPast
                             ) { inv, ok ->
                                 lastGeneratedInviteCode = inv.inviteCode
                                 invitePublishedCloud = ok
@@ -9958,6 +10318,7 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                             staffPhone = ""
                             staffRole = "Data Entry"
                             staffHideBalance = false
+                            staffLockPastEntries = true
                             showAddStaffDialog = false
                             showInvitationSuccessDialog = true
                         }
@@ -9984,6 +10345,7 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
         var editPhone by remember(editing.id, editing.phone) { mutableStateOf(editing.phone) }
         var editRole by remember(editing.id, editing.role) { mutableStateOf(editing.role) }
         var editHideBalance by remember(editing.id, editing.hideBalance) { mutableStateOf(editing.hideBalance) }
+        var editLockPastEntries by remember(editing.id, editing.lockPastEntries) { mutableStateOf(editing.lockPastEntries) }
         var editShareAllBooks by remember(editing.id, editing.allowedBookNames) {
             mutableStateOf(isRoleFullBusinessAccess(editing.role) || parseAllowedBooks(editing.allowedBookNames).isEmpty())
         }
@@ -10079,7 +10441,12 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                             val isRoleSelected = editRole.equals(roleOpt, ignoreCase = true)
                             FilterChip(
                                 selected = isRoleSelected,
-                                onClick = { editRole = roleOpt },
+                                onClick = {
+                                    editRole = roleOpt
+                                    if (!editing.role.equals(roleOpt, ignoreCase = true)) {
+                                        editLockPastEntries = defaultLockPastEntriesForRole(roleOpt)
+                                    }
+                                },
                                 label = { Text(roleOpt, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false) },
                                 leadingIcon = if (isRoleSelected) {
                                     { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
@@ -10097,7 +10464,7 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                         Text(
                             text = when (editRole) {
                                 "Viewer" -> "Viewer (Read-Only): Can view allowed cashbooks and entries; cannot add, edit, or delete."
-                                "Data Entry" -> "Data Entry: Can add Cash In / Out entries; cannot edit/delete existing entries or books."
+                                "Data Entry" -> "Data Entry: Add Cash In / Out entries; past days' edit/delete locked by default."
                                 "Partner" -> "Partner: Can view, add, and edit Cash In / Out entries; cannot delete businesses or team."
                                 else -> "$editRole: Full access to books, transactions, reports, and team management."
                             },
@@ -10154,6 +10521,40 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                         }
                     }
 
+                    if (canRoleLockPastEntries(editRole)) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        "Lock Past Days' Entries",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        "Prevent $editRole from editing or deleting past days' entries",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = editLockPastEntries,
+                                    onCheckedChange = { editLockPastEntries = it },
+                                    modifier = Modifier.testTag("edit_team_lock_past_entries_switch")
+                                )
+                            }
+                        }
+                    }
+
                     if (editError.isNotBlank()) {
                         Text(editError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
                     }
@@ -10187,6 +10588,7 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                                         encodeAllowedBooks(editSelectedBookNames.toList())
                                     }
                                     val effectiveHideBal = canRoleHideBalance(editRole) && editHideBalance
+                                    val effectiveLockPast = canRoleLockPastEntries(editRole) && editLockPastEntries
                                     isSavingEdit = true
                                     viewModel.updateTeamMember(
                                         oldMember = editing,
@@ -10195,7 +10597,8 @@ fun TeamManagementScreen(viewModel: LedgerViewModel) {
                                         newPhone = editPhone.trim(),
                                         newRole = editRole,
                                         newAllowedBookNames = newAllowedRaw,
-                                        newHideBalance = effectiveHideBal
+                                        newHideBalance = effectiveHideBal,
+                                        newLockPastEntries = effectiveLockPast
                                     ) { _, ok ->
                                         isSavingEdit = false
                                         memberToEdit = null
@@ -14030,6 +14433,7 @@ fun ShareBusinessDialog(
     var shareAllBooks by remember { mutableStateOf(true) }
     var selectedBookNames by remember { mutableStateOf<Set<String>>(emptySet()) }
     var hideBalanceForStaff by remember { mutableStateOf(false) }
+    var lockPastForStaff by remember { mutableStateOf(true) }
     var showAddCollaboratorSection by remember { mutableStateOf(false) }
     var activeShareMember by remember { mutableStateOf<TeamMember?>(null) }
 
@@ -14258,7 +14662,10 @@ fun ShareBusinessDialog(
                                 roles.forEach { roleOpt ->
                                     FilterChip(
                                         selected = selectedRole == roleOpt,
-                                        onClick = { selectedRole = roleOpt },
+                                        onClick = {
+                                            selectedRole = roleOpt
+                                            lockPastForStaff = defaultLockPastEntriesForRole(roleOpt)
+                                        },
                                         label = { Text(roleOpt, fontSize = 11.sp, fontWeight = FontWeight.Bold) },
                                         leadingIcon = if (selectedRole == roleOpt) { { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(12.dp)) } } else null
                                     )
@@ -14310,6 +14717,39 @@ fun ShareBusinessDialog(
                                 }
                             }
 
+                            if (canRoleLockPastEntries(selectedRole)) {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = MaterialTheme.colorScheme.surface,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                "Lock Past Days' Entries",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                            Text(
+                                                "Block $selectedRole from editing/deleting past days",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        Switch(
+                                            checked = lockPastForStaff,
+                                            onCheckedChange = { lockPastForStaff = it }
+                                        )
+                                    }
+                                }
+                            }
+
                             Button(
                                 onClick = {
                                     val cName = collaboratorName.trim()
@@ -14327,6 +14767,7 @@ fun ShareBusinessDialog(
                                             encodeAllowedBooks(selectedBookNames.toList())
                                         }
                                         val effectiveHideBal = canRoleHideBalance(selectedRole) && hideBalanceForStaff
+                                        val effectiveLockPast = canRoleLockPastEntries(selectedRole) && lockPastForStaff
                                         viewModel.addTeamMember(
                                             name = cName,
                                             email = cEmail,
@@ -14334,6 +14775,7 @@ fun ShareBusinessDialog(
                                             role = selectedRole,
                                             allowedBookNames = allowedRaw,
                                             hideBalance = effectiveHideBal,
+                                            lockPastEntries = effectiveLockPast,
                                             targetBusinessId = business.id
                                         ) { inv, published ->
                                             Toast.makeText(
@@ -14348,6 +14790,7 @@ fun ShareBusinessDialog(
                                         shareAllBooks = true
                                         selectedBookNames = emptySet()
                                         hideBalanceForStaff = false
+                                        lockPastForStaff = defaultLockPastEntriesForRole(selectedRole)
                                         showAddCollaboratorSection = false
                                     }
                                 },
@@ -14444,6 +14887,7 @@ fun ShareBookDialog(
     var staffEmail by remember { mutableStateOf("") }
     var staffRole by remember { mutableStateOf("Data Entry") }
     var hideBalanceForStaff by remember { mutableStateOf(false) }
+    var lockPastForStaff by remember { mutableStateOf(true) }
     var lastInviteText by remember { mutableStateOf<String?>(null) }
 
     val summaryReportText = remember(book, bookTransactions) {
@@ -14703,7 +15147,10 @@ fun ShareBookDialog(
                                     listOf("Viewer", "Data Entry", "Partner").forEach { roleOpt ->
                                         FilterChip(
                                             selected = staffRole == roleOpt,
-                                            onClick = { staffRole = roleOpt },
+                                            onClick = {
+                                                staffRole = roleOpt
+                                                lockPastForStaff = defaultLockPastEntriesForRole(roleOpt)
+                                            },
                                             label = { Text(roleOpt, fontSize = 11.sp, fontWeight = FontWeight.Bold) },
                                             leadingIcon = if (staffRole == roleOpt) {
                                                 { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(12.dp)) }
@@ -14730,6 +15177,24 @@ fun ShareBookDialog(
                                     }
                                 }
 
+                                if (canRoleLockPastEntries(staffRole)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = "Lock Past Days' Entries",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        Switch(
+                                            checked = lockPastForStaff,
+                                            onCheckedChange = { lockPastForStaff = it }
+                                        )
+                                    }
+                                }
+
                                 Button(
                                     onClick = {
                                         val cleanName = staffName.trim()
@@ -14741,6 +15206,7 @@ fun ShareBookDialog(
                                         } else {
                                             val scopedBooks = encodeAllowedBooks(listOf(book.name))
                                             val effectiveHide = canRoleHideBalance(staffRole) && hideBalanceForStaff
+                                            val effectiveLockPast = canRoleLockPastEntries(staffRole) && lockPastForStaff
                                             viewModel.addTeamMember(
                                                 name = cleanName,
                                                 email = cleanEmail,
@@ -14748,6 +15214,7 @@ fun ShareBookDialog(
                                                 role = staffRole,
                                                 allowedBookNames = scopedBooks,
                                                 hideBalance = effectiveHide,
+                                                lockPastEntries = effectiveLockPast,
                                                 targetBusinessId = parentBiz.id
                                             ) { inv, published ->
                                                 lastInviteText = buildTeamInviteMessage(
@@ -14768,6 +15235,7 @@ fun ShareBookDialog(
                                             staffName = ""
                                             staffEmail = ""
                                             hideBalanceForStaff = false
+                                            lockPastForStaff = defaultLockPastEntriesForRole(staffRole)
                                         }
                                     },
                                     colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
@@ -16238,6 +16706,96 @@ fun SettingsScreen(viewModel: LedgerViewModel) {
             }
         }
 
+        // Section 4.5: Trash / Recycle Bin
+        item {
+            val trashItems by viewModel.trashItems.collectAsStateWithLifecycle()
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.DeleteOutline, contentDescription = null, tint = RedOut)
+                            Column {
+                                Text("Trash / Deleted Items", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    text = if (trashItems.isEmpty()) "Trash is empty" else "${trashItems.size} deleted item(s) waiting in Trash",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                    OutlinedButton(
+                        onClick = { viewModel.setScreen(Screen.TRASH) },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp).testTag("settings_open_trash_btn"),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.RestoreFromTrash, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (trashItems.isEmpty()) "Open Trash" else "View & Restore (${trashItems.size})",
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+
+        // Section 4.6: Audit History / Change Log
+        item {
+            val auditLogs by viewModel.auditLogs.collectAsStateWithLifecycle()
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.History, contentDescription = null, tint = GreenIn)
+                            Column {
+                                Text("Audit History", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    text = if (auditLogs.isEmpty()) "No edits or deletes logged yet" else "${auditLogs.size} edit/delete event(s) recorded",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                    OutlinedButton(
+                        onClick = { viewModel.setScreen(Screen.AUDIT_HISTORY) },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp).testTag("settings_open_audit_history_btn"),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (auditLogs.isEmpty()) "Open Audit History" else "View Change Log (${auditLogs.size})",
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+
         // Section 5: App Version & Update Info
         item {
             Card(
@@ -16341,6 +16899,741 @@ fun SettingsScreen(viewModel: LedgerViewModel) {
             },
             dismissButton = {
                 TextButton(onClick = { businessToDelete = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+}
+
+@Composable
+fun TrashScreen(viewModel: LedgerViewModel) {
+    val trashItems by viewModel.trashItems.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+
+    var selectedTypeFilter by remember { mutableStateOf("ALL") } // "ALL", "ENTRY", "BOOK", "BUSINESS"
+    var searchQuery by remember { mutableStateOf("") }
+    var itemToDeleteForever by remember { mutableStateOf<TrashItem?>(null) }
+    var showEmptyTrashDialog by remember { mutableStateOf(false) }
+
+    val entryCount = remember(trashItems) { trashItems.count { it.itemType == "ENTRY" || it.itemType == "PARTY_ENTRY" } }
+    val bookCount = remember(trashItems) { trashItems.count { it.itemType == "BOOK" || it.itemType == "PARTY" } }
+    val bizCount = remember(trashItems) { trashItems.count { it.itemType == "BUSINESS" } }
+
+    val filteredItems = remember(trashItems, selectedTypeFilter, searchQuery) {
+        trashItems.filter { item ->
+            val matchesType = when (selectedTypeFilter) {
+                "ENTRY" -> item.itemType == "ENTRY" || item.itemType == "PARTY_ENTRY"
+                "BOOK" -> item.itemType == "BOOK" || item.itemType == "PARTY"
+                "BUSINESS" -> item.itemType == "BUSINESS"
+                else -> true
+            }
+            val matchesQuery = searchQuery.isBlank() ||
+                item.title.contains(searchQuery, ignoreCase = true) ||
+                item.subtitle.contains(searchQuery, ignoreCase = true) ||
+                item.businessName.contains(searchQuery, ignoreCase = true) ||
+                item.bookName.contains(searchQuery, ignoreCase = true)
+            matchesType && matchesQuery
+        }
+    }
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Trash (${trashItems.size})",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                        Text(
+                            text = "Restore deleted businesses, books, or entries — or delete permanently",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (trashItems.isNotEmpty()) {
+                        OutlinedButton(
+                            onClick = { showEmptyTrashDialog = true },
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = RedOut),
+                            border = BorderStroke(1.dp, RedOut.copy(alpha = 0.55f)),
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.heightIn(min = 40.dp).testTag("empty_trash_button")
+                        ) {
+                            Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text("Empty Trash", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
+                if (trashItems.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(
+                            "ALL" to "All (${trashItems.size})",
+                            "ENTRY" to "Entries ($entryCount)",
+                            "BOOK" to "Books ($bookCount)",
+                            "BUSINESS" to "Businesses ($bizCount)"
+                        ).forEach { (key, label) ->
+                            val isSelected = selectedTypeFilter == key
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = { selectedTypeFilter = key },
+                                label = { Text(label, fontSize = 11.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium) },
+                                modifier = Modifier.height(34.dp).testTag("trash_filter_${key.lowercase()}")
+                            )
+                        }
+                    }
+                }
+
+                if (trashItems.size > 3) {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        placeholder = { Text("Search deleted items...", fontSize = 13.sp) },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                        trailingIcon = if (searchQuery.isNotEmpty()) {
+                            {
+                                IconButton(onClick = { searchQuery = "" }) {
+                                    Icon(Icons.Default.Clear, contentDescription = "Clear", modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        } else null,
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().testTag("trash_search_field")
+                    )
+                }
+            }
+        }
+
+        if (filteredItems.isEmpty()) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(28.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.DeleteOutline,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(40.dp)
+                        )
+                        Text(
+                            text = if (trashItems.isEmpty()) "Trash Is Empty" else "No Matching Deleted Items",
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            text = if (trashItems.isEmpty()) {
+                                "Deleted entries, cashbooks, and businesses will appear here so you can restore them anytime."
+                            } else {
+                                "Try switching filters or clearing your search."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            }
+        } else {
+            items(filteredItems, key = { it.id }) { item ->
+                val isEntry = item.itemType == "ENTRY" || item.itemType == "PARTY_ENTRY"
+                val isBook = item.itemType == "BOOK" || item.itemType == "PARTY"
+                val isPositiveEntry = item.entryType == "IN" || item.entryType == "GAVE"
+                val typeBadgeLabel = when (item.itemType) {
+                    "BUSINESS" -> "BUSINESS"
+                    "BOOK" -> "CASHBOOK"
+                    "PARTY" -> "CUSTOMER"
+                    "PARTY_ENTRY" -> if (item.entryType == "GAVE") "YOU GAVE" else "YOU GOT"
+                    else -> if (item.entryType == "IN") "CASH IN" else "CASH OUT"
+                }
+                val badgeColor = when {
+                    item.itemType == "BUSINESS" -> Color(0xFF0F766E)
+                    isBook -> Color(0xFF1D4ED8)
+                    isPositiveEntry -> GreenIn
+                    else -> RedOut
+                }
+                val typeIcon = when {
+                    item.itemType == "BUSINESS" -> Icons.Default.Storefront
+                    isBook -> Icons.Default.Book
+                    else -> Icons.Default.ReceiptLong
+                }
+                val deletedDateStr = remember(item.deletedAt) {
+                    SimpleDateFormat("dd MMM yyyy • h:mm a", Locale.getDefault()).format(Date(item.deletedAt))
+                }
+
+                Card(
+                    modifier = Modifier.fillMaxWidth().testTag("trash_item_card_${item.id}"),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                ) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = badgeColor.copy(alpha = 0.12f),
+                                    modifier = Modifier.size(40.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(typeIcon, contentDescription = null, tint = badgeColor, modifier = Modifier.size(20.dp))
+                                    }
+                                }
+                                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Surface(
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = badgeColor.copy(alpha = 0.12f)
+                                        ) {
+                                            Text(
+                                                text = typeBadgeLabel,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = badgeColor,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                        if (item.childCount > 0) {
+                                            Text(
+                                                text = if (item.childCount == 1) "1 entry inside" else "${item.childCount} entries inside",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        text = item.title,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                            if (isEntry) {
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "${if (isPositiveEntry) "+" else "-"} Rs. ${String.format("%,.0f", item.amount)}",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = if (isPositiveEntry) GreenIn else RedOut
+                                )
+                            }
+                        }
+
+                        if (item.subtitle.isNotBlank()) {
+                            Text(
+                                text = item.subtitle,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        Text(
+                            text = buildString {
+                                append("Deleted")
+                                if (item.deletedByName.isNotBlank()) append(" by ${item.deletedByName}")
+                                append(" • $deletedDateStr")
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    viewModel.restoreTrashItem(item) { msg ->
+                                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = GreenIn),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f).heightIn(min = 42.dp).testTag("trash_restore_${item.id}")
+                            ) {
+                                Icon(Icons.Default.RestoreFromTrash, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Restore", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                            OutlinedButton(
+                                onClick = { itemToDeleteForever = item },
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = RedOut),
+                                border = BorderStroke(1.dp, RedOut.copy(alpha = 0.55f)),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f).heightIn(min = 42.dp).testTag("trash_delete_forever_${item.id}")
+                            ) {
+                                Icon(Icons.Default.DeleteForever, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Delete Forever", fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (itemToDeleteForever != null) {
+        val target = itemToDeleteForever!!
+        AlertDialog(
+            onDismissRequest = { itemToDeleteForever = null },
+            icon = {
+                Icon(Icons.Default.DeleteForever, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(32.dp))
+            },
+            title = { Text("Delete Permanently?", fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "Remove '${target.title}' permanently from Trash? This cannot be undone or restored later.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.permanentlyDeleteTrashItem(target)
+                        itemToDeleteForever = null
+                        Toast.makeText(context, "Deleted permanently", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier.testTag("confirm_permanent_delete_btn")
+                ) {
+                    Text("Delete Forever", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { itemToDeleteForever = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (showEmptyTrashDialog) {
+        AlertDialog(
+            onDismissRequest = { showEmptyTrashDialog = false },
+            icon = {
+                Icon(Icons.Default.DeleteSweep, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(32.dp))
+            },
+            title = { Text("Empty All Trash?", fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "Permanently delete all ${trashItems.size} item(s) in Trash? None of them can be restored afterward.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.emptyTrash()
+                        showEmptyTrashDialog = false
+                        Toast.makeText(context, "Trash emptied", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier.testTag("confirm_empty_trash_btn")
+                ) {
+                    Text("Empty Trash", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEmptyTrashDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+}
+
+@Composable
+fun AuditHistoryScreen(viewModel: LedgerViewModel) {
+    val auditLogs by viewModel.auditLogs.collectAsStateWithLifecycle()
+    val businesses by viewModel.businesses.collectAsStateWithLifecycle()
+    val simulatedRole by viewModel.simulatedRole.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+
+    var selectedActionFilter by remember { mutableStateOf("ALL") } // "ALL", "EDITED", "DELETED", "RESTORED"
+    var selectedBusinessFilter by remember { mutableStateOf("ALL") }
+    var searchQuery by remember { mutableStateOf("") }
+    var showClearAuditDialog by remember { mutableStateOf(false) }
+
+    val editedCount = remember(auditLogs) { auditLogs.count { it.action == "EDITED" } }
+    val deletedCount = remember(auditLogs) { auditLogs.count { it.action == "DELETED" } }
+    val restoredCount = remember(auditLogs) { auditLogs.count { it.action == "RESTORED" } }
+
+    val distinctBusinessNames = remember(auditLogs, businesses) {
+        (businesses.map { it.name } + auditLogs.map { it.businessName })
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinctBy { it.lowercase() }
+    }
+
+    val filteredLogs = remember(auditLogs, selectedActionFilter, selectedBusinessFilter, searchQuery) {
+        auditLogs.filter { log ->
+            val matchesAction = selectedActionFilter == "ALL" || log.action.equals(selectedActionFilter, ignoreCase = true)
+            val matchesBiz = selectedBusinessFilter == "ALL" || log.businessName.equals(selectedBusinessFilter, ignoreCase = true)
+            val matchesSearch = searchQuery.isBlank() ||
+                log.summary.contains(searchQuery, ignoreCase = true) ||
+                log.actorName.contains(searchQuery, ignoreCase = true) ||
+                log.bookName.contains(searchQuery, ignoreCase = true) ||
+                log.businessName.contains(searchQuery, ignoreCase = true) ||
+                log.oldDetails.contains(searchQuery, ignoreCase = true) ||
+                log.newDetails.contains(searchQuery, ignoreCase = true)
+            matchesAction && matchesBiz && matchesSearch
+        }
+    }
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Audit History (${auditLogs.size})",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                        Text(
+                            text = "Track every entry edit, delete, and restore by staff or owner",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (auditLogs.isNotEmpty() && hasPermission(simulatedRole, "delete_business")) {
+                        OutlinedButton(
+                            onClick = { showClearAuditDialog = true },
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = RedOut),
+                            border = BorderStroke(1.dp, RedOut.copy(alpha = 0.55f)),
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.heightIn(min = 40.dp).testTag("clear_audit_history_btn")
+                        ) {
+                            Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text("Clear Log", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
+                if (auditLogs.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(
+                            "ALL" to "All (${auditLogs.size})",
+                            "EDITED" to "Edited ($editedCount)",
+                            "DELETED" to "Deleted ($deletedCount)",
+                            "RESTORED" to "Restored ($restoredCount)"
+                        ).forEach { (key, label) ->
+                            val isSelected = selectedActionFilter == key
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = { selectedActionFilter = key },
+                                label = { Text(label, fontSize = 11.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium) },
+                                modifier = Modifier.height(34.dp).testTag("audit_filter_${key.lowercase()}")
+                            )
+                        }
+                    }
+
+                    if (distinctBusinessNames.size > 1) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            FilterChip(
+                                selected = selectedBusinessFilter == "ALL",
+                                onClick = { selectedBusinessFilter = "ALL" },
+                                label = { Text("All Businesses", fontSize = 11.sp) },
+                                modifier = Modifier.height(32.dp)
+                            )
+                            distinctBusinessNames.forEach { bName ->
+                                val isBizSelected = selectedBusinessFilter.equals(bName, ignoreCase = true)
+                                FilterChip(
+                                    selected = isBizSelected,
+                                    onClick = { selectedBusinessFilter = bName },
+                                    label = { Text(bName, fontSize = 11.sp, fontWeight = if (isBizSelected) FontWeight.Bold else FontWeight.Normal) },
+                                    modifier = Modifier.height(32.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    if (auditLogs.size > 3) {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            placeholder = { Text("Search by staff, book, amount, or change...", fontSize = 13.sp) },
+                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                            trailingIcon = if (searchQuery.isNotEmpty()) {
+                                {
+                                    IconButton(onClick = { searchQuery = "" }) {
+                                        Icon(Icons.Default.Clear, contentDescription = "Clear", modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                            } else null,
+                            singleLine = true,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth().testTag("audit_search_field")
+                        )
+                    }
+                }
+            }
+        }
+
+        if (filteredLogs.isEmpty()) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(28.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.History,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(40.dp)
+                        )
+                        Text(
+                            text = if (auditLogs.isEmpty()) "No Audit History Yet" else "No Matching Audit Records",
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            text = if (auditLogs.isEmpty()) {
+                                "Whenever someone edits, deletes, or restores an entry, a tamper-proof record showing who made the change and what changed will appear here."
+                            } else {
+                                "Try switching filters or clearing your search."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            }
+        } else {
+            items(filteredLogs, key = { it.id }) { log ->
+                val actionColor = when (log.action.uppercase()) {
+                    "DELETED" -> RedOut
+                    "RESTORED" -> GreenIn
+                    else -> Color(0xFFD97706)
+                }
+                val actionBg = when (log.action.uppercase()) {
+                    "DELETED" -> RedOut.copy(alpha = 0.12f)
+                    "RESTORED" -> GreenIn.copy(alpha = 0.12f)
+                    else -> Color(0xFFFEF3C7)
+                }
+                val actionIcon = when (log.action.uppercase()) {
+                    "DELETED" -> Icons.Default.DeleteOutline
+                    "RESTORED" -> Icons.Default.RestoreFromTrash
+                    else -> Icons.Default.Edit
+                }
+                val timeStr = remember(log.timestamp) {
+                    SimpleDateFormat("dd MMM yyyy • h:mm a", Locale.getDefault()).format(Date(log.timestamp))
+                }
+
+                Card(
+                    modifier = Modifier.fillMaxWidth().testTag("audit_log_card_${log.id}"),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                ) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = actionBg
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(actionIcon, contentDescription = null, tint = actionColor, modifier = Modifier.size(13.dp))
+                                    Text(
+                                        text = log.action.uppercase(),
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = actionColor
+                                    )
+                                }
+                            }
+                            Text(
+                                text = timeStr,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        Text(
+                            text = log.summary,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(Icons.Default.Person, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(12.dp))
+                                    val roleSuffix = log.actorRole.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: ""
+                                    Text(
+                                        text = "${log.actorName.ifBlank { "User" }}$roleSuffix",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+
+                            val scopeLabel = listOf(log.businessName, log.bookName).filter { it.isNotBlank() }.joinToString(" • ")
+                            if (scopeLabel.isNotBlank()) {
+                                Text(
+                                    text = scopeLabel,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+
+                        if (log.oldDetails.isNotBlank() || log.newDetails.isNotBlank()) {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    if (log.oldDetails.isNotBlank()) {
+                                        Text(
+                                            text = if (log.action == "EDITED") "Before: ${log.oldDetails}" else "Entry: ${log.oldDetails}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    if (log.newDetails.isNotBlank() && log.action == "EDITED") {
+                                        Text(
+                                            text = "After: ${log.newDetails}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showClearAuditDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearAuditDialog = false },
+            icon = {
+                Icon(Icons.Default.DeleteSweep, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(32.dp))
+            },
+            title = { Text("Clear Audit History?", fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "Remove all ${auditLogs.size} audit history record(s)? Your cashbook entries will not be affected.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.clearAuditLogs()
+                        showClearAuditDialog = false
+                        Toast.makeText(context, "Audit history cleared", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier.testTag("confirm_clear_audit_btn")
+                ) {
+                    Text("Clear Log", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearAuditDialog = false }) {
                     Text("Cancel")
                 }
             }

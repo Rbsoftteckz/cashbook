@@ -30,7 +30,9 @@ enum class Screen {
     CONTACT_US,
     SETTINGS,
     MANAGE_WORKSPACE,
-    PROFILE
+    PROFILE,
+    TRASH,
+    AUDIT_HISTORY
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -295,6 +297,48 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         initialValue = emptyList()
     )
 
+    // Scoped Trash Items for the signed-in account
+    val trashItems: StateFlow<List<TrashItem>> = combine(
+        repository.allTrashItems,
+        _currentUserEmail,
+        isSuperAdmin
+    ) { items, activeEmail, superAdmin ->
+        val cleanEmail = activeEmail.trim().lowercase()
+        items.filter { item ->
+            superAdmin ||
+                cleanEmail.isBlank() ||
+                item.userEmail.isBlank() ||
+                item.userEmail.trim().equals(cleanEmail, ignoreCase = true)
+        }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    // Scoped Audit History logs for visible businesses / signed-in account
+    val auditLogs: StateFlow<List<AuditLog>> = combine(
+        repository.allAuditLogs,
+        businesses,
+        _currentUserEmail,
+        isSuperAdmin
+    ) { logs, visibleBusinesses, activeEmail, superAdmin ->
+        val cleanEmail = activeEmail.trim().lowercase()
+        val bizIds = visibleBusinesses.map { it.id }.toSet()
+        val bizNames = visibleBusinesses.map { it.name.trim().lowercase() }.toSet()
+        logs.filter { log ->
+            superAdmin ||
+                log.businessId in bizIds ||
+                log.businessName.trim().lowercase() in bizNames ||
+                (cleanEmail.isBlank() && log.userEmail.isBlank()) ||
+                (cleanEmail.isNotBlank() && log.userEmail.trim().equals(cleanEmail, ignoreCase = true))
+        }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
     // Team members for the active business
     val activeBusinessTeamMembers: StateFlow<List<TeamMember>> = _activeBusiness
         .flatMapLatest { biz ->
@@ -412,6 +456,61 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     ) { biz, _, _, teamMembers ->
         isBalanceHiddenForBusiness(biz, teamMembers)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    fun isLockPastEntriesForBusiness(
+        biz: Business?,
+        teamMembers: List<TeamMember> = allTeamMembers.value
+    ): Boolean {
+        if (biz == null || isSuperAdmin.value) return false
+        val cleanEmail = _currentUserEmail.value.trim().lowercase()
+        if (cleanEmail.isBlank() || cleanEmail.endsWith(".local")) return false
+        val ownerEmail = biz.userEmail.trim().lowercase()
+        if (ownerEmail.isBlank() || ownerEmail == cleanEmail) return false
+        val tm = teamMembers.firstOrNull {
+            it.businessId == biz.id && it.email.trim().lowercase() == cleanEmail
+        }
+        val ref = syncManager.getSharedWorkspaces(cleanEmail).firstOrNull {
+            it.businessName.equals(biz.name, ignoreCase = true) && it.ownerEmail.equals(ownerEmail, ignoreCase = true)
+        }
+        val role = tm?.role ?: ref?.role ?: "Data Entry"
+        if (!canRoleLockPastEntries(role)) return false
+        return tm?.lockPastEntries ?: ref?.lockPastEntries ?: defaultLockPastEntriesForRole(role)
+    }
+
+    val lockPastEntriesForActiveBusiness: StateFlow<Boolean> = combine(
+        _activeBusiness,
+        _currentUserEmail,
+        isSuperAdmin,
+        activeBusinessTeamMembers,
+        _simulatedRole,
+        isActiveBusinessOwner
+    ) { values ->
+        @Suppress("UNCHECKED_CAST")
+        val biz = values[0] as Business?
+        @Suppress("UNCHECKED_CAST")
+        val teamMembers = values[3] as List<TeamMember>
+        val simRole = values[4] as String
+        val isOwner = values[5] as Boolean
+        if (isOwner) {
+            if (!isRoleFullBusinessAccess(simRole) && canRoleLockPastEntries(simRole)) {
+                teamMembers.firstOrNull { it.role.equals(simRole, ignoreCase = true) }?.lockPastEntries
+                    ?: defaultLockPastEntriesForRole(simRole)
+            } else {
+                false
+            }
+        } else {
+            isLockPastEntriesForBusiness(biz, teamMembers)
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    fun canModifyTransactionInActiveBusiness(tx: Transaction, action: String): Boolean {
+        return canModifyTransactionByRoleAndLock(
+            role = simulatedRole.value,
+            action = action,
+            txTimestamp = tx.timestamp,
+            lockPastEntries = lockPastEntriesForActiveBusiness.value
+        )
+    }
 
     private val _pendingEmailInvites = MutableStateFlow<List<TeamInviteRecord>>(emptyList())
     val pendingEmailInvites: StateFlow<List<TeamInviteRecord>> = _pendingEmailInvites.asStateFlow()
@@ -783,6 +882,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun deleteBusiness(business: Business) {
         viewModelScope.launch {
+            saveBusinessToTrash(business)
             syncManager.recordDeletedBusiness(business.name, business.userEmail)
             repository.deleteBusiness(business)
             if (_activeBusiness.value?.id == business.id) {
@@ -888,6 +988,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun deleteBook(book: Book) {
         viewModelScope.launch {
+            saveBookToTrash(book)
             syncManager.recordDeletedBook(book.businessId, book.name)
             repository.deleteBook(book)
             if (_activeBook.value?.id == book.id) {
@@ -1252,18 +1353,155 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun deleteTransaction(transaction: Transaction) {
+    private suspend fun recordAuditLogForTransaction(
+        action: String,
+        tx: Transaction,
+        summary: String,
+        oldDetails: String = "",
+        newDetails: String = ""
+    ) {
+        val dao = database.ledgerDao()
+        val book = dao.getAllBooksList().find { it.id == tx.bookId }
+        val biz = if (book != null) dao.getAllBusinessesList().find { it.id == book.businessId } else _activeBusiness.value
+        val bizName = biz?.name ?: _activeBusiness.value?.name ?: ""
+        val bookName = book?.name ?: _activeBook.value?.name ?: "Cashbook"
+        val ownerScope = (biz?.userEmail ?: "").trim().lowercase().ifBlank { currentScopeEmail() }
+        repository.insertAuditLog(
+            AuditLog(
+                businessId = biz?.id ?: book?.businessId ?: 0,
+                businessName = bizName,
+                bookId = book?.id ?: tx.bookId,
+                bookName = bookName,
+                transactionId = tx.id,
+                action = action,
+                summary = summary,
+                oldDetails = oldDetails,
+                newDetails = newDetails,
+                actorName = currentActorDisplayName(),
+                actorEmail = currentScopeEmail(),
+                actorRole = actualUserRoleForActiveBusiness.value,
+                userEmail = ownerScope,
+                timestamp = System.currentTimeMillis()
+            )
+        )
+    }
+
+    private fun formatTxSnapshot(tx: Transaction): String {
+        val df = SimpleDateFormat("dd MMM yyyy, h:mm a", Locale.getDefault())
+        val typeLabel = if (tx.type == "IN") "Cash In" else "Cash Out"
+        val amtLabel = "Rs. ${String.format("%,.0f", tx.amount)}"
+        val parts = mutableListOf("$typeLabel $amtLabel")
+        if (tx.category.isNotBlank()) parts.add("Category: ${tx.category}")
+        if (tx.paymentMethod.isNotBlank()) parts.add("Mode: ${tx.paymentMethod}")
+        if (tx.remarks.isNotBlank()) parts.add("Note: ${tx.remarks}")
+        parts.add("Entry Date: ${df.format(Date(tx.timestamp))}")
+        if (tx.addedByName.isNotBlank()) parts.add("Added By: ${tx.addedByName}")
+        return parts.joinToString(" • ")
+    }
+
+    private fun buildEditAuditInfo(oldTx: Transaction, newTx: Transaction): Triple<String, String, String> {
+        val changes = mutableListOf<String>()
+        val oldParts = mutableListOf<String>()
+        val newParts = mutableListOf<String>()
+        val df = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
+
+        if (oldTx.amount != newTx.amount) {
+            val o = "Rs. ${String.format("%,.0f", oldTx.amount)}"
+            val n = "Rs. ${String.format("%,.0f", newTx.amount)}"
+            changes.add("Amount $o → $n")
+            oldParts.add("Amount: $o")
+            newParts.add("Amount: $n")
+        }
+        if (!oldTx.type.equals(newTx.type, ignoreCase = true)) {
+            val o = if (oldTx.type == "IN") "Cash In" else "Cash Out"
+            val n = if (newTx.type == "IN") "Cash In" else "Cash Out"
+            changes.add("Type $o → $n")
+            oldParts.add("Type: $o")
+            newParts.add("Type: $n")
+        }
+        if (oldTx.category != newTx.category) {
+            changes.add("Category ${oldTx.category} → ${newTx.category}")
+            oldParts.add("Category: ${oldTx.category}")
+            newParts.add("Category: ${newTx.category}")
+        }
+        if (oldTx.paymentMethod != newTx.paymentMethod) {
+            changes.add("Mode ${oldTx.paymentMethod} → ${newTx.paymentMethod}")
+            oldParts.add("Mode: ${oldTx.paymentMethod}")
+            newParts.add("Mode: ${newTx.paymentMethod}")
+        }
+        if (oldTx.remarks != newTx.remarks) {
+            val o = oldTx.remarks.ifBlank { "(empty)" }
+            val n = newTx.remarks.ifBlank { "(empty)" }
+            changes.add("Note \"$o\" → \"$n\"")
+            oldParts.add("Note: $o")
+            newParts.add("Note: $n")
+        }
+        if (oldTx.timestamp != newTx.timestamp) {
+            val o = df.format(Date(oldTx.timestamp))
+            val n = df.format(Date(newTx.timestamp))
+            changes.add("Date $o → $n")
+            oldParts.add("Date: $o")
+            newParts.add("Date: $n")
+        }
+        if ((oldTx.receiptUri ?: "") != (newTx.receiptUri ?: "")) {
+            val o = if (oldTx.receiptUri.isNullOrBlank()) "None" else "Attached"
+            val n = if (newTx.receiptUri.isNullOrBlank()) "Removed" else "Attached"
+            changes.add("Receipt $o → $n")
+            oldParts.add("Receipt: $o")
+            newParts.add("Receipt: $n")
+        }
+
+        val summary = if (changes.isNotEmpty()) {
+            changes.joinToString(" • ")
+        } else {
+            "Updated ${if (newTx.type == "IN") "Cash In" else "Cash Out"} Rs. ${String.format("%,.0f", newTx.amount)}"
+        }
+        return Triple(
+            summary,
+            oldParts.joinToString(" • ").ifBlank { formatTxSnapshot(oldTx) },
+            newParts.joinToString(" • ").ifBlank { formatTxSnapshot(newTx) }
+        )
+    }
+
+    fun deleteTransaction(transaction: Transaction, onBlocked: ((String) -> Unit)? = null) {
+        if (!canModifyTransactionInActiveBusiness(transaction, "delete_transaction")) {
+            onBlocked?.invoke("Locked: Your role cannot delete past days' entries.")
+            return
+        }
         viewModelScope.launch {
+            saveTransactionToTrash(transaction)
+            val label = if (transaction.type == "IN") "Cash In" else "Cash Out"
+            val notePart = transaction.remarks.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: ""
+            recordAuditLogForTransaction(
+                action = "DELETED",
+                tx = transaction,
+                summary = "Deleted $label Rs. ${String.format("%,.0f", transaction.amount)}$notePart",
+                oldDetails = formatTxSnapshot(transaction),
+                newDetails = "Moved to Trash"
+            )
             syncManager.recordDeletedTransaction(transaction.timestamp)
             repository.deleteTransaction(transaction)
             triggerCloudSync()
         }
     }
 
-    fun updateTransaction(transaction: Transaction) {
+    fun updateTransaction(transaction: Transaction, onBlocked: ((String) -> Unit)? = null) {
         viewModelScope.launch {
+            val oldTx = database.ledgerDao().getAllTransactionsList().find { it.id == transaction.id } ?: transaction
+            if (!canModifyTransactionInActiveBusiness(oldTx, "edit_transaction")) {
+                onBlocked?.invoke("Locked: Your role cannot edit past days' entries.")
+                return@launch
+            }
+            val (summary, oldDetails, newDetails) = buildEditAuditInfo(oldTx, transaction)
             syncManager.markLocalDbModified()
             repository.updateTransaction(transaction.copy(isSynced = false))
+            recordAuditLogForTransaction(
+                action = "EDITED",
+                tx = transaction,
+                summary = summary,
+                oldDetails = oldDetails,
+                newDetails = newDetails
+            )
             triggerCloudSync()
         }
     }
@@ -1283,16 +1521,31 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         _selectedTransactionIds.value = emptySet()
     }
 
-    fun batchDeleteSelectedTransactions() {
+    fun batchDeleteSelectedTransactions(onResult: ((Int, Int) -> Unit)? = null) {
         viewModelScope.launch {
             val idsToDelete = _selectedTransactionIds.value
-            val txsToDelete = activeBookTransactions.value.filter { idsToDelete.contains(it.id) }
-            txsToDelete.forEach { tx ->
+            val selectedTxs = activeBookTransactions.value.filter { idsToDelete.contains(it.id) }
+            val allowedToDelete = selectedTxs.filter { canModifyTransactionInActiveBusiness(it, "delete_transaction") }
+            val skippedCount = selectedTxs.size - allowedToDelete.size
+            allowedToDelete.forEach { tx ->
+                saveTransactionToTrash(tx)
+                val label = if (tx.type == "IN") "Cash In" else "Cash Out"
+                val notePart = tx.remarks.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: ""
+                recordAuditLogForTransaction(
+                    action = "DELETED",
+                    tx = tx,
+                    summary = "Deleted $label Rs. ${String.format("%,.0f", tx.amount)}$notePart",
+                    oldDetails = formatTxSnapshot(tx),
+                    newDetails = "Moved to Trash"
+                )
                 syncManager.recordDeletedTransaction(tx.timestamp)
                 repository.deleteTransaction(tx)
             }
             clearTransactionSelection()
-            triggerCloudSync()
+            if (allowedToDelete.isNotEmpty()) {
+                triggerCloudSync()
+            }
+            onResult?.invoke(allowedToDelete.size, skippedCount)
         }
     }
 
@@ -1337,6 +1590,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun deleteParty(party: Party) {
         viewModelScope.launch {
+            savePartyToTrash(party)
             syncManager.recordDeletedParty(party.name)
             repository.deleteParty(party)
             if (_activeParty.value?.id == party.id) {
@@ -1368,6 +1622,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun deletePartyTransaction(partyTransaction: PartyTransaction) {
         viewModelScope.launch {
+            savePartyTransactionToTrash(partyTransaction)
             syncManager.recordDeletedPartyTransaction(partyTransaction.timestamp)
             repository.deletePartyTransaction(partyTransaction)
             triggerCloudSync()
@@ -1454,6 +1709,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         role: String,
         allowedBookNames: String = "",
         hideBalance: Boolean = false,
+        lockPastEntries: Boolean = defaultLockPastEntriesForRole(role),
         targetBusinessId: Int? = null,
         onInvitePublished: ((TeamInviteRecord, Boolean) -> Unit)? = null
     ) {
@@ -1462,6 +1718,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         val cleanEmail = email.trim().lowercase()
         val effectiveAllowed = if (isRoleFullBusinessAccess(role)) "" else allowedBookNames
         val effectiveHideBalance = hideBalance && canRoleHideBalance(role)
+        val effectiveLockPast = lockPastEntries && canRoleLockPastEntries(role)
         val member = TeamMember(
             businessId = bizId,
             name = name.trim(),
@@ -1469,7 +1726,8 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             phone = phone.trim(),
             role = role,
             allowedBookNames = effectiveAllowed,
-            hideBalance = effectiveHideBalance
+            hideBalance = effectiveHideBalance,
+            lockPastEntries = effectiveLockPast
         )
         viewModelScope.launch {
             syncManager.markTeamMemberEdited(cleanEmail)
@@ -1492,19 +1750,22 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
         newRole: String,
         newAllowedBookNames: String = oldMember.allowedBookNames,
         newHideBalance: Boolean = oldMember.hideBalance,
+        newLockPastEntries: Boolean = oldMember.lockPastEntries,
         onCompleted: ((TeamInviteRecord?, Boolean) -> Unit)? = null
     ) {
         val targetBiz = businesses.value.find { it.id == oldMember.businessId } ?: _activeBusiness.value
         val cleanNewEmail = newEmail.trim().lowercase()
         val effectiveAllowed = if (isRoleFullBusinessAccess(newRole)) "" else newAllowedBookNames
         val effectiveHideBalance = newHideBalance && canRoleHideBalance(newRole)
+        val effectiveLockPast = newLockPastEntries && canRoleLockPastEntries(newRole)
         val updated = oldMember.copy(
             name = newName.trim(),
             email = cleanNewEmail,
             phone = newPhone.trim(),
             role = newRole,
             allowedBookNames = effectiveAllowed,
-            hideBalance = effectiveHideBalance
+            hideBalance = effectiveHideBalance,
+            lockPastEntries = effectiveLockPast
         )
         viewModelScope.launch {
             if (targetBiz != null && oldMember.email.isNotBlank() && !oldMember.email.equals(cleanNewEmail, ignoreCase = true)) {
@@ -1523,6 +1784,41 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                 publishedOk = ok
             }
             onCompleted?.invoke(publishedInvite, publishedOk)
+            triggerCloudSync()
+        }
+    }
+
+    fun setLockPastEntriesForBusinessDataEntry(businessId: Int, locked: Boolean) {
+        viewModelScope.launch {
+            val targetBiz = businesses.value.find { it.id == businessId } ?: _activeBusiness.value
+            val members = database.ledgerDao().getAllTeamMembersList().filter {
+                it.businessId == businessId && it.role.equals("Data Entry", ignoreCase = true)
+            }
+            if (members.isEmpty()) return@launch
+            syncManager.markLocalDbModified()
+            members.forEach { member ->
+                val updated = member.copy(lockPastEntries = locked)
+                if (member.email.isNotBlank()) {
+                    syncManager.markTeamMemberEdited(member.email.trim().lowercase())
+                }
+                repository.updateTeamMember(updated)
+                if (targetBiz != null) {
+                    syncManager.publishTeamInviteCloud(targetBiz, updated, database.ledgerDao())
+                }
+            }
+            triggerCloudSync()
+        }
+    }
+
+    fun clearAuditLogs() {
+        viewModelScope.launch {
+            val email = currentScopeEmail()
+            if (isSuperAdmin.value || email.isBlank()) {
+                repository.clearAllAuditLogs()
+            } else {
+                repository.clearAuditLogsForUser(email)
+            }
+            syncManager.markLocalDbModified()
             triggerCloudSync()
         }
     }
@@ -1794,6 +2090,522 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             dueMillis = dueMillis,
             isTest = true
         )
+    }
+
+    // --- TRASH / RECYCLE BIN (RESTORE OR PERMANENTLY DELETE) ---
+
+    private fun currentActorDisplayName(): String {
+        val syncName = syncManager.getName().trim()
+        if (syncName.isNotBlank() && !syncName.equals("Offline User", true) && !syncName.equals("CashBook User", true)) {
+            return syncName
+        }
+        val email = syncManager.getEmail().trim()
+        return if (email.contains("@")) email.substringBefore("@") else "Owner"
+    }
+
+    private fun currentScopeEmail(): String =
+        syncManager.getEmail().trim().lowercase()
+
+    private fun txToJson(tx: Transaction): org.json.JSONObject =
+        org.json.JSONObject().apply {
+            put("bookId", tx.bookId)
+            put("amount", tx.amount)
+            put("type", tx.type)
+            put("category", tx.category)
+            put("paymentMethod", tx.paymentMethod)
+            put("remarks", tx.remarks)
+            put("timestamp", tx.timestamp)
+            put("receiptUri", tx.receiptUri ?: "")
+            put("addedByName", tx.addedByName)
+            put("addedByEmail", tx.addedByEmail)
+        }
+
+    private fun jsonToTx(obj: org.json.JSONObject, targetBookId: Int): Transaction =
+        Transaction(
+            bookId = targetBookId,
+            amount = obj.optDouble("amount", 0.0),
+            type = obj.optString("type", "OUT"),
+            category = obj.optString("category", "General"),
+            paymentMethod = obj.optString("paymentMethod", "Cash"),
+            remarks = obj.optString("remarks", ""),
+            timestamp = obj.optLong("timestamp", System.currentTimeMillis()),
+            isSynced = false,
+            receiptUri = obj.optString("receiptUri", "").ifBlank { null },
+            addedByName = obj.optString("addedByName", ""),
+            addedByEmail = obj.optString("addedByEmail", "")
+        )
+
+    private suspend fun saveTransactionToTrash(tx: Transaction) {
+        val dao = database.ledgerDao()
+        val book = dao.getAllBooksList().find { it.id == tx.bookId }
+        val biz = if (book != null) dao.getAllBusinessesList().find { it.id == book.businessId } else null
+        val bizName = biz?.name ?: _activeBusiness.value?.name ?: ""
+        val bookName = book?.name ?: _activeBook.value?.name ?: "Cashbook"
+        val txTitle = tx.remarks.ifBlank { tx.category.ifBlank { if (tx.type == "IN") "Cash In" else "Cash Out" } }
+        val subtitle = listOfNotNull(
+            bizName.takeIf { it.isNotBlank() },
+            bookName.takeIf { it.isNotBlank() },
+            tx.paymentMethod.takeIf { it.isNotBlank() }
+        ).joinToString(" • ")
+
+        val payload = org.json.JSONObject().apply {
+            put("transaction", txToJson(tx))
+            put("bookName", bookName)
+            put("bookPhone", book?.phone ?: "")
+            put("businessId", biz?.id ?: book?.businessId ?: 0)
+            put("businessName", bizName)
+            put("businessUserEmail", biz?.userEmail ?: currentScopeEmail())
+        }.toString()
+
+        repository.insertTrashItem(
+            TrashItem(
+                itemType = "ENTRY",
+                title = txTitle,
+                subtitle = subtitle,
+                businessName = bizName,
+                bookName = bookName,
+                userEmail = currentScopeEmail(),
+                amount = tx.amount,
+                entryType = tx.type,
+                childCount = 0,
+                deletedByName = currentActorDisplayName(),
+                deletedAt = System.currentTimeMillis(),
+                payloadJson = payload
+            )
+        )
+    }
+
+    private suspend fun saveBookToTrash(book: Book) {
+        val dao = database.ledgerDao()
+        val biz = dao.getAllBusinessesList().find { it.id == book.businessId }
+        val txs = dao.getAllTransactionsList().filter { it.bookId == book.id }
+        val bizName = biz?.name ?: _activeBusiness.value?.name ?: ""
+        val net = txs.filter { it.type == "IN" }.sumOf { it.amount } - txs.filter { it.type == "OUT" }.sumOf { it.amount }
+        val txArray = org.json.JSONArray().apply {
+            txs.forEach { put(txToJson(it)) }
+        }
+        val payload = org.json.JSONObject().apply {
+            put("bookId", book.id)
+            put("bookName", book.name)
+            put("bookPhone", book.phone)
+            put("bookCreatedAt", book.createdAt)
+            put("businessId", book.businessId)
+            put("businessName", bizName)
+            put("businessUserEmail", biz?.userEmail ?: currentScopeEmail())
+            put("transactions", txArray)
+        }.toString()
+
+        val entryWord = if (txs.size == 1) "1 entry" else "${txs.size} entries"
+        repository.insertTrashItem(
+            TrashItem(
+                itemType = "BOOK",
+                title = book.name,
+                subtitle = "${if (bizName.isNotBlank()) "$bizName • " else ""}$entryWord • Net Rs. ${String.format("%,.0f", net)}",
+                businessName = bizName,
+                bookName = book.name,
+                userEmail = currentScopeEmail(),
+                amount = net,
+                entryType = "",
+                childCount = txs.size,
+                deletedByName = currentActorDisplayName(),
+                deletedAt = System.currentTimeMillis(),
+                payloadJson = payload
+            )
+        )
+    }
+
+    private suspend fun saveBusinessToTrash(business: Business) {
+        val dao = database.ledgerDao()
+        val bizBooks = dao.getAllBooksList().filter { it.businessId == business.id }
+        val allTxList = dao.getAllTransactionsList()
+        val bizMembers = dao.getAllTeamMembersList().filter { it.businessId == business.id }
+        var totalEntries = 0
+        var totalIn = 0.0
+        var totalOut = 0.0
+
+        val booksArray = org.json.JSONArray()
+        bizBooks.forEach { bk ->
+            val bkTxs = allTxList.filter { it.bookId == bk.id }
+            totalEntries += bkTxs.size
+            totalIn += bkTxs.filter { it.type == "IN" }.sumOf { it.amount }
+            totalOut += bkTxs.filter { it.type == "OUT" }.sumOf { it.amount }
+            val txArr = org.json.JSONArray().apply {
+                bkTxs.forEach { put(txToJson(it)) }
+            }
+            booksArray.put(
+                org.json.JSONObject().apply {
+                    put("name", bk.name)
+                    put("phone", bk.phone)
+                    put("createdAt", bk.createdAt)
+                    put("transactions", txArr)
+                }
+            )
+        }
+
+        val teamArray = org.json.JSONArray().apply {
+            bizMembers.forEach { m ->
+                put(
+                    org.json.JSONObject().apply {
+                        put("name", m.name)
+                        put("email", m.email)
+                        put("phone", m.phone)
+                        put("role", m.role)
+                        put("createdAt", m.createdAt)
+                        put("allowedBookNames", m.allowedBookNames)
+                        put("hideBalance", m.hideBalance)
+                    }
+                )
+            }
+        }
+
+        val payload = org.json.JSONObject().apply {
+            put("businessName", business.name)
+            put("userEmail", business.userEmail)
+            put("createdAt", business.createdAt)
+            put("books", booksArray)
+            put("teamMembers", teamArray)
+        }.toString()
+
+        val bookWord = if (bizBooks.size == 1) "1 book" else "${bizBooks.size} books"
+        val entryWord = if (totalEntries == 1) "1 entry" else "$totalEntries entries"
+        val net = totalIn - totalOut
+        repository.insertTrashItem(
+            TrashItem(
+                itemType = "BUSINESS",
+                title = business.name,
+                subtitle = "$bookWord • $entryWord • Net Rs. ${String.format("%,.0f", net)}",
+                businessName = business.name,
+                bookName = "",
+                userEmail = currentScopeEmail(),
+                amount = net,
+                entryType = "",
+                childCount = totalEntries,
+                deletedByName = currentActorDisplayName(),
+                deletedAt = System.currentTimeMillis(),
+                payloadJson = payload
+            )
+        )
+    }
+
+    private suspend fun savePartyToTrash(party: Party) {
+        val dao = database.ledgerDao()
+        val pTxs = dao.getAllPartyTransactionsList().filter { it.partyId == party.id }
+        val arr = org.json.JSONArray().apply {
+            pTxs.forEach { ptx ->
+                put(
+                    org.json.JSONObject().apply {
+                        put("amount", ptx.amount)
+                        put("type", ptx.type)
+                        put("remarks", ptx.remarks)
+                        put("timestamp", ptx.timestamp)
+                    }
+                )
+            }
+        }
+        val payload = org.json.JSONObject().apply {
+            put("name", party.name)
+            put("phone", party.phone)
+            put("createdAt", party.createdAt)
+            put("transactions", arr)
+        }.toString()
+
+        val entryWord = if (pTxs.size == 1) "1 entry" else "${pTxs.size} entries"
+        repository.insertTrashItem(
+            TrashItem(
+                itemType = "PARTY",
+                title = party.name,
+                subtitle = "Customer Khata • $entryWord",
+                businessName = "Customer Khata",
+                bookName = party.name,
+                userEmail = currentScopeEmail(),
+                amount = 0.0,
+                entryType = "",
+                childCount = pTxs.size,
+                deletedByName = currentActorDisplayName(),
+                deletedAt = System.currentTimeMillis(),
+                payloadJson = payload
+            )
+        )
+    }
+
+    private suspend fun savePartyTransactionToTrash(pTx: PartyTransaction) {
+        val dao = database.ledgerDao()
+        val party = dao.getAllPartiesList().find { it.id == pTx.partyId }
+        val partyName = party?.name ?: "Customer"
+        val payload = org.json.JSONObject().apply {
+            put("partyId", pTx.partyId)
+            put("partyName", partyName)
+            put("partyPhone", party?.phone ?: "")
+            put("amount", pTx.amount)
+            put("type", pTx.type)
+            put("remarks", pTx.remarks)
+            put("timestamp", pTx.timestamp)
+        }.toString()
+
+        repository.insertTrashItem(
+            TrashItem(
+                itemType = "PARTY_ENTRY",
+                title = pTx.remarks.ifBlank { if (pTx.type == "GAVE") "You Gave" else "You Got" },
+                subtitle = "Customer Khata • $partyName",
+                businessName = "Customer Khata",
+                bookName = partyName,
+                userEmail = currentScopeEmail(),
+                amount = pTx.amount,
+                entryType = pTx.type,
+                childCount = 0,
+                deletedByName = currentActorDisplayName(),
+                deletedAt = System.currentTimeMillis(),
+                payloadJson = payload
+            )
+        )
+    }
+
+    fun restoreTrashItem(item: TrashItem, onResult: (String) -> Unit = {}) {
+        viewModelScope.launch {
+            try {
+                val dao = database.ledgerDao()
+                val obj = org.json.JSONObject(item.payloadJson)
+                syncManager.markLocalDbModified()
+
+                val message = when (item.itemType) {
+                    "ENTRY" -> {
+                        val txObj = obj.getJSONObject("transaction")
+                        val origBookId = txObj.optInt("bookId", 0)
+                        val bookName = obj.optString("bookName", item.bookName).ifBlank { "Restored Book" }
+                        val bookPhone = obj.optString("bookPhone", "")
+                        val origBizId = obj.optInt("businessId", 0)
+                        val bizName = obj.optString("businessName", item.businessName).ifBlank { "My Business" }
+                        val bizEmail = obj.optString("businessUserEmail", currentScopeEmail())
+
+                        val allBiz = dao.getAllBusinessesList()
+                        val targetBiz = allBiz.find { it.id == origBizId }
+                            ?: allBiz.find { it.name.equals(bizName, ignoreCase = true) }
+                            ?: run {
+                                syncManager.removeBusinessFromTombstones(bizName)
+                                val newBizId = repository.insertBusiness(
+                                    Business(name = bizName, userEmail = bizEmail, isSynced = false)
+                                ).toInt()
+                                Business(id = newBizId, name = bizName, userEmail = bizEmail, isSynced = false)
+                            }
+
+                        val allBk = dao.getAllBooksList()
+                        val targetBook = allBk.find { it.id == origBookId }
+                            ?: allBk.find { it.businessId == targetBiz.id && it.name.equals(bookName, ignoreCase = true) }
+                            ?: run {
+                                syncManager.removeBookFromTombstones(targetBiz.id, bookName)
+                                val newBkId = repository.insertBook(
+                                    Book(businessId = targetBiz.id, name = bookName, phone = bookPhone, isSynced = false)
+                                ).toInt()
+                                Book(id = newBkId, businessId = targetBiz.id, name = bookName, phone = bookPhone, isSynced = false)
+                            }
+
+                        val restoredTx = jsonToTx(txObj, targetBook.id)
+                        syncManager.removeTransactionFromTombstones(restoredTx.timestamp)
+                        val newTxId = repository.insertTransaction(restoredTx).toInt()
+                        recordAuditLogForTransaction(
+                            action = "RESTORED",
+                            tx = restoredTx.copy(id = newTxId),
+                            summary = "Restored ${if (restoredTx.type == "IN") "Cash In" else "Cash Out"} Rs. ${String.format("%,.0f", restoredTx.amount)} from Trash",
+                            oldDetails = "Deleted by ${item.deletedByName.ifBlank { "User" }}",
+                            newDetails = formatTxSnapshot(restoredTx)
+                        )
+                        "Restored entry to '${targetBook.name}'"
+                    }
+
+                    "BOOK" -> {
+                        val bookName = obj.optString("bookName", item.title).ifBlank { "Restored Book" }
+                        val bookPhone = obj.optString("bookPhone", "")
+                        val bookCreatedAt = obj.optLong("bookCreatedAt", System.currentTimeMillis())
+                        val origBizId = obj.optInt("businessId", 0)
+                        val bizName = obj.optString("businessName", item.businessName).ifBlank { "My Business" }
+                        val bizEmail = obj.optString("businessUserEmail", currentScopeEmail())
+
+                        val allBiz = dao.getAllBusinessesList()
+                        val targetBiz = allBiz.find { it.id == origBizId }
+                            ?: allBiz.find { it.name.equals(bizName, ignoreCase = true) }
+                            ?: run {
+                                syncManager.removeBusinessFromTombstones(bizName)
+                                val newBizId = repository.insertBusiness(
+                                    Business(name = bizName, userEmail = bizEmail, isSynced = false)
+                                ).toInt()
+                                Business(id = newBizId, name = bizName, userEmail = bizEmail, isSynced = false)
+                            }
+
+                        syncManager.removeBookFromTombstones(targetBiz.id, bookName)
+                        val existingBook = dao.getAllBooksList().find {
+                            it.businessId == targetBiz.id && it.name.equals(bookName, ignoreCase = true)
+                        }
+                        val targetBookId = existingBook?.id ?: repository.insertBook(
+                            Book(
+                                businessId = targetBiz.id,
+                                name = bookName,
+                                phone = bookPhone,
+                                createdAt = bookCreatedAt,
+                                isSynced = false
+                            )
+                        ).toInt()
+
+                        val txArr = obj.optJSONArray("transactions") ?: org.json.JSONArray()
+                        for (i in 0 until txArr.length()) {
+                            val tx = jsonToTx(txArr.getJSONObject(i), targetBookId)
+                            syncManager.removeTransactionFromTombstones(tx.timestamp)
+                            repository.insertTransaction(tx)
+                        }
+                        "Restored cashbook '$bookName' (${txArr.length()} entries)"
+                    }
+
+                    "BUSINESS" -> {
+                        val bizName = obj.optString("businessName", item.title).ifBlank { "Restored Business" }
+                        val bizEmail = obj.optString("userEmail", currentScopeEmail())
+                        val bizCreatedAt = obj.optLong("createdAt", System.currentTimeMillis())
+                        syncManager.removeBusinessFromTombstones(bizName)
+
+                        val existingBiz = dao.getAllBusinessesList().find {
+                            it.name.equals(bizName, ignoreCase = true)
+                        }
+                        val targetBizId = existingBiz?.id ?: repository.insertBusiness(
+                            Business(
+                                name = bizName,
+                                userEmail = bizEmail,
+                                createdAt = bizCreatedAt,
+                                isSynced = false
+                            )
+                        ).toInt()
+
+                        val booksArr = obj.optJSONArray("books") ?: org.json.JSONArray()
+                        for (i in 0 until booksArr.length()) {
+                            val bkObj = booksArr.getJSONObject(i)
+                            val bkName = bkObj.optString("name", "Book").ifBlank { "Book" }
+                            val bkPhone = bkObj.optString("phone", "")
+                            val bkCreatedAt = bkObj.optLong("createdAt", System.currentTimeMillis())
+                            syncManager.removeBookFromTombstones(targetBizId, bkName)
+
+                            val newBkId = repository.insertBook(
+                                Book(
+                                    businessId = targetBizId,
+                                    name = bkName,
+                                    phone = bkPhone,
+                                    createdAt = bkCreatedAt,
+                                    isSynced = false
+                                )
+                            ).toInt()
+                            val txArr = bkObj.optJSONArray("transactions") ?: org.json.JSONArray()
+                            for (j in 0 until txArr.length()) {
+                                val tx = jsonToTx(txArr.getJSONObject(j), newBkId)
+                                syncManager.removeTransactionFromTombstones(tx.timestamp)
+                                repository.insertTransaction(tx)
+                            }
+                        }
+
+                        val teamArr = obj.optJSONArray("teamMembers") ?: org.json.JSONArray()
+                        val existingMembers = dao.getAllTeamMembersList().filter { it.businessId == targetBizId }
+                        for (i in 0 until teamArr.length()) {
+                            val mObj = teamArr.getJSONObject(i)
+                            val mEmail = mObj.optString("email", "")
+                            if (existingMembers.none { it.email.equals(mEmail, ignoreCase = true) }) {
+                                repository.insertTeamMember(
+                                    TeamMember(
+                                        businessId = targetBizId,
+                                        name = mObj.optString("name", ""),
+                                        email = mEmail,
+                                        phone = mObj.optString("phone", ""),
+                                        role = mObj.optString("role", "Partner"),
+                                        createdAt = mObj.optLong("createdAt", System.currentTimeMillis()),
+                                        allowedBookNames = mObj.optString("allowedBookNames", ""),
+                                        hideBalance = mObj.optBoolean("hideBalance", false),
+                                        lockPastEntries = if (mObj.has("lockPastEntries")) {
+                                            mObj.optBoolean("lockPastEntries", false)
+                                        } else {
+                                            defaultLockPastEntriesForRole(mObj.optString("role", "Partner"))
+                                        }
+                                    )
+                                )
+                            }
+                        }
+                        "Restored business '$bizName'"
+                    }
+
+                    "PARTY" -> {
+                        val pName = obj.optString("name", item.title).ifBlank { "Customer" }
+                        val pPhone = obj.optString("phone", "")
+                        val pCreated = obj.optLong("createdAt", System.currentTimeMillis())
+                        syncManager.removePartyFromTombstones(pName)
+                        val existingParty = dao.getAllPartiesList().find { it.name.equals(pName, ignoreCase = true) }
+                        val targetPartyId = existingParty?.id ?: repository.insertParty(
+                            Party(name = pName, phone = pPhone, createdAt = pCreated)
+                        ).toInt()
+                        val txArr = obj.optJSONArray("transactions") ?: org.json.JSONArray()
+                        for (i in 0 until txArr.length()) {
+                            val pObj = txArr.getJSONObject(i)
+                            val ts = pObj.optLong("timestamp", System.currentTimeMillis())
+                            syncManager.removePartyTransactionFromTombstones(ts)
+                            repository.insertPartyTransaction(
+                                PartyTransaction(
+                                    partyId = targetPartyId,
+                                    amount = pObj.optDouble("amount", 0.0),
+                                    type = pObj.optString("type", "GAVE"),
+                                    remarks = pObj.optString("remarks", ""),
+                                    timestamp = ts,
+                                    isSynced = false
+                                )
+                            )
+                        }
+                        "Restored customer '$pName'"
+                    }
+
+                    "PARTY_ENTRY" -> {
+                        val origPartyId = obj.optInt("partyId", 0)
+                        val pName = obj.optString("partyName", item.bookName).ifBlank { "Customer" }
+                        val pPhone = obj.optString("partyPhone", "")
+                        val targetParty = dao.getAllPartiesList().find { it.id == origPartyId }
+                            ?: dao.getAllPartiesList().find { it.name.equals(pName, ignoreCase = true) }
+                            ?: run {
+                                syncManager.removePartyFromTombstones(pName)
+                                val id = repository.insertParty(Party(name = pName, phone = pPhone)).toInt()
+                                Party(id = id, name = pName, phone = pPhone)
+                            }
+                        val ts = obj.optLong("timestamp", System.currentTimeMillis())
+                        syncManager.removePartyTransactionFromTombstones(ts)
+                        repository.insertPartyTransaction(
+                            PartyTransaction(
+                                partyId = targetParty.id,
+                                amount = obj.optDouble("amount", 0.0),
+                                type = obj.optString("type", "GAVE"),
+                                remarks = obj.optString("remarks", ""),
+                                timestamp = ts,
+                                isSynced = false
+                            )
+                        )
+                        "Restored entry to '$pName'"
+                    }
+
+                    else -> "Restored item"
+                }
+
+                repository.deleteTrashItem(item)
+                triggerCloudSync()
+                onResult(message)
+            } catch (e: Exception) {
+                onResult("Could not restore: ${e.localizedMessage ?: "Invalid data"}")
+            }
+        }
+    }
+
+    fun permanentlyDeleteTrashItem(item: TrashItem) {
+        viewModelScope.launch {
+            repository.deleteTrashItem(item)
+        }
+    }
+
+    fun emptyTrash() {
+        viewModelScope.launch {
+            val email = currentScopeEmail()
+            if (isSuperAdmin.value || email.isBlank()) {
+                repository.clearAllTrash()
+            } else {
+                repository.clearTrashForUser(email)
+            }
+        }
     }
 }
 

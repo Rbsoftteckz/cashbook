@@ -33,7 +33,8 @@ data class TeamInviteRecord(
     val status: String = "PENDING",
     val createdAt: Long = System.currentTimeMillis(),
     val allowedBookNames: String = "",
-    val hideBalance: Boolean = false
+    val hideBalance: Boolean = false,
+    val lockPastEntries: Boolean = false
 )
 
 data class SharedWorkspaceRef(
@@ -44,7 +45,8 @@ data class SharedWorkspaceRef(
     val role: String,
     val inviteCode: String,
     val allowedBookNames: String = "",
-    val hideBalance: Boolean = false
+    val hideBalance: Boolean = false,
+    val lockPastEntries: Boolean = false
 )
 
 class GoogleDriveSyncManager(private val context: Context) {
@@ -1278,7 +1280,8 @@ class GoogleDriveSyncManager(private val context: Context) {
         parties: List<Party>,
         partyTransactions: List<PartyTransaction>,
         teamMembers: List<TeamMember>,
-        isPartialExport: Boolean = false
+        isPartialExport: Boolean = false,
+        auditLogs: List<AuditLog> = emptyList()
     ): String {
         val root = JSONObject()
         root.put("version", 2)
@@ -1393,9 +1396,32 @@ class GoogleDriveSyncManager(private val context: Context) {
                 put("createdAt", tm.createdAt)
                 put("allowedBookNames", tm.allowedBookNames)
                 put("hideBalance", tm.hideBalance)
+                put("lockPastEntries", tm.lockPastEntries)
             })
         }
         root.put("team_members", teamArray)
+
+        // Audit logs array
+        val auditArray = JSONArray()
+        auditLogs.take(500).forEach { log ->
+            auditArray.put(JSONObject().apply {
+                put("businessId", log.businessId)
+                put("businessName", log.businessName)
+                put("bookId", log.bookId)
+                put("bookName", log.bookName)
+                put("transactionId", log.transactionId)
+                put("action", log.action)
+                put("summary", log.summary)
+                put("oldDetails", log.oldDetails)
+                put("newDetails", log.newDetails)
+                put("actorName", log.actorName)
+                put("actorEmail", log.actorEmail)
+                put("actorRole", log.actorRole)
+                put("userEmail", log.userEmail)
+                put("timestamp", log.timestamp)
+            })
+        }
+        root.put("audit_logs", auditArray)
 
         // Synced Tombstones (timestamped so deletions replicate without resurrecting and allow re-creation later)
         if (!isPartialExport) {
@@ -1448,6 +1474,10 @@ class GoogleDriveSyncManager(private val context: Context) {
         val parties = dao.getAllPartiesList()
         val partyTransactions = dao.getAllPartyTransactionsList()
         val teamMembers = allTeam.filter { it.businessId in exportedBizIds }
+        val exportedBizNames = ownedOrRelevantBusinesses.map { it.name.trim().lowercase() }.toSet()
+        val auditLogs = dao.getAllAuditLogsList().filter {
+            it.businessId in exportedBizIds || it.businessName.trim().lowercase() in exportedBizNames
+        }
 
         serializeDatabase(
             businesses = ownedOrRelevantBusinesses,
@@ -1455,7 +1485,8 @@ class GoogleDriveSyncManager(private val context: Context) {
             transactions = transactions,
             parties = parties,
             partyTransactions = partyTransactions,
-            teamMembers = teamMembers
+            teamMembers = teamMembers,
+            auditLogs = auditLogs
         )
     }
 
@@ -1876,6 +1907,11 @@ class GoogleDriveSyncManager(private val context: Context) {
                     val createdAt = obj.getLong("createdAt")
                     val allowedBookNames = obj.optString("allowedBookNames", "")
                     val hideBalance = obj.optBoolean("hideBalance", false) && canRoleHideBalance(role)
+                    val lockPastEntries = if (obj.has("lockPastEntries")) {
+                        obj.optBoolean("lockPastEntries", false) && canRoleLockPastEntries(role)
+                    } else {
+                        defaultLockPastEntriesForRole(role)
+                    }
 
                     if (isTeamMemberDeleted(email)) continue
 
@@ -1886,8 +1922,8 @@ class GoogleDriveSyncManager(private val context: Context) {
                     val localTeamChangeIsNewer = memberEditTs > remoteTimestamp || hasPendingLocalModifications
 
                     if (matched != null) {
-                        if (!localTeamChangeIsNewer && (matched.name != name || matched.phone != phone || matched.role != role || matched.allowedBookNames != allowedBookNames || matched.hideBalance != hideBalance)) {
-                            val updatedTM = matched.copy(name = name, phone = phone, role = role, allowedBookNames = allowedBookNames, hideBalance = hideBalance)
+                        if (!localTeamChangeIsNewer && (matched.name != name || matched.phone != phone || matched.role != role || matched.allowedBookNames != allowedBookNames || matched.hideBalance != hideBalance || matched.lockPastEntries != lockPastEntries)) {
+                            val updatedTM = matched.copy(name = name, phone = phone, role = role, allowedBookNames = allowedBookNames, hideBalance = hideBalance, lockPastEntries = lockPastEntries)
                             dao.insertTeamMember(updatedTM)
                             val idx = existingTeamList.indexOfFirst { it.id == matched.id }
                             if (idx >= 0) existingTeamList[idx] = updatedTM
@@ -1902,7 +1938,8 @@ class GoogleDriveSyncManager(private val context: Context) {
                             role = role,
                             createdAt = createdAt,
                             allowedBookNames = allowedBookNames,
-                            hideBalance = hideBalance
+                            hideBalance = hideBalance,
+                            lockPastEntries = lockPastEntries
                         )
                         val newId = dao.insertTeamMember(newMember).toInt()
                         existingTeamList.add(newMember.copy(id = newId))
@@ -1925,6 +1962,46 @@ class GoogleDriveSyncManager(private val context: Context) {
                 membersToDelete.forEach { localTM ->
                     dao.deleteTeamMember(localTM)
                     existingTeamList.remove(localTM)
+                }
+            }
+
+            if (root.has("audit_logs")) {
+                val auditArr = root.getJSONArray("audit_logs")
+                val existingAuditKeys = dao.getAllAuditLogsList().map {
+                    "${it.timestamp}|${it.action}|${it.actorEmail.lowercase()}|${it.summary}"
+                }.toHashSet()
+                for (i in 0 until auditArr.length()) {
+                    val obj = auditArr.getJSONObject(i)
+                    val oldBizId = obj.optInt("businessId", 0)
+                    val mappedBizId = bizIdMap[oldBizId] ?: oldBizId
+                    val oldBkId = obj.optInt("bookId", 0)
+                    val mappedBkId = bookIdMap[oldBkId] ?: oldBkId
+                    val ts = obj.optLong("timestamp", 0L)
+                    val action = obj.optString("action", "EDITED")
+                    val actorEmail = obj.optString("actorEmail", "")
+                    val summary = obj.optString("summary", "")
+                    val dedupKey = "$ts|$action|${actorEmail.lowercase()}|$summary"
+                    if (ts > 0L && dedupKey !in existingAuditKeys) {
+                        dao.insertAuditLog(
+                            AuditLog(
+                                businessId = mappedBizId,
+                                businessName = obj.optString("businessName", ""),
+                                bookId = mappedBkId,
+                                bookName = obj.optString("bookName", ""),
+                                transactionId = obj.optInt("transactionId", 0),
+                                action = action,
+                                summary = summary,
+                                oldDetails = obj.optString("oldDetails", ""),
+                                newDetails = obj.optString("newDetails", ""),
+                                actorName = obj.optString("actorName", ""),
+                                actorEmail = actorEmail,
+                                actorRole = obj.optString("actorRole", ""),
+                                userEmail = obj.optString("userEmail", ""),
+                                timestamp = ts
+                            )
+                        )
+                        existingAuditKeys.add(dedupKey)
+                    }
                 }
             }
 
@@ -2101,6 +2178,18 @@ class GoogleDriveSyncManager(private val context: Context) {
         markLocalDbModified()
     }
 
+    fun removeTransactionFromTombstones(timestamp: Long) {
+        val scope = getTombstoneScopeKey()
+        val set = prefs.getStringSet("tombstone_tx_ts_$scope", emptySet())?.toMutableSet() ?: mutableSetOf()
+        if (set.remove(timestamp.toString())) {
+            prefs.edit().putStringSet("tombstone_tx_ts_$scope", set).apply()
+        }
+        val legacy = prefs.getStringSet("tombstone_tx_timestamps", emptySet())?.toMutableSet() ?: mutableSetOf()
+        if (legacy.remove(timestamp.toString())) {
+            prefs.edit().putStringSet("tombstone_tx_timestamps", legacy).apply()
+        }
+    }
+
     fun isTransactionDeleted(timestamp: Long): Boolean {
         val scope = getTombstoneScopeKey()
         val scoped = prefs.getStringSet("tombstone_tx_ts_$scope", emptySet())
@@ -2115,6 +2204,18 @@ class GoogleDriveSyncManager(private val context: Context) {
         set.add(timestamp.toString())
         prefs.edit().putStringSet("tombstone_ptx_ts_$scope", set).apply()
         markLocalDbModified()
+    }
+
+    fun removePartyTransactionFromTombstones(timestamp: Long) {
+        val scope = getTombstoneScopeKey()
+        val set = prefs.getStringSet("tombstone_ptx_ts_$scope", emptySet())?.toMutableSet() ?: mutableSetOf()
+        if (set.remove(timestamp.toString())) {
+            prefs.edit().putStringSet("tombstone_ptx_ts_$scope", set).apply()
+        }
+        val legacy = prefs.getStringSet("tombstone_ptx_timestamps", emptySet())?.toMutableSet() ?: mutableSetOf()
+        if (legacy.remove(timestamp.toString())) {
+            prefs.edit().putStringSet("tombstone_ptx_timestamps", legacy).apply()
+        }
     }
 
     fun isPartyTransactionDeleted(timestamp: Long): Boolean {
@@ -2338,7 +2439,8 @@ class GoogleDriveSyncManager(private val context: Context) {
                             role = o.optString("role", "Data Entry"),
                             inviteCode = o.optString("inviteCode", ""),
                             allowedBookNames = o.optString("allowedBookNames", ""),
-                            hideBalance = o.optBoolean("hideBalance", false)
+                            hideBalance = o.optBoolean("hideBalance", false),
+                            lockPastEntries = o.optBoolean("lockPastEntries", defaultLockPastEntriesForRole(o.optString("role", "Data Entry")))
                         )
                     )
                 }
@@ -2359,6 +2461,7 @@ class GoogleDriveSyncManager(private val context: Context) {
                 put("inviteCode", ref.inviteCode)
                 put("allowedBookNames", ref.allowedBookNames)
                 put("hideBalance", ref.hideBalance)
+                put("lockPastEntries", ref.lockPastEntries)
             })
         }
         prefs.edit().putString(sharedWorkspacesPrefKey(email), arr.toString()).apply()
@@ -2399,6 +2502,7 @@ class GoogleDriveSyncManager(private val context: Context) {
             put("createdAt", inv.createdAt)
             put("allowedBookNames", inv.allowedBookNames)
             put("hideBalance", inv.hideBalance)
+            put("lockPastEntries", inv.lockPastEntries)
         }
     }
 
@@ -2407,6 +2511,7 @@ class GoogleDriveSyncManager(private val context: Context) {
         val ownerDocId = obj.optString("ownerDocId", "")
         val bizName = obj.optString("businessName", "")
         if (code.isBlank() || ownerDocId.isBlank() || bizName.isBlank()) return null
+        val role = obj.optString("role", "Data Entry")
         return TeamInviteRecord(
             inviteCode = code,
             ownerEmail = obj.optString("ownerEmail", ""),
@@ -2415,11 +2520,12 @@ class GoogleDriveSyncManager(private val context: Context) {
             businessCreatedAt = obj.optLong("businessCreatedAt", 0L),
             invitedEmail = obj.optString("invitedEmail", ""),
             invitedName = obj.optString("invitedName", ""),
-            role = obj.optString("role", "Data Entry"),
+            role = role,
             status = obj.optString("status", "PENDING"),
             createdAt = obj.optLong("createdAt", System.currentTimeMillis()),
             allowedBookNames = obj.optString("allowedBookNames", ""),
-            hideBalance = obj.optBoolean("hideBalance", false)
+            hideBalance = obj.optBoolean("hideBalance", false),
+            lockPastEntries = if (obj.has("lockPastEntries")) obj.optBoolean("lockPastEntries", false) else defaultLockPastEntriesForRole(role)
         )
     }
 
@@ -2489,6 +2595,7 @@ class GoogleDriveSyncManager(private val context: Context) {
         val code = getOrGenerateInviteCode(business.name, invitedEmail.ifBlank { member.name })
         val effectiveAllowedBooks = if (isRoleFullBusinessAccess(member.role)) "" else member.allowedBookNames
         val effectiveHideBalance = member.hideBalance && canRoleHideBalance(member.role)
+        val effectiveLockPast = member.lockPastEntries && canRoleLockPastEntries(member.role)
         val invite = TeamInviteRecord(
             inviteCode = code,
             ownerEmail = ownerEmail,
@@ -2501,7 +2608,8 @@ class GoogleDriveSyncManager(private val context: Context) {
             status = "PENDING",
             createdAt = System.currentTimeMillis(),
             allowedBookNames = effectiveAllowedBooks,
-            hideBalance = effectiveHideBalance
+            hideBalance = effectiveHideBalance,
+            lockPastEntries = effectiveLockPast
         )
 
         if (!isRealCloudAccount()) {
@@ -2529,6 +2637,7 @@ class GoogleDriveSyncManager(private val context: Context) {
             "createdAt" to invite.createdAt,
             "allowedBookNames" to invite.allowedBookNames,
             "hideBalance" to invite.hideBalance,
+            "lockPastEntries" to invite.lockPastEntries,
             "inviteJson" to inviteJsonStr
         )
 
@@ -2641,7 +2750,9 @@ class GoogleDriveSyncManager(private val context: Context) {
             status = status,
             createdAt = fields.optJSONObject("createdAt")?.optString("integerValue", "0")?.toLongOrNull() ?: System.currentTimeMillis(),
             allowedBookNames = fields.optJSONObject("allowedBookNames")?.optString("stringValue", "") ?: "",
-            hideBalance = fields.optJSONObject("hideBalance")?.optBoolean("booleanValue", false) ?: false
+            hideBalance = fields.optJSONObject("hideBalance")?.optBoolean("booleanValue", false) ?: false,
+            lockPastEntries = fields.optJSONObject("lockPastEntries")?.optBoolean("booleanValue", false)
+                ?: defaultLockPastEntriesForRole(fields.optJSONObject("role")?.optString("stringValue", "Data Entry"))
         )
     }
 
@@ -2695,7 +2806,8 @@ class GoogleDriveSyncManager(private val context: Context) {
             role = invite.role,
             inviteCode = invite.inviteCode,
             allowedBookNames = invite.allowedBookNames,
-            hideBalance = invite.hideBalance && canRoleHideBalance(invite.role)
+            hideBalance = invite.hideBalance && canRoleHideBalance(invite.role),
+            lockPastEntries = invite.lockPastEntries && canRoleLockPastEntries(invite.role)
         )
         addOrUpdateSharedWorkspace(ref, cleanAcceptor.ifBlank { getEmail() })
 
@@ -2715,6 +2827,7 @@ class GoogleDriveSyncManager(private val context: Context) {
             "createdAt" to acceptedInvite.createdAt,
             "allowedBookNames" to acceptedInvite.allowedBookNames,
             "hideBalance" to acceptedInvite.hideBalance,
+            "lockPastEntries" to acceptedInvite.lockPastEntries,
             "inviteJson" to teamInviteToJson(acceptedInvite).toString()
         )
         patchOrPostFirestoreDoc("team_invites", codeDocKey, acceptedPayload, idToken)
@@ -2774,6 +2887,7 @@ class GoogleDriveSyncManager(private val context: Context) {
         var activeRoleFromOwner: String? = null
         var activeAllowedBooksFromOwner = ref.allowedBookNames
         var activeHideBalanceFromOwner = ref.hideBalance
+        var activeLockPastFromOwner = ref.lockPastEntries
         for (i in 0 until ownerTeamArr.length()) {
             val tm = ownerTeamArr.getJSONObject(i)
             if (tm.optInt("businessId", -1) == remoteBizOldId) {
@@ -2782,6 +2896,11 @@ class GoogleDriveSyncManager(private val context: Context) {
                     activeRoleFromOwner = tm.optString("role", ref.role)
                     activeAllowedBooksFromOwner = tm.optString("allowedBookNames", "")
                     activeHideBalanceFromOwner = tm.optBoolean("hideBalance", false)
+                    activeLockPastFromOwner = if (tm.has("lockPastEntries")) {
+                        tm.optBoolean("lockPastEntries", false)
+                    } else {
+                        defaultLockPastEntriesForRole(activeRoleFromOwner)
+                    }
                 }
             }
         }
@@ -2802,13 +2921,15 @@ class GoogleDriveSyncManager(private val context: Context) {
 
         val effectiveAllowedBooks = if (isRoleFullBusinessAccess(activeRoleFromOwner)) "" else activeAllowedBooksFromOwner
         val effectiveHideBalance = activeHideBalanceFromOwner && canRoleHideBalance(activeRoleFromOwner)
-        if (activeRoleFromOwner != ref.role || remoteBizName != ref.businessName || effectiveAllowedBooks != ref.allowedBookNames || effectiveHideBalance != ref.hideBalance) {
+        val effectiveLockPastEntries = activeLockPastFromOwner && canRoleLockPastEntries(activeRoleFromOwner)
+        if (activeRoleFromOwner != ref.role || remoteBizName != ref.businessName || effectiveAllowedBooks != ref.allowedBookNames || effectiveHideBalance != ref.hideBalance || effectiveLockPastEntries != ref.lockPastEntries) {
             addOrUpdateSharedWorkspace(
                 ref.copy(
                     role = activeRoleFromOwner,
                     businessName = remoteBizName,
                     allowedBookNames = effectiveAllowedBooks,
-                    hideBalance = effectiveHideBalance
+                    hideBalance = effectiveHideBalance,
+                    lockPastEntries = effectiveLockPastEntries
                 ),
                 sessionEmail
             )
@@ -2968,14 +3089,15 @@ class GoogleDriveSyncManager(private val context: Context) {
             val tmCreatedAt = tmObj.optLong("createdAt", System.currentTimeMillis())
             val tmAllowedBooks = tmObj.optString("allowedBookNames", "")
             val tmHideBalance = tmObj.optBoolean("hideBalance", false) && canRoleHideBalance(tmRole)
+            val tmLockPast = (if (tmObj.has("lockPastEntries")) tmObj.optBoolean("lockPastEntries", false) else defaultLockPastEntriesForRole(tmRole)) && canRoleLockPastEntries(tmRole)
             remoteTmEmails.add(tmEmail.trim().lowercase())
             val matched = existingLocalTeam.find { it.email.equals(tmEmail, ignoreCase = true) }
             if (matched != null) {
-                if (matched.name != tmName || matched.phone != tmPhone || matched.role != tmRole || matched.allowedBookNames != tmAllowedBooks || matched.hideBalance != tmHideBalance) {
-                    dao.insertTeamMember(matched.copy(name = tmName, phone = tmPhone, role = tmRole, allowedBookNames = tmAllowedBooks, hideBalance = tmHideBalance))
+                if (matched.name != tmName || matched.phone != tmPhone || matched.role != tmRole || matched.allowedBookNames != tmAllowedBooks || matched.hideBalance != tmHideBalance || matched.lockPastEntries != tmLockPast) {
+                    dao.insertTeamMember(matched.copy(name = tmName, phone = tmPhone, role = tmRole, allowedBookNames = tmAllowedBooks, hideBalance = tmHideBalance, lockPastEntries = tmLockPast))
                 }
             } else {
-                dao.insertTeamMember(TeamMember(0, localBizId, tmName, tmEmail, tmPhone, tmRole, tmCreatedAt, tmAllowedBooks, tmHideBalance))
+                dao.insertTeamMember(TeamMember(0, localBizId, tmName, tmEmail, tmPhone, tmRole, tmCreatedAt, tmAllowedBooks, tmHideBalance, tmLockPast))
             }
         }
         existingLocalTeam.filter { !remoteTmEmails.contains(it.email.trim().lowercase()) }
@@ -3056,8 +3178,8 @@ class GoogleDriveSyncManager(private val context: Context) {
                     })
                     existingOwnerTxKeys.add(key)
                     ownerDocModified = true
-                } else if (!activeRoleFromOwner.equals("Data Entry", ignoreCase = true) && !activeRoleFromOwner.equals("Viewer", ignoreCase = true)) {
-                    // Partner/Admin/Boss edited an existing entry -> update matching owner tx
+                } else if (canModifyTransactionByRoleAndLock(activeRoleFromOwner, "edit_transaction", lt.timestamp, effectiveLockPastEntries)) {
+                    // Collaborator edited an allowed entry -> update matching owner tx
                     for (idx in 0 until ownerTxArr.length()) {
                         val existingObj = ownerTxArr.getJSONObject(idx)
                         if (existingObj.optInt("bookId", -1) == targetOwnerBookId &&
@@ -3078,9 +3200,44 @@ class GoogleDriveSyncManager(private val context: Context) {
                 }
             }
 
+            // Merge collaborator audit logs for this business up into owner's cloud audit_logs
+            val ownerAuditArr = ownerRoot.optJSONArray("audit_logs") ?: JSONArray()
+            val ownerAuditKeys = mutableSetOf<String>()
+            for (i in 0 until ownerAuditArr.length()) {
+                val o = ownerAuditArr.getJSONObject(i)
+                ownerAuditKeys.add("${o.optLong("timestamp", 0L)}|${o.optString("action", "")}|${o.optString("actorEmail", "").lowercase()}|${o.optString("summary", "")}")
+            }
+            val localBizAuditLogs = dao.getAllAuditLogsList().filter {
+                it.businessId == localBizId || it.businessName.equals(remoteBizName, ignoreCase = true)
+            }
+            localBizAuditLogs.forEach { log ->
+                val k = "${log.timestamp}|${log.action}|${log.actorEmail.lowercase()}|${log.summary}"
+                if (k !in ownerAuditKeys) {
+                    ownerAuditArr.put(JSONObject().apply {
+                        put("businessId", remoteBizOldId)
+                        put("businessName", log.businessName.ifBlank { remoteBizName })
+                        put("bookId", localBookIdToOwnerOldId[log.bookId] ?: log.bookId)
+                        put("bookName", log.bookName)
+                        put("transactionId", log.transactionId)
+                        put("action", log.action)
+                        put("summary", log.summary)
+                        put("oldDetails", log.oldDetails)
+                        put("newDetails", log.newDetails)
+                        put("actorName", log.actorName)
+                        put("actorEmail", log.actorEmail)
+                        put("actorRole", log.actorRole)
+                        put("userEmail", ref.ownerEmail)
+                        put("timestamp", log.timestamp)
+                    })
+                    ownerAuditKeys.add(k)
+                    ownerDocModified = true
+                }
+            }
+
             if (ownerDocModified) {
                 ownerRoot.put("books", ownerBooksArr)
                 ownerRoot.put("transactions", ownerTxArr)
+                ownerRoot.put("audit_logs", ownerAuditArr)
                 ownerRoot.put("timestamp", System.currentTimeMillis())
                 val pushPayload = buildFirestoreFields(
                     "userEmail" to ref.ownerEmail,
@@ -3090,6 +3247,47 @@ class GoogleDriveSyncManager(private val context: Context) {
                 if (patchOrPostFirestoreDoc("cashbooks", ref.ownerDocId, pushPayload, idToken)) {
                     unsyncedBooksToPush.forEach { dao.updateBook(it.copy(isSynced = true)) }
                     unsyncedLocalTxs.forEach { dao.updateTransaction(it.copy(isSynced = true)) }
+                }
+            }
+        }
+
+        // Pull owner's audit logs for this business so collaborators with access can view change history too
+        val remoteAuditArr = ownerRoot.optJSONArray("audit_logs")
+        if (remoteAuditArr != null) {
+            val localAuditKeys = dao.getAllAuditLogsList().map {
+                "${it.timestamp}|${it.action}|${it.actorEmail.lowercase()}|${it.summary}"
+            }.toHashSet()
+            for (i in 0 until remoteAuditArr.length()) {
+                val o = remoteAuditArr.getJSONObject(i)
+                val bId = o.optInt("businessId", -1)
+                val bName = o.optString("businessName", "")
+                if (bId == remoteBizOldId || bName.equals(remoteBizName, ignoreCase = true)) {
+                    val ts = o.optLong("timestamp", 0L)
+                    val action = o.optString("action", "EDITED")
+                    val actorEmail = o.optString("actorEmail", "")
+                    val summary = o.optString("summary", "")
+                    val k = "$ts|$action|${actorEmail.lowercase()}|$summary"
+                    if (ts > 0L && k !in localAuditKeys) {
+                        dao.insertAuditLog(
+                            AuditLog(
+                                businessId = localBizId,
+                                businessName = bName.ifBlank { remoteBizName },
+                                bookId = bookOldToLocalId[o.optInt("bookId", -1)] ?: 0,
+                                bookName = o.optString("bookName", ""),
+                                transactionId = o.optInt("transactionId", 0),
+                                action = action,
+                                summary = summary,
+                                oldDetails = o.optString("oldDetails", ""),
+                                newDetails = o.optString("newDetails", ""),
+                                actorName = o.optString("actorName", ""),
+                                actorEmail = actorEmail,
+                                actorRole = o.optString("actorRole", ""),
+                                userEmail = sessionEmail,
+                                timestamp = ts
+                            )
+                        )
+                        localAuditKeys.add(k)
+                    }
                 }
             }
         }
@@ -3123,7 +3321,8 @@ class GoogleDriveSyncManager(private val context: Context) {
                     role = inv.role,
                     inviteCode = inv.inviteCode,
                     allowedBookNames = inv.allowedBookNames,
-                    hideBalance = inv.hideBalance && canRoleHideBalance(inv.role)
+                    hideBalance = inv.hideBalance && canRoleHideBalance(inv.role),
+                    lockPastEntries = inv.lockPastEntries && canRoleLockPastEntries(inv.role)
                 ),
                 cleanEmail
             )

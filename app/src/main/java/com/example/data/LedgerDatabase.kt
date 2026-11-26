@@ -95,7 +95,44 @@ data class TeamMember(
     val role: String, // "Boss", "Admin", "Partner", "Data Entry", "Viewer"
     val createdAt: Long = System.currentTimeMillis(),
     val allowedBookNames: String = "", // Empty = All Books; JSON array = Selected Books Only
-    val hideBalance: Boolean = false // Hide Total / Net / Split balances for Data Entry & Viewer
+    val hideBalance: Boolean = false, // Hide Total / Net / Split balances for Data Entry & Viewer
+    val lockPastEntries: Boolean = false // Prevent Data Entry / Partner from editing or deleting past days' entries
+)
+
+@Entity(tableName = "audit_logs")
+data class AuditLog(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val businessId: Int = 0,
+    val businessName: String = "",
+    val bookId: Int = 0,
+    val bookName: String = "",
+    val transactionId: Int = 0,
+    val action: String, // "EDITED", "DELETED", "RESTORED"
+    val summary: String,
+    val oldDetails: String = "",
+    val newDetails: String = "",
+    val actorName: String = "",
+    val actorEmail: String = "",
+    val actorRole: String = "",
+    val userEmail: String = "",
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "trash_items")
+data class TrashItem(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val itemType: String, // "ENTRY", "BOOK", "BUSINESS", "PARTY", "PARTY_ENTRY"
+    val title: String,
+    val subtitle: String = "",
+    val businessName: String = "",
+    val bookName: String = "",
+    val userEmail: String = "",
+    val amount: Double = 0.0,
+    val entryType: String = "", // "IN", "OUT", "GAVE", "GOT", or ""
+    val childCount: Int = 0,
+    val deletedByName: String = "",
+    val deletedAt: Long = System.currentTimeMillis(),
+    val payloadJson: String
 )
 
 fun isRoleFullBusinessAccess(role: String?): Boolean {
@@ -112,6 +149,52 @@ fun canRoleHideBalance(role: String?): Boolean {
         clean.equals("Viewer", ignoreCase = true) ||
         clean.equals("Read Only", ignoreCase = true) ||
         clean.equals("Read-Only", ignoreCase = true)
+}
+
+fun canRoleLockPastEntries(role: String?): Boolean {
+    val clean = (role ?: "").trim()
+    return clean.equals("Data Entry", ignoreCase = true) ||
+        clean.equals("Partner", ignoreCase = true)
+}
+
+fun defaultLockPastEntriesForRole(role: String?): Boolean {
+    return (role ?: "").trim().equals("Data Entry", ignoreCase = true)
+}
+
+fun startOfTodayMillis(nowMillis: Long = System.currentTimeMillis()): Long {
+    val cal = java.util.Calendar.getInstance().apply {
+        timeInMillis = nowMillis
+        set(java.util.Calendar.HOUR_OF_DAY, 0)
+        set(java.util.Calendar.MINUTE, 0)
+        set(java.util.Calendar.SECOND, 0)
+        set(java.util.Calendar.MILLISECOND, 0)
+    }
+    return cal.timeInMillis
+}
+
+fun isPastDayTimestamp(timestamp: Long, nowMillis: Long = System.currentTimeMillis()): Boolean {
+    return timestamp < startOfTodayMillis(nowMillis)
+}
+
+fun canModifyTransactionByRoleAndLock(
+    role: String?,
+    action: String,
+    txTimestamp: Long,
+    lockPastEntries: Boolean
+): Boolean {
+    return when ((role ?: "").trim().lowercase()) {
+        "super admin", "boss", "owner", "admin" -> true
+        "viewer", "read only", "read-only" -> false
+        "partner" -> when (action) {
+            "edit_transaction" -> !lockPastEntries || !isPastDayTimestamp(txTimestamp)
+            else -> false
+        }
+        "data entry" -> when (action) {
+            "edit_transaction", "delete_transaction" -> !lockPastEntries || !isPastDayTimestamp(txTimestamp)
+            else -> false
+        }
+        else -> false
+    }
 }
 
 fun parseAllowedBooks(raw: String?): List<String> {
@@ -284,13 +367,48 @@ interface LedgerDao {
 
     @Delete
     suspend fun deleteTeamMember(teamMember: TeamMember)
+
+    // Trash Items
+    @Query("SELECT * FROM trash_items ORDER BY deletedAt DESC")
+    fun getAllTrashItems(): Flow<List<TrashItem>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertTrashItem(trashItem: TrashItem): Long
+
+    @Delete
+    suspend fun deleteTrashItem(trashItem: TrashItem)
+
+    @Query("DELETE FROM trash_items WHERE LOWER(userEmail) = LOWER(:userEmail) OR userEmail = ''")
+    suspend fun clearTrashForUser(userEmail: String)
+
+    @Query("DELETE FROM trash_items")
+    suspend fun clearAllTrash()
+
+    // Audit Logs
+    @Query("SELECT * FROM audit_logs ORDER BY timestamp DESC")
+    fun getAllAuditLogs(): Flow<List<AuditLog>>
+
+    @Query("SELECT * FROM audit_logs ORDER BY timestamp DESC")
+    suspend fun getAllAuditLogsList(): List<AuditLog>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAuditLog(auditLog: AuditLog): Long
+
+    @Delete
+    suspend fun deleteAuditLog(auditLog: AuditLog)
+
+    @Query("DELETE FROM audit_logs WHERE LOWER(userEmail) = LOWER(:userEmail) OR userEmail = ''")
+    suspend fun clearAuditLogsForUser(userEmail: String)
+
+    @Query("DELETE FROM audit_logs")
+    suspend fun clearAllAuditLogs()
 }
 
 // --- Database ---
 
 @Database(
-    entities = [Business::class, Book::class, Transaction::class, Party::class, PartyTransaction::class, TeamMember::class],
-    version = 8,
+    entities = [Business::class, Book::class, Transaction::class, Party::class, PartyTransaction::class, TeamMember::class, TrashItem::class, AuditLog::class],
+    version = 10,
     exportSchema = false
 )
 abstract class LedgerDatabase : RoomDatabase() {
@@ -314,6 +432,58 @@ abstract class LedgerDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `trash_items` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `itemType` TEXT NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `subtitle` TEXT NOT NULL,
+                        `businessName` TEXT NOT NULL,
+                        `bookName` TEXT NOT NULL,
+                        `userEmail` TEXT NOT NULL,
+                        `amount` REAL NOT NULL,
+                        `entryType` TEXT NOT NULL,
+                        `childCount` INTEGER NOT NULL,
+                        `deletedByName` TEXT NOT NULL,
+                        `deletedAt` INTEGER NOT NULL,
+                        `payloadJson` TEXT NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
+        private val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE team_members ADD COLUMN lockPastEntries INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("UPDATE team_members SET lockPastEntries = 1 WHERE LOWER(TRIM(role)) = 'data entry'")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `audit_logs` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `businessId` INTEGER NOT NULL,
+                        `businessName` TEXT NOT NULL,
+                        `bookId` INTEGER NOT NULL,
+                        `bookName` TEXT NOT NULL,
+                        `transactionId` INTEGER NOT NULL,
+                        `action` TEXT NOT NULL,
+                        `summary` TEXT NOT NULL,
+                        `oldDetails` TEXT NOT NULL,
+                        `newDetails` TEXT NOT NULL,
+                        `actorName` TEXT NOT NULL,
+                        `actorEmail` TEXT NOT NULL,
+                        `actorRole` TEXT NOT NULL,
+                        `userEmail` TEXT NOT NULL,
+                        `timestamp` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun getDatabase(context: Context): LedgerDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -321,7 +491,7 @@ abstract class LedgerDatabase : RoomDatabase() {
                     LedgerDatabase::class.java,
                     "ledger_database"
                 )
-                .addMigrations(MIGRATION_6_7, MIGRATION_7_8)
+                .addMigrations(MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
                 .fallbackToDestructiveMigration()
                 .build()
                 INSTANCE = instance
@@ -340,6 +510,8 @@ class LedgerRepository(private val ledgerDao: LedgerDao) {
     val allTransactions: Flow<List<Transaction>> = ledgerDao.getAllTransactions()
     val allPartyTransactions: Flow<List<PartyTransaction>> = ledgerDao.getAllPartyTransactions()
     val allTeamMembers: Flow<List<TeamMember>> = ledgerDao.getAllTeamMembers()
+    val allTrashItems: Flow<List<TrashItem>> = ledgerDao.getAllTrashItems()
+    val allAuditLogs: Flow<List<AuditLog>> = ledgerDao.getAllAuditLogs()
 
     fun getBooksForBusiness(businessId: Int): Flow<List<Book>> {
         return ledgerDao.getBooksForBusiness(businessId)
@@ -428,5 +600,33 @@ class LedgerRepository(private val ledgerDao: LedgerDao) {
 
     suspend fun deleteTeamMember(teamMember: TeamMember) {
         ledgerDao.deleteTeamMember(teamMember)
+    }
+
+    suspend fun insertTrashItem(trashItem: TrashItem): Long {
+        return ledgerDao.insertTrashItem(trashItem)
+    }
+
+    suspend fun deleteTrashItem(trashItem: TrashItem) {
+        ledgerDao.deleteTrashItem(trashItem)
+    }
+
+    suspend fun clearTrashForUser(userEmail: String) {
+        ledgerDao.clearTrashForUser(userEmail)
+    }
+
+    suspend fun clearAllTrash() {
+        ledgerDao.clearAllTrash()
+    }
+
+    suspend fun insertAuditLog(auditLog: AuditLog): Long {
+        return ledgerDao.insertAuditLog(auditLog)
+    }
+
+    suspend fun clearAuditLogsForUser(userEmail: String) {
+        ledgerDao.clearAuditLogsForUser(userEmail)
+    }
+
+    suspend fun clearAllAuditLogs() {
+        ledgerDao.clearAllAuditLogs()
     }
 }
